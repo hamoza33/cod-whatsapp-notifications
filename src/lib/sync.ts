@@ -52,19 +52,24 @@ export async function syncOrders(): Promise<SyncResult> {
 
   const duration = Date.now() - startTime;
 
-  await prisma.syncLog.create({
-    data: {
-      syncType: "full",
-      status: result.errors.length > 0 ? "partial_error" : "success",
-      ordersFound: result.ordersFound,
-      ordersCreated: result.ordersCreated,
-      ordersUpdated: result.ordersUpdated,
-      messagesSent: result.messagesSent,
-      errorMessage:
-        result.errors.length > 0 ? result.errors.join("; ") : null,
-      duration,
-    },
-  });
+  try {
+    await prisma.syncLog.create({
+      data: {
+        syncType: "full",
+        status: result.errors.length > 0 ? "partial_error" : "success",
+        ordersFound: result.ordersFound,
+        ordersCreated: result.ordersCreated,
+        ordersUpdated: result.ordersUpdated,
+        messagesSent: result.messagesSent,
+        errorMessage:
+          result.errors.length > 0 ? result.errors.join("; ") : null,
+        duration,
+      },
+    });
+  } catch (logErr) {
+    const msg = logErr instanceof Error ? logErr.message : "Failed to write sync log";
+    result.errors.push(msg);
+  }
 
   return result;
 }
