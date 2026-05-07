@@ -100,6 +100,7 @@ async function upsertOrder(
   });
 
   if (existing) {
+    const statusChanged = existing.status !== status;
     await prisma.order.update({
       where: { codNetworkOrderId: codOrderId },
       data: {
@@ -111,6 +112,7 @@ async function upsertOrder(
         trackingNumber: codOrder.tracking_number ?? existing.trackingNumber,
         deliveryCompany: codOrder.delivery_company ?? existing.deliveryCompany,
         status,
+        ...(statusChanged ? { statusChangedAt: new Date() } : {}),
         rawOrderJson: JSON.parse(JSON.stringify(codOrder)) as Prisma.InputJsonValue,
         lastSyncedAt: new Date(),
       },
@@ -128,6 +130,7 @@ async function upsertOrder(
         trackingNumber: codOrder.tracking_number ?? null,
         deliveryCompany: codOrder.delivery_company ?? null,
         status,
+        statusChangedAt: new Date(),
         rawOrderJson: JSON.parse(JSON.stringify(codOrder)) as Prisma.InputJsonValue,
         lastSyncedAt: new Date(),
       },
@@ -177,9 +180,10 @@ async function autoSendMessages(): Promise<number> {
     if (!order.customerPhone) continue;
 
     if (delaySeconds > 0) {
-      const timeSinceUpdate =
-        (Date.now() - order.updatedAt.getTime()) / 1000;
-      if (timeSinceUpdate < delaySeconds) continue;
+      const referenceTime = order.statusChangedAt ?? order.updatedAt;
+      const timeSinceStatusChange =
+        (Date.now() - referenceTime.getTime()) / 1000;
+      if (timeSinceStatusChange < delaySeconds) continue;
     }
 
     try {

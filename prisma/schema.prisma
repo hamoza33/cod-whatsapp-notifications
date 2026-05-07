@@ -50,6 +50,7 @@ model Order {
   trackingNumber      String?     @map("tracking_number")
   deliveryCompany     String?     @map("delivery_company")
   status              OrderStatus @default(UNKNOWN)
+  statusChangedAt     DateTime?   @map("status_changed_at")
   rawOrderJson        Json?       @map("raw_order_json")
   lastSyncedAt        DateTime?   @map("last_synced_at")
   createdAt           DateTime    @default(now()) @map("created_at")
