@@ -29,9 +29,12 @@ export async function syncOrders(): Promise<SyncResult> {
     const orders = await client.getAllOrders();
     result.ordersFound = orders.length;
 
+    const defaultCountryCode =
+      (await getSetting(SETTING_KEYS.DEFAULT_COUNTRY_CODE)) || "212";
+
     for (const order of orders) {
       try {
-        await upsertOrder(order, result);
+        await upsertOrder(order, result, defaultCountryCode);
       } catch (err) {
         const msg =
           err instanceof Error ? err.message : "Unknown error upserting order";
@@ -76,12 +79,11 @@ export async function syncOrders(): Promise<SyncResult> {
 
 async function upsertOrder(
   codOrder: CodNetworkOrder,
-  result: SyncResult
+  result: SyncResult,
+  defaultCountryCode: string
 ): Promise<void> {
   const codOrderId = String(codOrder.id);
   const status = mapCodStatus(codOrder.status) as OrderStatus;
-  const defaultCountryCode =
-    (await getSetting(SETTING_KEYS.DEFAULT_COUNTRY_CODE)) || "212";
 
   let normalizedPhone: string | null = null;
   if (codOrder.customer_phone) {
@@ -158,6 +160,8 @@ async function autoSendMessages(): Promise<number> {
     "order_out_for_delivery";
   const templateLanguage =
     (await getSetting(SETTING_KEYS.WHATSAPP_TEMPLATE_LANGUAGE)) || "en";
+  const defaultCountryCode =
+    (await getSetting(SETTING_KEYS.DEFAULT_COUNTRY_CODE)) || "212";
 
   const orders = await prisma.order.findMany({
     where: {
@@ -195,8 +199,6 @@ async function autoSendMessages(): Promise<number> {
         order.codNetworkOrderId
       );
 
-      const defaultCountryCode =
-        (await getSetting(SETTING_KEYS.DEFAULT_COUNTRY_CODE)) || "212";
       const normalizedPhone = normalizePhoneNumber(
         order.customerPhone,
         defaultCountryCode
