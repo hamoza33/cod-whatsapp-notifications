@@ -14,6 +14,8 @@ interface SyncResult {
   errors: string[];
 }
 
+const SYNC_LOCK_ID = 123456789;
+
 export async function syncOrders(): Promise<SyncResult> {
   const startTime = Date.now();
   const result: SyncResult = {
@@ -24,57 +26,70 @@ export async function syncOrders(): Promise<SyncResult> {
     errors: [],
   };
 
+  // Acquire advisory lock to prevent concurrent syncs
+  const lockResult = await prisma.$queryRawUnsafe<{ pg_try_advisory_lock: boolean }[]>(
+    `SELECT pg_try_advisory_lock(${SYNC_LOCK_ID})`
+  );
+  if (!lockResult[0]?.pg_try_advisory_lock) {
+    result.errors.push("Sync already in progress");
+    return result;
+  }
+
   try {
-    const client = await CodNetworkClient.fromSettings();
-    const orders = await client.getAllOrders();
-    result.ordersFound = orders.length;
+    try {
+      const client = await CodNetworkClient.fromSettings();
+      const orders = await client.getAllOrders();
+      result.ordersFound = orders.length;
 
-    const defaultCountryCode =
-      (await getSetting(SETTING_KEYS.DEFAULT_COUNTRY_CODE)) || "212";
+      const defaultCountryCode =
+        (await getSetting(SETTING_KEYS.DEFAULT_COUNTRY_CODE)) || "212";
 
-    for (const order of orders) {
-      try {
-        await upsertOrder(order, result, defaultCountryCode);
-      } catch (err) {
-        const msg =
-          err instanceof Error ? err.message : "Unknown error upserting order";
-        result.errors.push(`Order ${order.id}: ${msg}`);
+      for (const order of orders) {
+        try {
+          await upsertOrder(order, result, defaultCountryCode);
+        } catch (err) {
+          const msg =
+            err instanceof Error ? err.message : "Unknown error upserting order";
+          result.errors.push(`Order ${order.id}: ${msg}`);
+        }
       }
+
+      // Auto-send messages if automation is enabled
+      const automationEnabled = await getSetting(SETTING_KEYS.AUTOMATION_ENABLED);
+      if (automationEnabled === "true") {
+        const sent = await autoSendMessages();
+        result.messagesSent = sent;
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Unknown sync error";
+      result.errors.push(msg);
     }
 
-    // Auto-send messages if automation is enabled
-    const automationEnabled = await getSetting(SETTING_KEYS.AUTOMATION_ENABLED);
-    if (automationEnabled === "true") {
-      const sent = await autoSendMessages();
-      result.messagesSent = sent;
+    const duration = Date.now() - startTime;
+
+    try {
+      await prisma.syncLog.create({
+        data: {
+          syncType: "full",
+          status: result.errors.length > 0 ? "partial_error" : "success",
+          ordersFound: result.ordersFound,
+          ordersCreated: result.ordersCreated,
+          ordersUpdated: result.ordersUpdated,
+          messagesSent: result.messagesSent,
+          errorMessage:
+            result.errors.length > 0 ? result.errors.join("; ") : null,
+          duration,
+        },
+      });
+    } catch (logErr) {
+      const msg = logErr instanceof Error ? logErr.message : "Failed to write sync log";
+      result.errors.push(msg);
     }
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : "Unknown sync error";
-    result.errors.push(msg);
+
+    return result;
+  } finally {
+    await prisma.$queryRawUnsafe(`SELECT pg_advisory_unlock(${SYNC_LOCK_ID})`);
   }
-
-  const duration = Date.now() - startTime;
-
-  try {
-    await prisma.syncLog.create({
-      data: {
-        syncType: "full",
-        status: result.errors.length > 0 ? "partial_error" : "success",
-        ordersFound: result.ordersFound,
-        ordersCreated: result.ordersCreated,
-        ordersUpdated: result.ordersUpdated,
-        messagesSent: result.messagesSent,
-        errorMessage:
-          result.errors.length > 0 ? result.errors.join("; ") : null,
-        duration,
-      },
-    });
-  } catch (logErr) {
-    const msg = logErr instanceof Error ? logErr.message : "Failed to write sync log";
-    result.errors.push(msg);
-  }
-
-  return result;
 }
 
 async function upsertOrder(
