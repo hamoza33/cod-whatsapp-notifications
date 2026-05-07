@@ -20,7 +20,10 @@ export async function GET(request: NextRequest) {
   ];
   for (const key of sensitiveKeys) {
     if (masked[key]) {
-      masked[key] = masked[key]!.slice(0, 8) + "..." + masked[key]!.slice(-4);
+      const val = masked[key]!;
+      masked[key] = val.length > 12
+        ? val.slice(0, 4) + "..." + val.slice(-4)
+        : "••••••••";
     }
   }
 
