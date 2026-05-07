@@ -10,6 +10,7 @@ interface SettingsData {
 
 export default function SettingsPage() {
   const [settings, setSettings] = useState<SettingsData>({});
+  const [dirtyKeys, setDirtyKeys] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [notification, setNotification] = useState<{
@@ -39,9 +40,14 @@ export default function SettingsPage() {
     try {
       const updates: Record<string, string> = {};
       for (const key of keys) {
-        if (settings[key] !== null && settings[key] !== undefined) {
+        if (dirtyKeys.has(key) && settings[key] !== null && settings[key] !== undefined) {
           updates[key] = settings[key] as string;
         }
+      }
+      if (Object.keys(updates).length === 0) {
+        setNotification({ type: "success", message: "No changes to save." });
+        setSaving(false);
+        return;
       }
       await api.put("/settings", { settings: updates });
       setNotification({
@@ -60,6 +66,7 @@ export default function SettingsPage() {
 
   const updateSetting = (key: string, value: string) => {
     setSettings((prev) => ({ ...prev, [key]: value }));
+    setDirtyKeys((prev) => new Set(prev).add(key));
   };
 
   if (loading) {
