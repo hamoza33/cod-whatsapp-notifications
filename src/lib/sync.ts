@@ -165,7 +165,7 @@ async function autoSendMessages(): Promise<number> {
   const whatsappClient = await WhatsAppClient.fromSettings();
 
   for (const order of orders) {
-    if (sendOnce && order.whatsappMessages.length > 0) {
+    if (sendOnce && order.whatsappMessages.some(m => m.status === "SENT" || m.status === "DELIVERED" || m.status === "READ")) {
       continue;
     }
 

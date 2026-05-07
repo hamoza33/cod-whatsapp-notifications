@@ -20,8 +20,14 @@ export async function POST(request: NextRequest) {
     );
   }
 
+  let orderId: string | undefined;
+  let phone: string | undefined;
+  let templateName = "order_out_for_delivery";
+  let templateLanguage = "en";
+
   try {
-    const { orderId } = await request.json();
+    const body = await request.json();
+    orderId = body.orderId;
 
     if (!orderId) {
       return NextResponse.json(
@@ -52,7 +58,6 @@ export async function POST(request: NextRequest) {
     const defaultCountryCode =
       (await getSetting(SETTING_KEYS.DEFAULT_COUNTRY_CODE)) || "212";
 
-    let phone: string;
     try {
       phone = normalizePhoneNumber(order.customerPhone, defaultCountryCode);
     } catch {
@@ -62,10 +67,10 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const templateName =
+    templateName =
       (await getSetting(SETTING_KEYS.WHATSAPP_TEMPLATE_NAME)) ||
       "order_out_for_delivery";
-    const templateLanguage =
+    templateLanguage =
       (await getSetting(SETTING_KEYS.WHATSAPP_TEMPLATE_LANGUAGE)) || "en";
 
     const variables = buildTemplateVariables(
@@ -99,6 +104,26 @@ export async function POST(request: NextRequest) {
   } catch (err) {
     const errorMsg =
       err instanceof Error ? err.message : "Failed to send WhatsApp message";
+
+    try {
+      if (orderId) {
+        await prisma.whatsappMessage.create({
+          data: {
+            orderId,
+            phoneNumber: phone ?? "unknown",
+            templateName,
+            templateLanguage,
+            templateVariablesJson: [],
+            status: "FAILED",
+            errorMessage: errorMsg,
+            sentBy: user.email,
+          },
+        });
+      }
+    } catch {
+      // ignore logging failure
+    }
+
     return NextResponse.json({ error: errorMsg }, { status: 500 });
   }
 }
