@@ -14,7 +14,7 @@ interface SyncResult {
   errors: string[];
 }
 
-const SYNC_LOCK_ID = 123456789;
+let syncInProgress = false;
 
 export async function syncOrders(): Promise<SyncResult> {
   const startTime = Date.now();
@@ -26,14 +26,11 @@ export async function syncOrders(): Promise<SyncResult> {
     errors: [],
   };
 
-  // Acquire advisory lock to prevent concurrent syncs
-  const lockResult = await prisma.$queryRawUnsafe<{ pg_try_advisory_lock: boolean }[]>(
-    `SELECT pg_try_advisory_lock(${SYNC_LOCK_ID})`
-  );
-  if (!lockResult[0]?.pg_try_advisory_lock) {
+  if (syncInProgress) {
     result.errors.push("Sync already in progress");
     return result;
   }
+  syncInProgress = true;
 
   try {
     try {
@@ -88,7 +85,7 @@ export async function syncOrders(): Promise<SyncResult> {
 
     return result;
   } finally {
-    await prisma.$queryRawUnsafe(`SELECT pg_advisory_unlock(${SYNC_LOCK_ID})`);
+    syncInProgress = false;
   }
 }
 
