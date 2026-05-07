@@ -215,18 +215,22 @@ async function autoSendMessages(): Promise<number> {
     } catch (err) {
       const errorMsg =
         err instanceof Error ? err.message : "Unknown WhatsApp error";
-      await prisma.whatsappMessage.create({
-        data: {
-          orderId: order.id,
-          phoneNumber: order.customerPhone,
-          templateName,
-          templateLanguage,
-          templateVariablesJson: [],
-          status: "FAILED",
-          errorMessage: errorMsg,
-          sentBy: "automation",
-        },
-      });
+      try {
+        await prisma.whatsappMessage.create({
+          data: {
+            orderId: order.id,
+            phoneNumber: order.customerPhone,
+            templateName,
+            templateLanguage,
+            templateVariablesJson: [],
+            status: "FAILED",
+            errorMessage: errorMsg,
+            sentBy: "automation",
+          },
+        });
+      } catch {
+        // ignore logging failure to avoid terminating the loop
+      }
     }
   }
 
