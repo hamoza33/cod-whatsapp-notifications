@@ -20,8 +20,10 @@ export async function POST(request: NextRequest) {
       const userCount = await prisma.user.count();
       if (
         userCount === 0 &&
-        email === (process.env.ADMIN_EMAIL || "admin@example.com") &&
-        password === (process.env.ADMIN_PASSWORD || "admin123")
+        process.env.ADMIN_EMAIL &&
+        process.env.ADMIN_PASSWORD &&
+        email === process.env.ADMIN_EMAIL &&
+        password === process.env.ADMIN_PASSWORD
       ) {
         user = await prisma.user.create({
           data: {
