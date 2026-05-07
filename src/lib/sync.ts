@@ -183,8 +183,15 @@ async function autoSendMessages(): Promise<number> {
         order.codNetworkOrderId
       );
 
-      const result = await whatsappClient.sendTemplate(
+      const defaultCountryCode =
+        (await getSetting(SETTING_KEYS.DEFAULT_COUNTRY_CODE)) || "212";
+      const normalizedPhone = normalizePhoneNumber(
         order.customerPhone,
+        defaultCountryCode
+      );
+
+      const result = await whatsappClient.sendTemplate(
+        normalizedPhone,
         templateName,
         templateLanguage,
         variables
@@ -193,7 +200,7 @@ async function autoSendMessages(): Promise<number> {
       await prisma.whatsappMessage.create({
         data: {
           orderId: order.id,
-          phoneNumber: order.customerPhone,
+          phoneNumber: normalizedPhone,
           templateName,
           templateLanguage,
           templateVariablesJson: variables,
