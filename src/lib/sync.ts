@@ -177,6 +177,9 @@ async function autoSendMessages(): Promise<number> {
       continue;
     }
 
+    const failedCount = order.whatsappMessages.filter(m => m.status === "FAILED").length;
+    if (failedCount >= 3) continue;
+
     if (!order.customerPhone) continue;
 
     if (delaySeconds > 0) {
