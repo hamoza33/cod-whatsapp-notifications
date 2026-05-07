@@ -12,22 +12,21 @@ export async function GET(request: NextRequest) {
 
   const settings = await getSettings([...ALLOWED_KEYS]);
 
-  // Mask sensitive values
-  const masked = { ...settings };
+  // Redact sensitive values — return null but indicate which are configured
+  const redacted = { ...settings };
   const sensitiveKeys = [
     SETTING_KEYS.COD_API_TOKEN,
     SETTING_KEYS.WHATSAPP_ACCESS_TOKEN,
   ];
+  const sensitiveKeysSet: string[] = [];
   for (const key of sensitiveKeys) {
-    if (masked[key]) {
-      const val = masked[key]!;
-      masked[key] = val.length > 12
-        ? val.slice(0, 4) + "..." + val.slice(-4)
-        : "••••••••";
+    if (redacted[key]) {
+      sensitiveKeysSet.push(key);
+      redacted[key] = null;
     }
   }
 
-  return NextResponse.json({ settings: masked });
+  return NextResponse.json({ settings: redacted, sensitiveKeysSet });
 }
 
 export async function PUT(request: NextRequest) {

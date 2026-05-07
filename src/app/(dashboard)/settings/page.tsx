@@ -11,6 +11,7 @@ interface SettingsData {
 export default function SettingsPage() {
   const [settings, setSettings] = useState<SettingsData>({});
   const [dirtyKeys, setDirtyKeys] = useState<Set<string>>(new Set());
+  const [configuredSecrets, setConfiguredSecrets] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [notification, setNotification] = useState<{
@@ -22,8 +23,11 @@ export default function SettingsPage() {
     let cancelled = false;
     async function fetchSettings() {
       try {
-        const data = await api.get<{ settings: SettingsData }>("/settings");
-        if (!cancelled) setSettings(data.settings);
+        const data = await api.get<{ settings: SettingsData; sensitiveKeysSet: string[] }>("/settings");
+        if (!cancelled) {
+          setSettings(data.settings);
+          setConfiguredSecrets(new Set(data.sensitiveKeysSet || []));
+        }
       } catch {
         // ignore
       } finally {
@@ -116,7 +120,7 @@ export default function SettingsPage() {
           value={settings.cod_network_api_token || ""}
           onChange={(v) => updateSetting("cod_network_api_token", v)}
           type="password"
-          placeholder="Enter your COD Network API token"
+          placeholder={configuredSecrets.has("cod_network_api_token") ? "Currently configured — enter new value to replace" : "Enter your COD Network API token"}
         />
       </SettingsSection>
 
@@ -146,7 +150,7 @@ export default function SettingsPage() {
           value={settings.whatsapp_access_token || ""}
           onChange={(v) => updateSetting("whatsapp_access_token", v)}
           type="password"
-          placeholder="Your WhatsApp Access Token"
+          placeholder={configuredSecrets.has("whatsapp_access_token") ? "Currently configured — enter new value to replace" : "Your WhatsApp Access Token"}
         />
         <SettingsField
           label="API Version"
