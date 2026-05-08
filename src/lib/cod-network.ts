@@ -41,7 +41,10 @@ export interface CodNetworkOrder {
   tracking_status?: string | null;
   delivery_company?: string;
   status?: string | CodNetworkOrderStatus;
-  items?: CodNetworkOrderItem[];
+  // The Seller API v2 wraps the items list in a `data` envelope
+  // (`items: { data: [...] }`) when ?include=items is set; some other
+  // endpoints / older responses return a plain array. Both shapes are accepted.
+  items?: CodNetworkOrderItem[] | { data?: CodNetworkOrderItem[] };
   created_at?: string;
   updated_at?: string;
   [key: string]: unknown;
@@ -455,41 +458,53 @@ export function mapCodStatus(
   return STATUS_STRING_MAP[status.toLowerCase()] || "UNKNOWN";
 }
 
+/** Normalize the various item-list shapes into a flat `CodNetworkOrderItem[]`. */
+function normalizeItemsList(
+  items: CodNetworkOrder["items"]
+): CodNetworkOrderItem[] {
+  if (!items) return [];
+  if (Array.isArray(items)) return items;
+  if (Array.isArray(items.data)) return items.data;
+  return [];
+}
+
 /**
- * Extract a human-friendly product name from the order. Tries, in order:
- *   1. order.product_name (top-level convenience field, may be omitted)
- *   2. items[].name (some COD Network endpoints flatten the product)
- *   3. items[].product.data.name (default `?include=items` shape — the product
- *      object is wrapped in a `data` envelope by the underlying transformer)
- *   4. items[].product.name (occasionally seen without the `data` envelope)
+ * Extract a human-friendly product name from the order. The Seller API wraps
+ * both the items list and each product in `data` envelopes when ?include=items
+ * is set, so this looks at all of:
+ *   1. order.product_name                       (top-level convenience field)
+ *   2. items[].name                             (flat shape, some endpoints)
+ *   3. items[].product.data.name                (default include=items shape)
+ *   4. items[].product.name                     (unwrapped variant)
+ *
+ * `order.items` itself can be `[...]` or `{data: [...]}` — both are handled.
  */
 export function extractProductName(order: CodNetworkOrder): string | null {
   if (typeof order.product_name === "string" && order.product_name.length > 0) {
     return order.product_name;
   }
-  if (Array.isArray(order.items) && order.items.length > 0) {
-    const names = order.items
-      .map((it) => {
-        if (typeof it.name === "string" && it.name.length > 0) return it.name;
-        const productData = it.product?.data;
-        if (
-          productData &&
-          typeof productData.name === "string" &&
-          productData.name.length > 0
-        ) {
-          return productData.name;
-        }
-        if (
-          it.product &&
-          typeof it.product.name === "string" &&
-          it.product.name.length > 0
-        ) {
-          return it.product.name;
-        }
-        return null;
-      })
-      .filter((n): n is string => !!n);
-    if (names.length > 0) return names.join(", ");
-  }
-  return null;
+  const list = normalizeItemsList(order.items);
+  if (list.length === 0) return null;
+  const names = list
+    .map((it) => {
+      if (typeof it.name === "string" && it.name.length > 0) return it.name;
+      const productData = it.product?.data;
+      if (
+        productData &&
+        typeof productData.name === "string" &&
+        productData.name.length > 0
+      ) {
+        return productData.name;
+      }
+      if (
+        it.product &&
+        typeof it.product.name === "string" &&
+        it.product.name.length > 0
+      ) {
+        return it.product.name;
+      }
+      return null;
+    })
+    .filter((n): n is string => !!n);
+  return names.length > 0 ? names.join(", ") : null;
 }
