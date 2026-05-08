@@ -48,6 +48,10 @@ export const SETTING_KEYS = {
   SYNC_DAYS_BACK: "sync_days_back",
   WHATSAPP_BUSINESS_ACCOUNT_ID: "whatsapp_business_account_id",
   WHATSAPP_WEBHOOK_VERIFY_TOKEN: "whatsapp_webhook_verify_token",
+  // App Secret from the Meta App's "Basic" settings — used to verify the
+  // X-Hub-Signature-256 header on inbound webhook payloads. If unset the
+  // webhook accepts any payload (intended only for local testing).
+  WHATSAPP_APP_SECRET: "whatsapp_app_secret",
   WHATSAPP_DEFAULT_TEMPLATE_HEADER_IMAGE_URL: "whatsapp_default_template_header_image_url",
 } as const;
 
@@ -55,6 +59,8 @@ export const SENSITIVE_SETTING_KEYS: readonly string[] = [
   SETTING_KEYS.COD_API_TOKEN,
   SETTING_KEYS.COD_API_PASSWORD,
   SETTING_KEYS.WHATSAPP_ACCESS_TOKEN,
+  SETTING_KEYS.WHATSAPP_APP_SECRET,
+  SETTING_KEYS.WHATSAPP_WEBHOOK_VERIFY_TOKEN,
 ];
 
 export const INTERNAL_SETTING_KEYS: readonly string[] = [

@@ -259,6 +259,36 @@ export class WhatsAppClient {
   }
 
   /**
+   * Send a free-form text message. Only valid inside Meta's 24-hour customer
+   * service window — i.e. the recipient must have messaged us in the last
+   * 24 hours. Outside the window Meta returns #131047 / #470 and the caller
+   * should fall back to a template send.
+   */
+  async sendText(to: string, text: string): Promise<WhatsAppSendResult> {
+    const url = `https://graph.facebook.com/${this.apiVersion}/${this.phoneNumberId}/messages`;
+    const body = {
+      messaging_product: "whatsapp",
+      recipient_type: "individual",
+      to,
+      type: "text",
+      text: { preview_url: false, body: text },
+    };
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${this.accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(body),
+    });
+    if (!response.ok) {
+      const errorBody = await response.text();
+      throw new WhatsAppApiError(response.status, errorBody);
+    }
+    return response.json();
+  }
+
+  /**
    * Send a one-off test message. Defaults to the user-configured template
    * (so they don't have to maintain a `hello_world` template just for tests),
    * but accepts overrides for ad-hoc verification.

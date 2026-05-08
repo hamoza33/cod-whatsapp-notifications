@@ -219,6 +219,21 @@ export default function SettingsPage() {
           placeholder="https://example.com/header.jpg"
           help="Fallback image used when a template requires an IMAGE header but none is provided per-message."
         />
+        <SettingsField
+          label="Webhook Verify Token"
+          value={settings.whatsapp_webhook_verify_token || ""}
+          onChange={(v) => updateSetting("whatsapp_webhook_verify_token", v)}
+          placeholder="any random string, e.g. cod-wa-verify-2026"
+          help="Pasted into Meta App → WhatsApp → Configuration → Verify Token. Must match exactly. Used by /api/whatsapp/webhook for the GET handshake."
+        />
+        <SettingsField
+          label="App Secret"
+          value={settings.whatsapp_app_secret || ""}
+          onChange={(v) => updateSetting("whatsapp_app_secret", v)}
+          placeholder="From Meta App → Settings → Basic → App Secret"
+          type="password"
+          help="Used to verify the X-Hub-Signature-256 header on inbound webhook payloads. If left blank the webhook accepts any payload — only safe for local testing."
+        />
       </SettingsSection>
 
       {/* Sync Settings */}
