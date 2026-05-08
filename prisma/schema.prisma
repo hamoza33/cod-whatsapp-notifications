@@ -60,14 +60,23 @@ model Order {
   // when we first synced it, not when the customer placed the order).
   codCreatedAt        DateTime?   @map("cod_created_at")
   codUpdatedAt        DateTime?   @map("cod_updated_at")
+  // Set when ANY WhatsApp message has been sent for this order — used by the
+  // Pipeline UI to short-circuit accidental re-sends and to render the
+  // "WhatsApp Sent" virtual column.
+  whatsappSentAt      DateTime?   @map("whatsapp_sent_at")
+  // Free-form notes the operator can attach to an order from the Pipeline
+  // (e.g. "called customer, no answer"). Not synced from COD Network.
+  pipelineNote        String?     @map("pipeline_note")
   createdAt           DateTime    @default(now()) @map("created_at")
   updatedAt           DateTime    @updatedAt @map("updated_at")
 
   whatsappMessages WhatsappMessage[]
+  inboundMessages  InboundMessage[]
 
   @@index([status])
   @@index([codNetworkOrderId])
   @@index([codCreatedAt])
+  @@index([whatsappSentAt])
   @@map("orders")
 }
 
@@ -99,6 +108,31 @@ model WhatsappMessage {
   @@index([phoneNumber])
   @@index([status])
   @@map("whatsapp_messages")
+}
+
+model InboundMessage {
+  id                String    @id @default(cuid())
+  // Meta's wamid for de-duplication; webhooks can re-deliver the same payload.
+  providerMessageId String    @unique @map("provider_message_id")
+  fromPhoneNumber   String    @map("from_phone_number")
+  // Pre-normalized international number used to match against Order.customerPhone.
+  contactName       String?   @map("contact_name")
+  // "text", "image", "audio", "video", "document", "sticker", "location",
+  // "contacts", "interactive", "button", "reaction", "system" — whatever Meta
+  // sends. Body is stored verbatim so the inbox can render unsupported types.
+  type              String
+  text              String?
+  mediaId           String?   @map("media_id")
+  mediaMimeType     String?   @map("media_mime_type")
+  rawPayload        Json      @map("raw_payload")
+  receivedAt        DateTime  @default(now()) @map("received_at")
+  orderId           String?   @map("order_id")
+  order             Order?    @relation(fields: [orderId], references: [id])
+
+  @@index([fromPhoneNumber])
+  @@index([receivedAt])
+  @@index([orderId])
+  @@map("inbound_messages")
 }
 
 model SyncLog {

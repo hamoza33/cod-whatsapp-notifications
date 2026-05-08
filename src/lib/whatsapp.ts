@@ -7,7 +7,10 @@ interface WhatsAppTextParameter {
 
 interface WhatsAppImageParameter {
   type: "image";
-  image: { link: string };
+  // Meta accepts either a public `link` or a previously-uploaded `id`. We
+  // prefer `id` whenever possible because it avoids the "expected IMAGE,
+  // received UNKNOWN" failure when Meta can't fetch the URL.
+  image: { link: string } | { id: string };
 }
 
 type WhatsAppTemplateParameter = WhatsAppTextParameter | WhatsAppImageParameter;
@@ -19,8 +22,14 @@ interface WhatsAppTemplateComponent {
 
 export interface WhatsAppTemplateHeader {
   type: "text" | "image";
-  /** For text headers: the literal text. For image headers: an https URL. */
+  /**
+   * For text headers: the literal text. For image headers: either an https
+   * URL (passed via `image.link`) or a Meta media ID (passed via `image.id`).
+   * Use `imageKind` to disambiguate; defaults to URL.
+   */
   value: string;
+  /** "url" => image.link; "id" => image.id. Defaults to "url". */
+  imageKind?: "url" | "id";
 }
 
 interface WhatsAppSendResult {
@@ -200,10 +209,18 @@ export class WhatsAppClient {
 
     const components: WhatsAppTemplateComponent[] = [];
     if (header) {
-      const parameter: WhatsAppTemplateParameter =
-        header.type === "image"
-          ? { type: "image", image: { link: header.value } }
-          : { type: "text", text: header.value };
+      let parameter: WhatsAppTemplateParameter;
+      if (header.type === "image") {
+        parameter = {
+          type: "image",
+          image:
+            header.imageKind === "id"
+              ? { id: header.value }
+              : { link: header.value },
+        };
+      } else {
+        parameter = { type: "text", text: header.value };
+      }
       components.push({ type: "header", parameters: [parameter] });
     }
     if (variables.length > 0) {

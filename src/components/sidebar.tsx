@@ -10,6 +10,8 @@ import {
   RefreshCw,
   LogOut,
   Send,
+  Columns3,
+  Inbox,
 } from "lucide-react";
 import { api } from "@/lib/api-client";
 import { useRouter } from "next/navigation";
@@ -17,6 +19,8 @@ import { useRouter } from "next/navigation";
 const navItems = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { href: "/orders", label: "Orders", icon: Package },
+  { href: "/pipeline", label: "Pipeline", icon: Columns3 },
+  { href: "/inbox", label: "WhatsApp Inbox", icon: Inbox },
   { href: "/messages", label: "Message Logs", icon: MessageSquare },
   { href: "/sync-logs", label: "Sync Logs", icon: RefreshCw },
   { href: "/test-message", label: "Test Message", icon: Send },
