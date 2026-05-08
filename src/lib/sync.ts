@@ -1,6 +1,11 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "./prisma";
-import { CodNetworkClient, CodNetworkOrder, mapCodStatus } from "./cod-network";
+import {
+  CodNetworkClient,
+  CodNetworkOrder,
+  mapCodStatus,
+  extractProductName,
+} from "./cod-network";
 import { WhatsAppClient, buildTemplateVariables } from "./whatsapp";
 import { getSetting, SETTING_KEYS } from "./settings";
 import { normalizePhoneNumber } from "./phone";
@@ -95,7 +100,11 @@ async function upsertOrder(
   defaultCountryCode: string
 ): Promise<void> {
   const codOrderId = String(codOrder.id);
-  const status = mapCodStatus(codOrder.status) as OrderStatus;
+  const status = mapCodStatus(
+    codOrder.status,
+    codOrder.tracking_status
+  ) as OrderStatus;
+  const productName = extractProductName(codOrder);
 
   let normalizedPhone: string | null = null;
   if (codOrder.customer_phone) {
@@ -122,7 +131,7 @@ async function upsertOrder(
         customerPhone: normalizedPhone ?? existing.customerPhone,
         customerCity: codOrder.customer_city ?? existing.customerCity,
         customerAddress: codOrder.customer_address ?? existing.customerAddress,
-        productName: codOrder.product_name ?? existing.productName,
+        productName: productName ?? existing.productName,
         trackingNumber: codOrder.tracking_number ?? existing.trackingNumber,
         deliveryCompany: codOrder.delivery_company ?? existing.deliveryCompany,
         status,
@@ -140,7 +149,7 @@ async function upsertOrder(
         customerPhone: normalizedPhone,
         customerCity: codOrder.customer_city ?? null,
         customerAddress: codOrder.customer_address ?? null,
-        productName: codOrder.product_name ?? null,
+        productName,
         trackingNumber: codOrder.tracking_number ?? null,
         deliveryCompany: codOrder.delivery_company ?? null,
         status,

@@ -14,6 +14,80 @@ interface WhatsAppSendResult {
   messages: Array<{ id: string }>;
 }
 
+/**
+ * Public, structured error thrown when Meta's Graph API rejects a request.
+ * Surfaces the HTTP status, raw body, and parsed Meta error envelope so the UI
+ * and logs can display the actual reason (template not approved, invalid
+ * Phone Number ID, expired access token, etc.).
+ */
+export class WhatsAppApiError extends Error {
+  status: number;
+  body: string;
+  metaCode?: number;
+  metaSubcode?: number;
+  metaMessage?: string;
+  metaDetails?: string;
+
+  constructor(status: number, body: string, message?: string) {
+    let metaMessage: string | undefined;
+    let metaDetails: string | undefined;
+    let metaCode: number | undefined;
+    let metaSubcode: number | undefined;
+    try {
+      const parsed = JSON.parse(body) as {
+        error?: {
+          message?: string;
+          code?: number;
+          error_subcode?: number;
+          error_data?: { details?: string };
+        };
+      };
+      metaMessage = parsed.error?.message;
+      metaCode = parsed.error?.code;
+      metaSubcode = parsed.error?.error_subcode;
+      metaDetails = parsed.error?.error_data?.details;
+    } catch {
+      // body is not JSON
+    }
+    const friendly =
+      message ??
+      (metaMessage
+        ? `WhatsApp API error (${status}): ${metaMessage}${
+            metaDetails ? ` — ${metaDetails}` : ""
+          }`
+        : `WhatsApp API error (${status}): ${body.slice(0, 300)}`);
+    super(friendly);
+    this.name = "WhatsAppApiError";
+    this.status = status;
+    this.body = body;
+    this.metaCode = metaCode;
+    this.metaSubcode = metaSubcode;
+    this.metaMessage = metaMessage;
+    this.metaDetails = metaDetails;
+  }
+}
+
+/**
+ * The visible Meta phone number (e.g. `+966 57 253 4141`) is NOT the same as
+ * the Meta-issued Phone Number ID — the Phone Number ID is a separate 15–16
+ * digit identifier exposed in WhatsApp Manager → API Setup. This helper
+ * detects values that look like a phone number so the UI / API layer can
+ * warn the user before they hit Meta's confusing "(#100) Could not find
+ * phone number" error.
+ */
+export function looksLikePhoneNumber(value: string): boolean {
+  if (!value) return false;
+  const stripped = value.replace(/[\s\-+()]/g, "");
+  // Plain phone numbers typically have 7–15 digits and start with 0 or a
+  // common country prefix; Meta Phone Number IDs are 15–16 digit opaque IDs
+  // but never start with a leading "+" or "0".
+  if (/^[+0]/.test(value.trim())) return true;
+  if (/[\s\-()]/.test(value)) return true;
+  if (!/^\d+$/.test(stripped)) return false;
+  if (stripped.length < 8 || stripped.length > 12) return false;
+  return true;
+}
+
 export class WhatsAppClient {
   private phoneNumberId: string;
   private accessToken: string;
@@ -46,6 +120,12 @@ export class WhatsAppClient {
     if (!phoneNumberId || !accessToken) {
       throw new Error(
         "WhatsApp Cloud API credentials not configured. Please set them in Settings."
+      );
+    }
+
+    if (looksLikePhoneNumber(phoneNumberId)) {
+      throw new Error(
+        `WhatsApp "Phone Number ID" looks like a phone number (${phoneNumberId}). The Phone Number ID is a 15–16 digit Meta-issued identifier (NOT the visible phone number). Find it in WhatsApp Manager → API Setup → Phone numbers, then update Settings → WhatsApp Cloud API.`
       );
     }
 
@@ -90,16 +170,25 @@ export class WhatsAppClient {
 
     if (!response.ok) {
       const errorBody = await response.text();
-      throw new Error(
-        `WhatsApp API error (${response.status}): ${errorBody}`
-      );
+      throw new WhatsAppApiError(response.status, errorBody);
     }
 
     return response.json();
   }
 
-  async sendTestMessage(to: string): Promise<WhatsAppSendResult> {
-    return this.sendTemplate(to, "hello_world", "en_US", []);
+  /**
+   * Send a one-off test message. Defaults to the user-configured template
+   * (so they don't have to maintain a `hello_world` template just for tests),
+   * but accepts overrides for ad-hoc verification.
+   */
+  async sendTestMessage(
+    to: string,
+    opts?: { templateName?: string; language?: string; variables?: string[] }
+  ): Promise<WhatsAppSendResult> {
+    const templateName = opts?.templateName || "hello_world";
+    const language = opts?.language || "en_US";
+    const variables = opts?.variables ?? [];
+    return this.sendTemplate(to, templateName, language, variables);
   }
 }
 

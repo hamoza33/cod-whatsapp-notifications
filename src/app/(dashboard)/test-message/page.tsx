@@ -6,6 +6,8 @@ import { Send } from "lucide-react";
 
 export default function TestMessagePage() {
   const [phoneNumber, setPhoneNumber] = useState("");
+  const [templateName, setTemplateName] = useState("");
+  const [templateLanguage, setTemplateLanguage] = useState("");
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<{
     type: "success" | "error";
@@ -18,10 +20,21 @@ export default function TestMessagePage() {
     setResult(null);
 
     try {
-      await api.post("/whatsapp/test", { phoneNumber });
+      const payload: {
+        phoneNumber: string;
+        templateName?: string;
+        templateLanguage?: string;
+      } = { phoneNumber };
+      if (templateName.trim()) payload.templateName = templateName.trim();
+      if (templateLanguage.trim()) payload.templateLanguage = templateLanguage.trim();
+      const data = await api.post<{
+        success: boolean;
+        templateName: string;
+        language: string;
+      }>("/whatsapp/test", payload);
       setResult({
         type: "success",
-        message: "Test message sent successfully! Check the recipient's WhatsApp.",
+        message: `Test message sent using template "${data.templateName}" (${data.language}). Check the recipient's WhatsApp.`,
       });
     } catch (err) {
       setResult({
@@ -41,9 +54,10 @@ export default function TestMessagePage() {
 
       <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
         <p className="text-sm text-gray-500 mb-4">
-          Send a test WhatsApp message using the{" "}
-          <code className="bg-gray-100 px-1 rounded">hello_world</code>{" "}
-          template to verify your WhatsApp Cloud API configuration.
+          Send a test WhatsApp message to verify your Cloud API configuration. By
+          default this uses the template configured under{" "}
+          <strong>Settings → WhatsApp Cloud API</strong>; you can override it
+          below for ad-hoc verification.
         </p>
 
         {result && (
@@ -79,6 +93,49 @@ export default function TestMessagePage() {
               International format preferred. Morocco numbers (+212) are auto-detected.
             </p>
           </div>
+
+          <details className="group">
+            <summary className="cursor-pointer text-xs font-medium text-gray-600 hover:text-gray-900">
+              Advanced: override template (optional)
+            </summary>
+            <div className="mt-3 space-y-3 pl-1">
+              <div>
+                <label
+                  htmlFor="template-name"
+                  className="block text-sm font-medium text-gray-700 mb-1"
+                >
+                  Template Name
+                </label>
+                <input
+                  id="template-name"
+                  type="text"
+                  value={templateName}
+                  onChange={(e) => setTemplateName(e.target.value)}
+                  placeholder="Leave empty to use Settings value"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                />
+              </div>
+              <div>
+                <label
+                  htmlFor="template-language"
+                  className="block text-sm font-medium text-gray-700 mb-1"
+                >
+                  Template Language
+                </label>
+                <input
+                  id="template-language"
+                  type="text"
+                  value={templateLanguage}
+                  onChange={(e) => setTemplateLanguage(e.target.value)}
+                  placeholder="e.g. en or en_US"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                />
+              </div>
+              <p className="text-xs text-gray-400">
+                The template must be APPROVED on your WhatsApp Business Account.
+              </p>
+            </div>
+          </details>
 
           <button
             type="submit"

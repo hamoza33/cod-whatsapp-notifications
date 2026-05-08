@@ -2,7 +2,8 @@
 
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api-client";
-import { Save, RefreshCw } from "lucide-react";
+import { Save, RefreshCw, AlertTriangle } from "lucide-react";
+import { looksLikePhoneNumber } from "@/lib/whatsapp-validation";
 
 interface SettingsData {
   [key: string]: string | null;
@@ -100,11 +101,13 @@ export default function SettingsPage() {
       {/* COD Network Settings */}
       <SettingsSection
         title="COD Network API"
-        description="Configure your COD Network seller API credentials."
+        description="Connect to api.cod.network. Email + password is the recommended flow per the COD Network docs and yields a 1-hour access_token that the app refreshes automatically."
         onSave={() =>
           handleSave("COD Network", [
-            "cod_network_api_token",
             "cod_network_api_base_url",
+            "cod_network_api_email",
+            "cod_network_api_password",
+            "cod_network_api_token",
           ])
         }
         saving={saving}
@@ -116,18 +119,42 @@ export default function SettingsPage() {
           placeholder="https://api.cod.network/v2"
         />
         <SettingsField
-          label="API Token"
+          label="Seller Email (recommended)"
+          value={settings.cod_network_api_email || ""}
+          onChange={(v) => updateSetting("cod_network_api_email", v)}
+          type="email"
+          placeholder="you@example.com"
+          help="Your COD Network seller portal email. Used with the password below to obtain a fresh access_token from POST /v2/seller/login."
+        />
+        <SettingsField
+          label="Seller Password (recommended)"
+          value={settings.cod_network_api_password || ""}
+          onChange={(v) => updateSetting("cod_network_api_password", v)}
+          type="password"
+          placeholder={
+            configuredSecrets.has("cod_network_api_password")
+              ? "Currently configured — enter a new value to replace"
+              : "Your COD Network seller portal password"
+          }
+        />
+        <SettingsField
+          label="API Token (legacy fallback)"
           value={settings.cod_network_api_token || ""}
           onChange={(v) => updateSetting("cod_network_api_token", v)}
           type="password"
-          placeholder={configuredSecrets.has("cod_network_api_token") ? "Currently configured — enter new value to replace" : "Enter your COD Network API token"}
+          placeholder={
+            configuredSecrets.has("cod_network_api_token")
+              ? "Currently configured — enter a new value to replace"
+              : "Optional — used only if email/password are not set"
+          }
+          help="Tokens generated from the seller portal's API Developer page may be rejected by api.cod.network. Prefer email + password."
         />
       </SettingsSection>
 
       {/* WhatsApp Settings */}
       <SettingsSection
         title="WhatsApp Cloud API"
-        description="Configure your Meta WhatsApp Cloud API credentials."
+        description="Configure your Meta WhatsApp Cloud API credentials. The Phone Number ID is NOT your visible phone number — it's a 15–16 digit Meta-issued ID from WhatsApp Manager → API Setup → Phone numbers."
         onSave={() =>
           handleSave("WhatsApp", [
             "whatsapp_phone_number_id",
@@ -143,7 +170,12 @@ export default function SettingsPage() {
           label="Phone Number ID"
           value={settings.whatsapp_phone_number_id || ""}
           onChange={(v) => updateSetting("whatsapp_phone_number_id", v)}
-          placeholder="Your WhatsApp Phone Number ID"
+          placeholder="e.g. 906139205908177"
+          warning={
+            looksLikePhoneNumber(settings.whatsapp_phone_number_id || "")
+              ? 'This looks like a phone number, not a Phone Number ID. The Phone Number ID is a 15–16 digit Meta-issued identifier (find it in WhatsApp Manager → API Setup → Phone numbers).'
+              : undefined
+          }
         />
         <SettingsField
           label="Access Token"
@@ -163,6 +195,7 @@ export default function SettingsPage() {
           value={settings.whatsapp_template_name || "order_out_for_delivery"}
           onChange={(v) => updateSetting("whatsapp_template_name", v)}
           placeholder="order_out_for_delivery"
+          help="Must be an APPROVED template on your WhatsApp Business Account. The Test Message button uses this template by default."
         />
         <SettingsField
           label="Template Language"
@@ -302,12 +335,16 @@ function SettingsField({
   onChange,
   type = "text",
   placeholder,
+  help,
+  warning,
 }: {
   label: string;
   value: string;
   onChange: (value: string) => void;
   type?: string;
   placeholder?: string;
+  help?: string;
+  warning?: string;
 }) {
   return (
     <div className="mb-4">
@@ -319,8 +356,19 @@ function SettingsField({
         value={value}
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
-        className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+        className={`w-full px-3 py-2 border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent ${
+          warning ? "border-amber-400 bg-amber-50" : "border-gray-300"
+        }`}
       />
+      {warning && (
+        <p className="mt-1 flex items-start gap-1 text-xs text-amber-700">
+          <AlertTriangle size={14} className="mt-0.5 shrink-0" />
+          <span>{warning}</span>
+        </p>
+      )}
+      {help && !warning && (
+        <p className="mt-1 text-xs text-gray-500">{help}</p>
+      )}
     </div>
   );
 }

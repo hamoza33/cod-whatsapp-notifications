@@ -29,6 +29,10 @@ export async function getSettings(
 export const SETTING_KEYS = {
   COD_API_TOKEN: "cod_network_api_token",
   COD_API_BASE_URL: "cod_network_api_base_url",
+  COD_API_EMAIL: "cod_network_api_email",
+  COD_API_PASSWORD: "cod_network_api_password",
+  COD_API_TOKEN_CACHED: "cod_network_api_token_cached",
+  COD_API_TOKEN_EXPIRES_AT: "cod_network_api_token_expires_at",
   WHATSAPP_PHONE_NUMBER_ID: "whatsapp_phone_number_id",
   WHATSAPP_ACCESS_TOKEN: "whatsapp_access_token",
   WHATSAPP_API_VERSION: "whatsapp_api_version",
@@ -40,3 +44,18 @@ export const SETTING_KEYS = {
   AUTOMATION_SEND_ONCE: "automation_send_once",
   DEFAULT_COUNTRY_CODE: "default_country_code",
 } as const;
+
+export const SENSITIVE_SETTING_KEYS: readonly string[] = [
+  SETTING_KEYS.COD_API_TOKEN,
+  SETTING_KEYS.COD_API_PASSWORD,
+  SETTING_KEYS.WHATSAPP_ACCESS_TOKEN,
+];
+
+export const INTERNAL_SETTING_KEYS: readonly string[] = [
+  SETTING_KEYS.COD_API_TOKEN_CACHED,
+  SETTING_KEYS.COD_API_TOKEN_EXPIRES_AT,
+];
+
+export async function deleteSetting(key: string): Promise<void> {
+  await prisma.setting.deleteMany({ where: { key } });
+}

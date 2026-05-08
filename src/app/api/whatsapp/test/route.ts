@@ -20,7 +20,12 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    const { phoneNumber } = await request.json();
+    const body = (await request.json().catch(() => ({}))) as {
+      phoneNumber?: string;
+      templateName?: string;
+      templateLanguage?: string;
+    };
+    const { phoneNumber, templateName: overrideTemplate, templateLanguage: overrideLanguage } = body;
 
     if (!phoneNumber) {
       return NextResponse.json(
@@ -42,10 +47,28 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const whatsappClient = await WhatsAppClient.fromSettings();
-    const result = await whatsappClient.sendTestMessage(phone);
+    // Use the configured template by default (avoids hard-coded
+    // `hello_world`, which only works if it happens to be approved on the
+    // user's WABA). Callers can still override per-request from the UI.
+    const configuredTemplate = await getSetting(SETTING_KEYS.WHATSAPP_TEMPLATE_NAME);
+    const configuredLanguage = await getSetting(SETTING_KEYS.WHATSAPP_TEMPLATE_LANGUAGE);
 
-    return NextResponse.json({ success: true, result });
+    const templateName = overrideTemplate || configuredTemplate || "hello_world";
+    const language = overrideLanguage || configuredLanguage || "en_US";
+
+    const whatsappClient = await WhatsAppClient.fromSettings();
+    const result = await whatsappClient.sendTestMessage(phone, {
+      templateName,
+      language,
+      variables: [],
+    });
+
+    return NextResponse.json({
+      success: true,
+      result,
+      templateName,
+      language,
+    });
   } catch (err) {
     const errorMsg =
       err instanceof Error ? err.message : "Failed to send test message";
