@@ -37,6 +37,12 @@ export interface CodNetworkOrder {
   customer_address?: string;
   customer_country_name?: string;
   product_name?: string;
+  product_price?: string | number;
+  product_quantity?: string | number;
+  total_price?: string | number;
+  total?: string | number;
+  amount?: string | number;
+  quantity?: string | number;
   tracking_number?: string | null;
   tracking_status?: string | null;
   delivery_company?: string;
@@ -349,15 +355,50 @@ export class CodNetworkClient {
   }
 
   async getAllOrders(
-    params: Record<string, string> = {}
+    params: Record<string, string> = {},
+    opts: { sinceDate?: Date; maxPages?: number } = {}
   ): Promise<CodNetworkOrder[]> {
+    const { sinceDate, maxPages = 100 } = opts;
     const allOrders: CodNetworkOrder[] = [];
     let page = 1;
     let hasMore = true;
 
+    // If `sinceDate` is provided, ask the API for only newer orders. Different
+    // installs of the Seller API have inconsistent filter param names, so we
+    // send a few common variants and additionally enforce the cutoff client
+    // side. Stops paginating once a full page falls before the cutoff.
+    const dateParams: Record<string, string> = {};
+    if (sinceDate) {
+      const iso = sinceDate.toISOString();
+      const isoDate = iso.slice(0, 10);
+      dateParams["created_at[gte]"] = iso;
+      dateParams.from = isoDate;
+      dateParams.since = iso;
+    }
+    const mergedParams = { ...dateParams, ...params };
+
     while (hasMore) {
-      const response = await this.getOrders(page, 50, params);
-      allOrders.push(...response.data);
+      const response = await this.getOrders(page, 50, mergedParams);
+
+      const pageOrders = sinceDate
+        ? response.data.filter((o) => {
+            if (!o.created_at) return true;
+            const t = Date.parse(o.created_at);
+            return Number.isNaN(t) ? true : t >= sinceDate.getTime();
+          })
+        : response.data;
+      allOrders.push(...pageOrders);
+
+      // If filtering on date and the entire page was older than the cutoff,
+      // stop paginating — the API isn't honoring the date filter so we exit
+      // early instead of paging through years of history.
+      if (
+        sinceDate &&
+        response.data.length > 0 &&
+        pageOrders.length === 0
+      ) {
+        break;
+      }
 
       const pagination = response.meta?.pagination;
       if (
@@ -376,7 +417,7 @@ export class CodNetworkClient {
 
       page++;
 
-      if (page > 100) break;
+      if (page > maxPages) break;
     }
 
     return allOrders;

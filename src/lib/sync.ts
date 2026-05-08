@@ -21,6 +21,10 @@ interface SyncResult {
 
 let syncInProgress = false;
 
+export function isSyncInProgress(): boolean {
+  return syncInProgress;
+}
+
 export async function syncOrders(): Promise<SyncResult> {
   const startTime = Date.now();
   const result: SyncResult = {
@@ -40,7 +44,14 @@ export async function syncOrders(): Promise<SyncResult> {
   try {
     try {
       const client = await CodNetworkClient.fromSettings();
-      const orders = await client.getAllOrders();
+
+      const daysBackSetting = await getSetting(SETTING_KEYS.SYNC_DAYS_BACK);
+      const daysBack = daysBackSetting ? parseInt(daysBackSetting, 10) : 30;
+      const sinceDate = Number.isFinite(daysBack) && daysBack > 0
+        ? new Date(Date.now() - daysBack * 24 * 60 * 60 * 1000)
+        : undefined;
+
+      const orders = await client.getAllOrders({}, { sinceDate });
       result.ordersFound = orders.length;
 
       const defaultCountryCode =
@@ -94,6 +105,48 @@ export async function syncOrders(): Promise<SyncResult> {
   }
 }
 
+function parseDate(value: string | undefined | null): Date | null {
+  if (!value) return null;
+  const t = Date.parse(value);
+  return Number.isNaN(t) ? null : new Date(t);
+}
+
+function extractProductPriceAndQuantity(
+  order: CodNetworkOrder
+): { price: string | null; quantity: string | null } {
+  const itemsRaw = order.items;
+  let items: { price?: string | number; quantity?: string | number }[] = [];
+  if (Array.isArray(itemsRaw)) items = itemsRaw;
+  else if (
+    itemsRaw &&
+    typeof itemsRaw === "object" &&
+    Array.isArray((itemsRaw as { data?: unknown }).data)
+  ) {
+    items = (itemsRaw as { data: typeof items }).data;
+  }
+
+  const totalQty = items.reduce((acc, it) => {
+    const q = Number(it.quantity ?? 0);
+    return acc + (Number.isFinite(q) ? q : 0);
+  }, 0);
+
+  let price: string | null = null;
+  if (order.total_price !== undefined) price = String(order.total_price);
+  else if (order.total !== undefined) price = String(order.total);
+  else if (order.amount !== undefined) price = String(order.amount);
+  else if (order.product_price !== undefined) price = String(order.product_price);
+  else if (items.length > 0 && items[0].price !== undefined) {
+    price = String(items[0].price);
+  }
+
+  let quantity: string | null = null;
+  if (totalQty > 0) quantity = String(totalQty);
+  else if (order.product_quantity !== undefined) quantity = String(order.product_quantity);
+  else if (order.quantity !== undefined) quantity = String(order.quantity);
+
+  return { price, quantity };
+}
+
 async function upsertOrder(
   codOrder: CodNetworkOrder,
   result: SyncResult,
@@ -105,6 +158,10 @@ async function upsertOrder(
     codOrder.tracking_status
   ) as OrderStatus;
   const productName = extractProductName(codOrder);
+  const { price: productPrice, quantity: productQuantity } =
+    extractProductPriceAndQuantity(codOrder);
+  const codCreatedAt = parseDate(codOrder.created_at);
+  const codUpdatedAt = parseDate(codOrder.updated_at);
 
   let normalizedPhone: string | null = null;
   if (codOrder.customer_phone) {
@@ -132,10 +189,14 @@ async function upsertOrder(
         customerCity: codOrder.customer_city ?? existing.customerCity,
         customerAddress: codOrder.customer_address ?? existing.customerAddress,
         productName: productName ?? existing.productName,
+        productPrice: productPrice ?? existing.productPrice,
+        productQuantity: productQuantity ?? existing.productQuantity,
         trackingNumber: codOrder.tracking_number ?? existing.trackingNumber,
         deliveryCompany: codOrder.delivery_company ?? existing.deliveryCompany,
         status,
         ...(statusChanged ? { statusChangedAt: new Date() } : {}),
+        codCreatedAt: codCreatedAt ?? existing.codCreatedAt,
+        codUpdatedAt: codUpdatedAt ?? existing.codUpdatedAt,
         rawOrderJson: JSON.parse(JSON.stringify(codOrder)) as Prisma.InputJsonValue,
         lastSyncedAt: new Date(),
       },
@@ -150,10 +211,14 @@ async function upsertOrder(
         customerCity: codOrder.customer_city ?? null,
         customerAddress: codOrder.customer_address ?? null,
         productName,
+        productPrice,
+        productQuantity,
         trackingNumber: codOrder.tracking_number ?? null,
         deliveryCompany: codOrder.delivery_company ?? null,
         status,
         statusChangedAt: new Date(),
+        codCreatedAt,
+        codUpdatedAt,
         rawOrderJson: JSON.parse(JSON.stringify(codOrder)) as Prisma.InputJsonValue,
         lastSyncedAt: new Date(),
       },

@@ -203,6 +203,79 @@ export default function SettingsPage() {
           onChange={(v) => updateSetting("whatsapp_template_language", v)}
           placeholder="en"
         />
+        <SettingsField
+          label="WhatsApp Business Account ID"
+          value={settings.whatsapp_business_account_id || ""}
+          onChange={(v) => updateSetting("whatsapp_business_account_id", v)}
+          placeholder="e.g. 1234567890123456"
+          help="Used to fetch your approved templates so the app can show variable counts. Find it in WhatsApp Manager → API Setup → Business Account."
+        />
+        <SettingsField
+          label="Default Header Image URL"
+          value={settings.whatsapp_default_template_header_image_url || ""}
+          onChange={(v) =>
+            updateSetting("whatsapp_default_template_header_image_url", v)
+          }
+          placeholder="https://example.com/header.jpg"
+          help="Fallback image used when a template requires an IMAGE header but none is provided per-message."
+        />
+      </SettingsSection>
+
+      {/* Sync Settings */}
+      <SettingsSection
+        title="Order Sync"
+        description="Pull orders from COD Network on a schedule. Auto-sync runs in the same Node process as the web app — for serverless deployments, set up an external cron calling /api/cron/sync."
+        onSave={() =>
+          handleSave("Order Sync", [
+            "auto_sync_enabled",
+            "auto_sync_interval_minutes",
+            "sync_days_back",
+          ])
+        }
+        saving={saving}
+      >
+        <div className="flex items-center gap-3 mb-4">
+          <label className="text-sm font-medium text-gray-700">
+            Enable Auto-Sync
+          </label>
+          <button
+            onClick={() =>
+              updateSetting(
+                "auto_sync_enabled",
+                settings.auto_sync_enabled === "false" ? "true" : "false"
+              )
+            }
+            className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+              settings.auto_sync_enabled !== "false"
+                ? "bg-blue-600"
+                : "bg-gray-300"
+            }`}
+          >
+            <span
+              className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                settings.auto_sync_enabled !== "false"
+                  ? "translate-x-6"
+                  : "translate-x-1"
+              }`}
+            />
+          </button>
+        </div>
+        <SettingsField
+          label="Auto-Sync Interval (minutes)"
+          value={settings.auto_sync_interval_minutes || "5"}
+          onChange={(v) => updateSetting("auto_sync_interval_minutes", v)}
+          type="number"
+          placeholder="5"
+          help="How often to pull new orders. Minimum 1 minute. Default 5 minutes. Restart the app for interval changes to take effect."
+        />
+        <SettingsField
+          label="Sync Window (days back)"
+          value={settings.sync_days_back || "30"}
+          onChange={(v) => updateSetting("sync_days_back", v)}
+          type="number"
+          placeholder="30"
+          help="Only orders placed within this many days are pulled, keeping each sync fast. Default 30."
+        />
       </SettingsSection>
 
       {/* Automation Settings */}

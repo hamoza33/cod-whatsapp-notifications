@@ -43,7 +43,14 @@ export async function GET(request: NextRequest) {
           take: 1,
         },
       },
-      orderBy: { updatedAt: "desc" },
+      // Newest *placed* order first (codCreatedAt). Falls back to our row's
+      // createdAt for orders that pre-date this column. updatedAt is the final
+      // tiebreaker so re-syncs of older orders surface together.
+      orderBy: [
+        { codCreatedAt: { sort: "desc", nulls: "last" } },
+        { createdAt: "desc" },
+        { updatedAt: "desc" },
+      ],
       skip: (page - 1) * pageSize,
       take: pageSize,
     }),

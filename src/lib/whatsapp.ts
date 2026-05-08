@@ -42,6 +42,10 @@ export class WhatsAppApiError extends Error {
   metaSubcode?: number;
   metaMessage?: string;
   metaDetails?: string;
+  /** For #132000 errors only: number of body params the template expects. */
+  expectedParamCount?: number;
+  /** For #132000 errors only: number of body params we actually sent. */
+  receivedParamCount?: number;
 
   constructor(status: number, body: string, message?: string) {
     let metaMessage: string | undefined;
@@ -64,13 +68,49 @@ export class WhatsAppApiError extends Error {
     } catch {
       // body is not JSON
     }
-    const friendly =
-      message ??
-      (metaMessage
-        ? `WhatsApp API error (${status}): ${metaMessage}${
-            metaDetails ? ` — ${metaDetails}` : ""
-          }`
-        : `WhatsApp API error (${status}): ${body.slice(0, 300)}`);
+
+    // #132000 = "Number of parameters does not match". Pull the explicit
+    // counts out of the details string so callers (UI/log) can show the user
+    // exactly how many params their template needs.
+    let expectedParamCount: number | undefined;
+    let receivedParamCount: number | undefined;
+    if (metaCode === 132000 && metaDetails) {
+      // Example details:
+      //   "body: number of localizable_params (1) does not match the
+      //    expected number of params (2)"
+      const m = metaDetails.match(
+        /\((\d+)\)\s*does not match.*expected number of params\s*\((\d+)\)/i
+      );
+      if (m) {
+        receivedParamCount = parseInt(m[1], 10);
+        expectedParamCount = parseInt(m[2], 10);
+      }
+    }
+
+    let friendly: string;
+    if (message) {
+      friendly = message;
+    } else if (
+      metaCode === 132000 &&
+      typeof expectedParamCount === "number" &&
+      typeof receivedParamCount === "number"
+    ) {
+      friendly = `WhatsApp template needs ${expectedParamCount} body variable${
+        expectedParamCount === 1 ? "" : "s"
+      } but you sent ${receivedParamCount}. Add ${
+        expectedParamCount - receivedParamCount > 0
+          ? `${expectedParamCount - receivedParamCount} more`
+          : `${receivedParamCount - expectedParamCount} fewer`
+      } and try again.`;
+    } else if (metaCode === 132012 && metaDetails) {
+      friendly = `WhatsApp template header format mismatch — ${metaDetails}. Provide a header image URL (or upload an image) in the Test Message → Advanced section.`;
+    } else if (metaMessage) {
+      friendly = `WhatsApp API error (${status}): ${metaMessage}${
+        metaDetails ? ` — ${metaDetails}` : ""
+      }`;
+    } else {
+      friendly = `WhatsApp API error (${status}): ${body.slice(0, 300)}`;
+    }
     super(friendly);
     this.name = "WhatsAppApiError";
     this.status = status;
@@ -79,6 +119,8 @@ export class WhatsAppApiError extends Error {
     this.metaSubcode = metaSubcode;
     this.metaMessage = metaMessage;
     this.metaDetails = metaDetails;
+    this.expectedParamCount = expectedParamCount;
+    this.receivedParamCount = receivedParamCount;
   }
 }
 

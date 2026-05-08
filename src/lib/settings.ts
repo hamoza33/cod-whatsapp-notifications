@@ -43,6 +43,12 @@ export const SETTING_KEYS = {
   AUTOMATION_DELAY_SECONDS: "automation_delay_seconds",
   AUTOMATION_SEND_ONCE: "automation_send_once",
   DEFAULT_COUNTRY_CODE: "default_country_code",
+  AUTO_SYNC_ENABLED: "auto_sync_enabled",
+  AUTO_SYNC_INTERVAL_MINUTES: "auto_sync_interval_minutes",
+  SYNC_DAYS_BACK: "sync_days_back",
+  WHATSAPP_BUSINESS_ACCOUNT_ID: "whatsapp_business_account_id",
+  WHATSAPP_WEBHOOK_VERIFY_TOKEN: "whatsapp_webhook_verify_token",
+  WHATSAPP_DEFAULT_TEMPLATE_HEADER_IMAGE_URL: "whatsapp_default_template_header_image_url",
 } as const;
 
 export const SENSITIVE_SETTING_KEYS: readonly string[] = [

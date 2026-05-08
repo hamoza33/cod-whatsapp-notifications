@@ -2,7 +2,17 @@
 
 import { useState, FormEvent } from "react";
 import { api } from "@/lib/api-client";
-import { Send } from "lucide-react";
+import { Send, RefreshCw } from "lucide-react";
+
+interface TemplateInfo {
+  name: string;
+  language: string;
+  status: string;
+  category: string;
+  bodyParameterCount: number;
+  bodyText: string | null;
+  header: { format: "TEXT" | "IMAGE" | "VIDEO" | "DOCUMENT" | "LOCATION" } | null;
+}
 
 export default function TestMessagePage() {
   const [phoneNumber, setPhoneNumber] = useState("");
@@ -12,10 +22,40 @@ export default function TestMessagePage() {
   const [templateHeaderImage, setTemplateHeaderImage] = useState("");
   const [templateHeaderText, setTemplateHeaderText] = useState("");
   const [loading, setLoading] = useState(false);
+  const [detecting, setDetecting] = useState(false);
+  const [templateInfo, setTemplateInfo] = useState<TemplateInfo | null>(null);
+  const [templateError, setTemplateError] = useState<string | null>(null);
   const [result, setResult] = useState<{
     type: "success" | "error";
     message: string;
   } | null>(null);
+
+  const handleDetectTemplate = async () => {
+    setDetecting(true);
+    setTemplateError(null);
+    setTemplateInfo(null);
+    try {
+      const params = new URLSearchParams();
+      if (templateName.trim()) params.set("name", templateName.trim());
+      if (templateLanguage.trim()) params.set("language", templateLanguage.trim());
+      if (!params.get("name")) {
+        setTemplateError(
+          "Enter a Template Name (or save one in Settings → WhatsApp Cloud API and use it as the override) before detecting."
+        );
+        return;
+      }
+      const data = await api.get<{ template: TemplateInfo }>(
+        `/whatsapp/templates?${params.toString()}`
+      );
+      setTemplateInfo(data.template);
+    } catch (err) {
+      setTemplateError(
+        err instanceof Error ? err.message : "Failed to fetch template metadata"
+      );
+    } finally {
+      setDetecting(false);
+    }
+  };
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
@@ -145,6 +185,49 @@ export default function TestMessagePage() {
                   placeholder="e.g. en or en_US"
                   className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                 />
+              </div>
+              <div>
+                <button
+                  type="button"
+                  onClick={handleDetectTemplate}
+                  disabled={detecting}
+                  className="flex items-center gap-2 px-3 py-1.5 border border-gray-300 rounded-md text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 transition-colors"
+                >
+                  <RefreshCw size={12} className={detecting ? "animate-spin" : ""} />
+                  {detecting ? "Detecting…" : "Detect Template"}
+                </button>
+                {templateError && (
+                  <p className="text-xs text-red-600 mt-2">{templateError}</p>
+                )}
+                {templateInfo && (
+                  <div className="mt-3 p-3 rounded-md bg-blue-50 border border-blue-200 text-xs text-blue-900 space-y-1">
+                    <p>
+                      <strong>{templateInfo.name}</strong> ({templateInfo.language})
+                      — status <code>{templateInfo.status}</code>, category{" "}
+                      <code>{templateInfo.category}</code>
+                    </p>
+                    <p>
+                      Body needs <strong>{templateInfo.bodyParameterCount}</strong>{" "}
+                      variable{templateInfo.bodyParameterCount === 1 ? "" : "s"}.
+                    </p>
+                    {templateInfo.header ? (
+                      <p>
+                        Header format: <strong>{templateInfo.header.format}</strong>{" "}
+                        {templateInfo.header.format === "IMAGE" &&
+                          "— provide a Header Image URL below."}
+                        {templateInfo.header.format === "TEXT" &&
+                          "— provide Header Text below."}
+                      </p>
+                    ) : (
+                      <p>No header — leave Header Image / Header Text empty.</p>
+                    )}
+                    {templateInfo.bodyText && (
+                      <p className="font-mono whitespace-pre-wrap text-blue-900/80">
+                        {templateInfo.bodyText}
+                      </p>
+                    )}
+                  </div>
+                )}
               </div>
               <div>
                 <label
