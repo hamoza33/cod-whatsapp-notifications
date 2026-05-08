@@ -8,6 +8,7 @@ export default function TestMessagePage() {
   const [phoneNumber, setPhoneNumber] = useState("");
   const [templateName, setTemplateName] = useState("");
   const [templateLanguage, setTemplateLanguage] = useState("");
+  const [templateVariables, setTemplateVariables] = useState("");
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<{
     type: "success" | "error";
@@ -24,9 +25,17 @@ export default function TestMessagePage() {
         phoneNumber: string;
         templateName?: string;
         templateLanguage?: string;
+        templateVariables?: string[];
       } = { phoneNumber };
       if (templateName.trim()) payload.templateName = templateName.trim();
       if (templateLanguage.trim()) payload.templateLanguage = templateLanguage.trim();
+      if (templateVariables.trim()) {
+        // Comma-separated list, preserving any value the user typed (including
+        // blanks for templates that explicitly want an empty positional arg).
+        payload.templateVariables = templateVariables
+          .split(",")
+          .map((v) => v.trim());
+      }
       const data = await api.post<{
         success: boolean;
         templateName: string;
@@ -130,6 +139,26 @@ export default function TestMessagePage() {
                   placeholder="e.g. en or en_US"
                   className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                 />
+              </div>
+              <div>
+                <label
+                  htmlFor="template-variables"
+                  className="block text-sm font-medium text-gray-700 mb-1"
+                >
+                  Template Body Variables (comma-separated)
+                </label>
+                <input
+                  id="template-variables"
+                  type="text"
+                  value={templateVariables}
+                  onChange={(e) => setTemplateVariables(e.target.value)}
+                  placeholder="e.g. Customer, ORDER-12345"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                />
+                <p className="text-xs text-gray-400 mt-1">
+                  Pass one value per body parameter the template expects. Leave
+                  empty if the template has no variables.
+                </p>
               </div>
               <p className="text-xs text-gray-400">
                 The template must be APPROVED on your WhatsApp Business Account.

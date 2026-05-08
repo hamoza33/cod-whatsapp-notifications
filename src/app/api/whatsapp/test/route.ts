@@ -24,8 +24,35 @@ export async function POST(request: NextRequest) {
       phoneNumber?: string;
       templateName?: string;
       templateLanguage?: string;
+      templateVariables?: unknown;
     };
-    const { phoneNumber, templateName: overrideTemplate, templateLanguage: overrideLanguage } = body;
+    const {
+      phoneNumber,
+      templateName: overrideTemplate,
+      templateLanguage: overrideLanguage,
+      templateVariables: rawVariables,
+    } = body;
+
+    // Coerce variables from any reasonable shape (string[] or comma-separated
+    // string) and reject anything else so the user gets a clear error rather
+    // than a confusing Meta response.
+    let variables: string[] | undefined;
+    if (Array.isArray(rawVariables)) {
+      if (!rawVariables.every((v) => typeof v === "string")) {
+        return NextResponse.json(
+          { error: "templateVariables must be an array of strings" },
+          { status: 400 }
+        );
+      }
+      variables = rawVariables;
+    } else if (typeof rawVariables === "string") {
+      variables = rawVariables.split(",").map((v) => v.trim());
+    } else if (rawVariables !== undefined && rawVariables !== null) {
+      return NextResponse.json(
+        { error: "templateVariables must be an array of strings" },
+        { status: 400 }
+      );
+    }
 
     if (!phoneNumber) {
       return NextResponse.json(
@@ -60,7 +87,7 @@ export async function POST(request: NextRequest) {
     const result = await whatsappClient.sendTestMessage(phone, {
       templateName,
       language,
-      variables: [],
+      variables: variables ?? [],
     });
 
     return NextResponse.json({
@@ -68,6 +95,7 @@ export async function POST(request: NextRequest) {
       result,
       templateName,
       language,
+      variables: variables ?? [],
     });
   } catch (err) {
     const errorMsg =
