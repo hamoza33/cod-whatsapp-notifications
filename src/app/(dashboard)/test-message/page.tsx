@@ -9,6 +9,8 @@ export default function TestMessagePage() {
   const [templateName, setTemplateName] = useState("");
   const [templateLanguage, setTemplateLanguage] = useState("");
   const [templateVariables, setTemplateVariables] = useState("");
+  const [templateHeaderImage, setTemplateHeaderImage] = useState("");
+  const [templateHeaderText, setTemplateHeaderText] = useState("");
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<{
     type: "success" | "error";
@@ -26,6 +28,8 @@ export default function TestMessagePage() {
         templateName?: string;
         templateLanguage?: string;
         templateVariables?: string[];
+        templateHeaderImage?: string;
+        templateHeaderText?: string;
       } = { phoneNumber };
       if (templateName.trim()) payload.templateName = templateName.trim();
       if (templateLanguage.trim()) payload.templateLanguage = templateLanguage.trim();
@@ -36,6 +40,8 @@ export default function TestMessagePage() {
           .split(",")
           .map((v) => v.trim());
       }
+      if (templateHeaderImage.trim()) payload.templateHeaderImage = templateHeaderImage.trim();
+      else if (templateHeaderText.trim()) payload.templateHeaderText = templateHeaderText.trim();
       const data = await api.post<{
         success: boolean;
         templateName: string;
@@ -158,6 +164,42 @@ export default function TestMessagePage() {
                 <p className="text-xs text-gray-400 mt-1">
                   Pass one value per body parameter the template expects. Leave
                   empty if the template has no variables.
+                </p>
+              </div>
+              <div>
+                <label
+                  htmlFor="template-header-image"
+                  className="block text-sm font-medium text-gray-700 mb-1"
+                >
+                  Header Image URL (if template has an IMAGE header)
+                </label>
+                <input
+                  id="template-header-image"
+                  type="url"
+                  value={templateHeaderImage}
+                  onChange={(e) => setTemplateHeaderImage(e.target.value)}
+                  placeholder="https://example.com/image.jpg"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                />
+              </div>
+              <div>
+                <label
+                  htmlFor="template-header-text"
+                  className="block text-sm font-medium text-gray-700 mb-1"
+                >
+                  Header Text (if template has a TEXT header)
+                </label>
+                <input
+                  id="template-header-text"
+                  type="text"
+                  value={templateHeaderText}
+                  onChange={(e) => setTemplateHeaderText(e.target.value)}
+                  placeholder="Header text value"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                />
+                <p className="text-xs text-gray-400 mt-1">
+                  Use Header Image OR Header Text — not both. Leave both empty if the
+                  template has no header parameter.
                 </p>
               </div>
               <p className="text-xs text-gray-400">

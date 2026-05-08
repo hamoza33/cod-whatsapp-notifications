@@ -1,11 +1,26 @@
 import { getSetting, SETTING_KEYS } from "./settings";
 
+interface WhatsAppTextParameter {
+  type: "text";
+  text: string;
+}
+
+interface WhatsAppImageParameter {
+  type: "image";
+  image: { link: string };
+}
+
+type WhatsAppTemplateParameter = WhatsAppTextParameter | WhatsAppImageParameter;
+
 interface WhatsAppTemplateComponent {
   type: "body" | "header" | "button";
-  parameters: Array<{
-    type: "text";
-    text: string;
-  }>;
+  parameters: WhatsAppTemplateParameter[];
+}
+
+export interface WhatsAppTemplateHeader {
+  type: "text" | "image";
+  /** For text headers: the literal text. For image headers: an https URL. */
+  value: string;
 }
 
 interface WhatsAppSendResult {
@@ -136,11 +151,19 @@ export class WhatsAppClient {
     to: string,
     templateName: string,
     language: string,
-    variables: string[]
+    variables: string[],
+    header?: WhatsAppTemplateHeader
   ): Promise<WhatsAppSendResult> {
     const url = `https://graph.facebook.com/${this.apiVersion}/${this.phoneNumberId}/messages`;
 
     const components: WhatsAppTemplateComponent[] = [];
+    if (header) {
+      const parameter: WhatsAppTemplateParameter =
+        header.type === "image"
+          ? { type: "image", image: { link: header.value } }
+          : { type: "text", text: header.value };
+      components.push({ type: "header", parameters: [parameter] });
+    }
     if (variables.length > 0) {
       components.push({
         type: "body",
@@ -183,12 +206,17 @@ export class WhatsAppClient {
    */
   async sendTestMessage(
     to: string,
-    opts?: { templateName?: string; language?: string; variables?: string[] }
+    opts?: {
+      templateName?: string;
+      language?: string;
+      variables?: string[];
+      header?: WhatsAppTemplateHeader;
+    }
   ): Promise<WhatsAppSendResult> {
     const templateName = opts?.templateName || "hello_world";
     const language = opts?.language || "en_US";
     const variables = opts?.variables ?? [];
-    return this.sendTemplate(to, templateName, language, variables);
+    return this.sendTemplate(to, templateName, language, variables, opts?.header);
   }
 }
 
