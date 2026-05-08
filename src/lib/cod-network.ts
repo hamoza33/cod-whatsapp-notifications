@@ -5,6 +5,20 @@ export interface CodNetworkOrderItem {
   sku?: string;
   price?: string | number;
   quantity?: string | number;
+  // The seller orders endpoint returns nested products at
+  // items[].product.data.{name, sku, ...} when ?include=items[product] is used,
+  // or even by default for some accounts. Other endpoints flatten the product
+  // straight onto the item, hence both shapes are accepted here.
+  product?: {
+    data?: {
+      name?: string;
+      sku?: string;
+      [key: string]: unknown;
+    };
+    name?: string;
+    sku?: string;
+    [key: string]: unknown;
+  };
   [key: string]: unknown;
 }
 
@@ -441,14 +455,39 @@ export function mapCodStatus(
   return STATUS_STRING_MAP[status.toLowerCase()] || "UNKNOWN";
 }
 
-/** Extract a human-friendly product name from the order's `items` include. */
+/**
+ * Extract a human-friendly product name from the order. Tries, in order:
+ *   1. order.product_name (top-level convenience field, may be omitted)
+ *   2. items[].name (some COD Network endpoints flatten the product)
+ *   3. items[].product.data.name (default `?include=items` shape — the product
+ *      object is wrapped in a `data` envelope by the underlying transformer)
+ *   4. items[].product.name (occasionally seen without the `data` envelope)
+ */
 export function extractProductName(order: CodNetworkOrder): string | null {
   if (typeof order.product_name === "string" && order.product_name.length > 0) {
     return order.product_name;
   }
   if (Array.isArray(order.items) && order.items.length > 0) {
     const names = order.items
-      .map((it) => (typeof it.name === "string" ? it.name : null))
+      .map((it) => {
+        if (typeof it.name === "string" && it.name.length > 0) return it.name;
+        const productData = it.product?.data;
+        if (
+          productData &&
+          typeof productData.name === "string" &&
+          productData.name.length > 0
+        ) {
+          return productData.name;
+        }
+        if (
+          it.product &&
+          typeof it.product.name === "string" &&
+          it.product.name.length > 0
+        ) {
+          return it.product.name;
+        }
+        return null;
+      })
       .filter((n): n is string => !!n);
     if (names.length > 0) return names.join(", ");
   }
