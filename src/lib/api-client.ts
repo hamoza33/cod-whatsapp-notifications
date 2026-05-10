@@ -55,6 +55,17 @@ class ApiClient {
       body: body ? JSON.stringify(body) : undefined,
     });
   }
+
+  async patch<T>(endpoint: string, body?: unknown): Promise<T> {
+    return this.request<T>(endpoint, {
+      method: "PATCH",
+      body: body ? JSON.stringify(body) : undefined,
+    });
+  }
+
+  async del<T>(endpoint: string): Promise<T> {
+    return this.request<T>(endpoint, { method: "DELETE" });
+  }
 }
 
 export const api = new ApiClient("/api");

@@ -42,24 +42,52 @@ enum OrderStatus {
 model Order {
   id                  String      @id @default(cuid())
   codNetworkOrderId   String      @unique @map("cod_network_order_id")
+  // Lead identifier from COD Network. Some accounts have the lead-id as the
+  // primary order reference; for others it's a separate field surfaced via
+  // the Webhook Lead Status events. Nullable+unique so historical orders can
+  // be back-filled when a webhook eventually delivers the lead id.
+  codNetworkLeadId    String?     @unique @map("cod_network_lead_id")
   customerName        String?     @map("customer_name")
   customerPhone       String?     @map("customer_phone")
   customerCity        String?     @map("customer_city")
   customerAddress     String?     @map("customer_address")
   productName         String?     @map("product_name")
+  productPrice        String?     @map("product_price")
+  productQuantity     String?     @map("product_quantity")
   trackingNumber      String?     @map("tracking_number")
   deliveryCompany     String?     @map("delivery_company")
   status              OrderStatus @default(UNKNOWN)
   statusChangedAt     DateTime?   @map("status_changed_at")
+  // The raw status string from COD Network (e.g. "delivered", "out for
+  // delivery", "shipped") preserved verbatim for debugging / automation
+  // matching. Useful when COD adds new statuses we haven't mapped yet.
+  codDeliveryStatus   String?     @map("cod_delivery_status")
   rawOrderJson        Json?       @map("raw_order_json")
   lastSyncedAt        DateTime?   @map("last_synced_at")
+  // The `created_at` reported by COD Network for the order itself, which is
+  // the meaningful "newest first" sort key (the row's own `createdAt` reflects
+  // when we first synced it, not when the customer placed the order).
+  codCreatedAt        DateTime?   @map("cod_created_at")
+  codUpdatedAt        DateTime?   @map("cod_updated_at")
+  // Set when ANY WhatsApp message has been sent for this order — used by the
+  // Pipeline UI to short-circuit accidental re-sends and to render the
+  // "WhatsApp Sent" virtual column.
+  whatsappSentAt      DateTime?   @map("whatsapp_sent_at")
+  // Free-form notes the operator can attach to an order from the Pipeline
+  // (e.g. "called customer, no answer"). Not synced from COD Network.
+  pipelineNote        String?     @map("pipeline_note")
   createdAt           DateTime    @default(now()) @map("created_at")
   updatedAt           DateTime    @updatedAt @map("updated_at")
 
   whatsappMessages WhatsappMessage[]
+  inboundMessages  InboundMessage[]
+  automationRuns   AutomationRun[]
 
   @@index([status])
   @@index([codNetworkOrderId])
+  @@index([codNetworkLeadId])
+  @@index([codCreatedAt])
+  @@index([whatsappSentAt])
   @@map("orders")
 }
 
@@ -93,6 +121,31 @@ model WhatsappMessage {
   @@map("whatsapp_messages")
 }
 
+model InboundMessage {
+  id                String    @id @default(cuid())
+  // Meta's wamid for de-duplication; webhooks can re-deliver the same payload.
+  providerMessageId String    @unique @map("provider_message_id")
+  fromPhoneNumber   String    @map("from_phone_number")
+  // Pre-normalized international number used to match against Order.customerPhone.
+  contactName       String?   @map("contact_name")
+  // "text", "image", "audio", "video", "document", "sticker", "location",
+  // "contacts", "interactive", "button", "reaction", "system" — whatever Meta
+  // sends. Body is stored verbatim so the inbox can render unsupported types.
+  type              String
+  text              String?
+  mediaId           String?   @map("media_id")
+  mediaMimeType     String?   @map("media_mime_type")
+  rawPayload        Json      @map("raw_payload")
+  receivedAt        DateTime  @default(now()) @map("received_at")
+  orderId           String?   @map("order_id")
+  order             Order?    @relation(fields: [orderId], references: [id])
+
+  @@index([fromPhoneNumber])
+  @@index([receivedAt])
+  @@index([orderId])
+  @@map("inbound_messages")
+}
+
 model SyncLog {
   id            String   @id @default(cuid())
   syncType      String   @map("sync_type")
@@ -106,4 +159,75 @@ model SyncLog {
   createdAt     DateTime @default(now()) @map("created_at")
 
   @@map("sync_logs")
+}
+
+/// Cached snapshot of an approved (or rejected) WhatsApp message template
+/// pulled from Meta's Graph API. Periodically refreshed by
+/// `/api/whatsapp/templates/import` and surfaced in `/templates` + the Send
+/// dialog so we know exactly how many body params + which header type each
+/// template needs without hitting Meta on every interaction.
+model WhatsappTemplate {
+  id              String   @id @default(cuid())
+  name            String
+  language        String
+  status          String
+  category        String   @default("UTILITY")
+  bodyParamCount  Int      @default(0) @map("body_param_count")
+  bodyText        String?  @map("body_text")
+  headerType      String?  @map("header_type")
+  components      Json
+  lastFetchedAt   DateTime @default(now()) @map("last_fetched_at")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  @@unique([name, language])
+  @@index([status])
+  @@map("whatsapp_templates")
+}
+
+/// A user-defined automation rule. When an order's status changes (via drag,
+/// sync, or COD webhook) and matches the `whenStatusEquals` + product filters,
+/// the engine optionally moves the order to `thenMoveToStatus` and/or sends
+/// the configured WhatsApp template. Each (automation, order) pair runs at
+/// most once when `thenSendOnce` is true.
+model Automation {
+  id                       String       @id @default(cuid())
+  name                     String
+  isEnabled                Boolean      @default(false) @map("is_enabled")
+  whenStatusEquals         OrderStatus? @map("when_status_equals")
+  andProductContains       String?      @map("and_product_contains")
+  andProductDoesNotContain String?      @map("and_product_does_not_contain")
+  thenMoveToStatus         OrderStatus? @map("then_move_to_status")
+  thenSendTemplateName     String?      @map("then_send_template_name")
+  thenSendTemplateLanguage String?      @map("then_send_template_language")
+  thenSendOnce             Boolean      @default(true) @map("then_send_once")
+  createdAt                DateTime     @default(now()) @map("created_at")
+  updatedAt                DateTime     @updatedAt @map("updated_at")
+
+  runs AutomationRun[]
+
+  @@index([isEnabled])
+  @@map("automations")
+}
+
+/// One row per (automation, order) execution attempt. Acts as the de-dupe
+/// key for `thenSendOnce` and also surfaces a per-automation activity feed
+/// in the UI.
+model AutomationRun {
+  id              String   @id @default(cuid())
+  automationId    String   @map("automation_id")
+  orderId         String   @map("order_id")
+  status          String
+  movedFromStatus String?  @map("moved_from_status")
+  movedToStatus   String?  @map("moved_to_status")
+  sentMessage     Boolean  @default(false) @map("sent_message")
+  errorMessage    String?  @map("error_message")
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  automation Automation @relation(fields: [automationId], references: [id], onDelete: Cascade)
+  order      Order      @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@unique([automationId, orderId])
+  @@index([orderId])
+  @@map("automation_runs")
 }
