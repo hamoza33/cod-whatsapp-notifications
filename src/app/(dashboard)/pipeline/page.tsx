@@ -108,6 +108,11 @@ export default function PipelinePage() {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [draggingId, setDraggingId] = useState<string | null>(null);
+  // Mirror `draggingId` into a ref so `handleDrop` can read the current value
+  // synchronously even if React has not yet flushed the state update from
+  // `handleDragStart`. We also stash the id in `dataTransfer` for browsers
+  // (and programmatic drivers) that drop events when state is stale.
+  const draggingIdRef = useRef<string | null>(null);
   const [hoverColumn, setHoverColumn] = useState<string | null>(null);
   const [sendDialogOrder, setSendDialogOrder] = useState<PipelineOrder | null>(null);
   const [toast, setToast] = useState<{ kind: "success" | "error"; text: string } | null>(null);
@@ -153,10 +158,12 @@ export default function PipelinePage() {
   }, [orders]);
 
   const handleDragStart = (orderId: string) => {
+    draggingIdRef.current = orderId;
     setDraggingId(orderId);
   };
 
   const handleDragEnd = () => {
+    draggingIdRef.current = null;
     setDraggingId(null);
     setHoverColumn(null);
   };
@@ -171,8 +178,12 @@ export default function PipelinePage() {
     if (hoverColumn === columnKey) setHoverColumn(null);
   };
 
-  const handleDrop = async (columnKey: string) => {
-    const id = draggingId;
+  const handleDrop = async (e: React.DragEvent, columnKey: string) => {
+    // Prefer the id from dataTransfer (set in dragStart) over the ref/state
+    // — some browsers null out the ref before the drop event fires.
+    const idFromData = e.dataTransfer?.getData("text/plain") || null;
+    const id = idFromData || draggingIdRef.current || draggingId;
+    draggingIdRef.current = null;
     setDraggingId(null);
     setHoverColumn(null);
     if (!id) return;
@@ -276,7 +287,7 @@ export default function PipelinePage() {
               isHover={hoverColumn === s}
               onDragOver={(e) => handleDragOver(e, s)}
               onDragLeave={() => handleDragLeave(s)}
-              onDrop={() => handleDrop(s)}
+              onDrop={(e) => handleDrop(e, s)}
               onCardDragStart={handleDragStart}
               onCardDragEnd={handleDragEnd}
               onCardClick={setSendDialogOrder}
@@ -290,7 +301,7 @@ export default function PipelinePage() {
             isHover={hoverColumn === "__SENT__"}
             onDragOver={(e) => handleDragOver(e, "__SENT__")}
             onDragLeave={() => handleDragLeave("__SENT__")}
-            onDrop={() => handleDrop("__SENT__")}
+            onDrop={(e) => handleDrop(e, "__SENT__")}
             onCardDragStart={handleDragStart}
             onCardDragEnd={handleDragEnd}
             onCardClick={setSendDialogOrder}
@@ -354,7 +365,7 @@ function Column({
   isHover: boolean;
   onDragOver: (e: React.DragEvent) => void;
   onDragLeave: () => void;
-  onDrop: () => void;
+  onDrop: (e: React.DragEvent) => void;
   onCardDragStart: (id: string) => void;
   onCardDragEnd: () => void;
   onCardClick: (o: PipelineOrder) => void;
@@ -363,7 +374,7 @@ function Column({
     <div
       onDragOver={onDragOver}
       onDragLeave={onDragLeave}
-      onDrop={onDrop}
+      onDrop={(e) => onDrop(e)}
       className={`w-80 flex flex-col rounded-md border ${
         sentColumn ? "border-green-300 bg-green-50/30" : "border-gray-200 bg-gray-50"
       } ${isHover ? "ring-2 ring-blue-400" : ""}`}
@@ -396,6 +407,10 @@ function Column({
             onClick={() => onCardClick(o)}
           />
         ))}
+        {/* Spacer at the bottom so users have an empty drop area even when the
+            column is full — avoids the "no valid drop target" snap-back when a
+            card is dragged onto another card. */}
+        <div className="h-12 shrink-0" />
       </div>
     </div>
   );
@@ -410,7 +425,7 @@ function Card({
 }: {
   order: PipelineOrder;
   sentColumn?: boolean;
-  onDragStart: () => void;
+  onDragStart: (e: React.DragEvent) => void;
   onDragEnd: () => void;
   onClick: () => void;
 }) {
@@ -424,8 +439,13 @@ function Card({
     <div
       draggable
       onDragStart={(e) => {
+        // setData is required by several browsers (Firefox, mobile WebKit)
+        // for the subsequent drop to fire. We use text/plain so the drop
+        // handler can read the order id back synchronously, sidestepping any
+        // stale React state.
         e.dataTransfer.effectAllowed = "move";
-        onDragStart();
+        e.dataTransfer.setData("text/plain", order.id);
+        onDragStart(e);
       }}
       onDragEnd={onDragEnd}
       onClick={onClick}

@@ -71,6 +71,21 @@ export const SENSITIVE_SETTING_KEYS: readonly string[] = [
   SETTING_KEYS.WHATSAPP_WEBHOOK_VERIFY_TOKEN,
 ];
 
+/**
+ * "Maskable" keys aren't strictly secret (Phone Number ID, Business Account
+ * ID, template name) but the operator asked for the same first-4 / last-2
+ * mask treatment so they can verify which value is saved at a glance without
+ * having to keep it in their head. We null out the input on GET and show the
+ * preview as a chip beside the label — same UX as secrets but conceptually
+ * just "identifiers".
+ */
+export const MASKABLE_SETTING_KEYS: readonly string[] = [
+  SETTING_KEYS.COD_API_EMAIL,
+  SETTING_KEYS.WHATSAPP_PHONE_NUMBER_ID,
+  SETTING_KEYS.WHATSAPP_BUSINESS_ACCOUNT_ID,
+  SETTING_KEYS.WHATSAPP_TEMPLATE_NAME,
+];
+
 export const INTERNAL_SETTING_KEYS: readonly string[] = [
   SETTING_KEYS.COD_API_TOKEN_CACHED,
   SETTING_KEYS.COD_API_TOKEN_EXPIRES_AT,

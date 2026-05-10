@@ -28,11 +28,21 @@ export default function SettingsPage() {
         const data = await api.get<{
           settings: SettingsData;
           sensitiveKeysSet: string[];
+          maskableKeysSet?: string[];
           sensitivePreviews?: Record<string, string>;
         }>("/settings");
         if (!cancelled) {
           setSettings(data.settings);
-          setConfiguredSecrets(new Set(data.sensitiveKeysSet || []));
+          // Both sensitive and maskable keys are "configured" from the
+          // operator's POV — they all clear the input on load and show a
+          // preview chip. The distinction matters server-side, but the UI
+          // just needs one set.
+          setConfiguredSecrets(
+            new Set([
+              ...(data.sensitiveKeysSet || []),
+              ...(data.maskableKeysSet || []),
+            ])
+          );
           setSensitivePreviews(data.sensitivePreviews || {});
         }
       } catch {
@@ -129,7 +139,12 @@ export default function SettingsPage() {
           value={settings.cod_network_api_email || ""}
           onChange={(v) => updateSetting("cod_network_api_email", v)}
           type="email"
-          placeholder="you@example.com"
+          configuredPreview={sensitivePreviews.cod_network_api_email}
+          placeholder={
+            configuredSecrets.has("cod_network_api_email")
+              ? "Currently configured — enter a new value to replace"
+              : "you@example.com"
+          }
           help="Your COD Network seller portal email. Used with the password below to obtain a fresh access_token from POST /v2/seller/login."
         />
         <SettingsField
@@ -196,6 +211,10 @@ export default function SettingsPage() {
             "whatsapp_api_version",
             "whatsapp_template_name",
             "whatsapp_template_language",
+            "whatsapp_business_account_id",
+            "whatsapp_default_template_header_image_url",
+            "whatsapp_webhook_verify_token",
+            "whatsapp_app_secret",
           ])
         }
         saving={saving}
@@ -204,7 +223,12 @@ export default function SettingsPage() {
           label="Phone Number ID"
           value={settings.whatsapp_phone_number_id || ""}
           onChange={(v) => updateSetting("whatsapp_phone_number_id", v)}
-          placeholder="e.g. 906139205908177"
+          configuredPreview={sensitivePreviews.whatsapp_phone_number_id}
+          placeholder={
+            configuredSecrets.has("whatsapp_phone_number_id")
+              ? "Currently configured — enter a new value to replace"
+              : "e.g. 906139205908177"
+          }
           warning={
             looksLikePhoneNumber(settings.whatsapp_phone_number_id || "")
               ? 'This looks like a phone number, not a Phone Number ID. The Phone Number ID is a 15–16 digit Meta-issued identifier (find it in WhatsApp Manager → API Setup → Phone numbers).'
@@ -227,9 +251,14 @@ export default function SettingsPage() {
         />
         <SettingsField
           label="Template Name"
-          value={settings.whatsapp_template_name || "order_out_for_delivery"}
+          value={settings.whatsapp_template_name || ""}
           onChange={(v) => updateSetting("whatsapp_template_name", v)}
-          placeholder="order_out_for_delivery"
+          configuredPreview={sensitivePreviews.whatsapp_template_name}
+          placeholder={
+            configuredSecrets.has("whatsapp_template_name")
+              ? "Currently configured — enter a new value to replace"
+              : "order_out_for_delivery"
+          }
           help="Must be an APPROVED template on your WhatsApp Business Account. The Test Message button uses this template by default."
         />
         <SettingsField
@@ -242,7 +271,12 @@ export default function SettingsPage() {
           label="WhatsApp Business Account ID"
           value={settings.whatsapp_business_account_id || ""}
           onChange={(v) => updateSetting("whatsapp_business_account_id", v)}
-          placeholder="e.g. 1234567890123456"
+          configuredPreview={sensitivePreviews.whatsapp_business_account_id}
+          placeholder={
+            configuredSecrets.has("whatsapp_business_account_id")
+              ? "Currently configured — enter a new value to replace"
+              : "e.g. 1234567890123456"
+          }
           help="Used to fetch your approved templates so the app can show variable counts. Find it in WhatsApp Manager → API Setup → Business Account."
         />
         <SettingsField

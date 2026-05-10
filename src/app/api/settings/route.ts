@@ -6,6 +6,7 @@ import {
   deleteSetting,
   SETTING_KEYS,
   SENSITIVE_SETTING_KEYS,
+  MASKABLE_SETTING_KEYS,
   INTERNAL_SETTING_KEYS,
   maskSecret,
 } from "@/lib/settings";
@@ -24,13 +25,16 @@ export async function GET(request: NextRequest) {
 
   const settings = await getSettings([...PUBLIC_KEYS]);
 
-  // Mask sensitive values: show first 4 chars + dots + last 2 chars instead
-  // of nulling them out. The user explicitly asked for this UX so they can
-  // tell at a glance which secret is in which slot without ever exposing the
-  // full value. Stored separately on `sensitivePreviews` so the client can
-  // distinguish "configured" placeholder from a real input value.
+  // Mask both sensitive (real secrets) and maskable (identifying IDs) keys:
+  // show first 4 + dots + last 2 in a separate `previews` map and null the
+  // value in `settings` so the input field renders empty with a "currently
+  // configured" placeholder. The operator can verify the right value is saved
+  // by glancing at the chip without ever exposing the full value. Sensitive
+  // and maskable are reported separately so the client can render a more
+  // explicit "this is a secret, retype to change" hint vs "this is an ID".
   const redacted: Record<string, string | null> = { ...settings };
   const sensitiveKeysSet: string[] = [];
+  const maskableKeysSet: string[] = [];
   const sensitivePreviews: Record<string, string> = {};
   for (const key of SENSITIVE_SETTING_KEYS) {
     const raw = settings[key];
@@ -40,10 +44,19 @@ export async function GET(request: NextRequest) {
       redacted[key] = null;
     }
   }
+  for (const key of MASKABLE_SETTING_KEYS) {
+    const raw = settings[key];
+    if (raw) {
+      maskableKeysSet.push(key);
+      sensitivePreviews[key] = maskSecret(raw);
+      redacted[key] = null;
+    }
+  }
 
   return NextResponse.json({
     settings: redacted,
     sensitiveKeysSet,
+    maskableKeysSet,
     sensitivePreviews,
   });
 }
