@@ -10,7 +10,7 @@ primary_region = "cdg"
 [build]
 
 [deploy]
-  release_command = "npx prisma migrate deploy"
+  release_command = "prisma migrate deploy"
 
 [env]
   NODE_ENV = "production"

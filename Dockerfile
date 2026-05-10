@@ -49,16 +49,21 @@ ENV NEXT_TELEMETRY_DISABLED=1
 ENV PORT=3000
 ENV HOSTNAME=0.0.0.0
 
+# Install prisma globally so the release_command `prisma migrate deploy`
+# resolves on PATH. The standalone bundle's own node_modules does not
+# include the prisma CLI shim, and npx cannot find it in a global cache
+# when offline inside the release machine.
+RUN npm install -g prisma@7
+
 # Bring over the standalone bundle (includes a minimal node_modules) plus
-# the static assets the runtime serves directly, plus the prisma binaries
-# so `prisma migrate deploy` can run as a release_command.
+# the static assets the runtime serves directly, plus the prisma client
+# engine binaries so `@prisma/client` works at runtime.
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
 COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 COPY --from=builder --chown=nextjs:nodejs /app/public ./public
 COPY --from=builder --chown=nextjs:nodejs /app/prisma ./prisma
 COPY --from=builder --chown=nextjs:nodejs /app/node_modules/.prisma ./node_modules/.prisma
 COPY --from=builder --chown=nextjs:nodejs /app/node_modules/@prisma ./node_modules/@prisma
-COPY --from=builder --chown=nextjs:nodejs /app/node_modules/prisma ./node_modules/prisma
 
 USER nextjs
 EXPOSE 3000
