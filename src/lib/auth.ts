@@ -11,7 +11,10 @@ function getJwtSecret(): string {
   return "dev-secret";
 }
 
-const JWT_SECRET = getJwtSecret();
+// Resolved lazily inside `signToken` / `verifyToken` so module evaluation at
+// build time does NOT require the secret to be present. Next.js 16 collects
+// page data for every route during `next build`, which would otherwise crash
+// on the production check above before the build server has secrets injected.
 
 export interface AuthUser {
   id: string;
@@ -33,14 +36,14 @@ export function verifyPassword(
 export function signToken(user: AuthUser): string {
   return jwt.sign(
     { id: user.id, email: user.email, name: user.name },
-    JWT_SECRET,
+    getJwtSecret(),
     { expiresIn: "7d" }
   );
 }
 
 export function verifyToken(token: string): AuthUser | null {
   try {
-    return jwt.verify(token, JWT_SECRET) as AuthUser;
+    return jwt.verify(token, getJwtSecret()) as AuthUser;
   } catch {
     return null;
   }
