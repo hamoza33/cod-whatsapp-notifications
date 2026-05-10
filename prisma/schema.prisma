@@ -1,0 +1,109 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  password  String
+  name      String?
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("users")
+}
+
+model Setting {
+  id    String @id @default(cuid())
+  key   String @unique
+  value String
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("settings")
+}
+
+enum OrderStatus {
+  PENDING
+  CONFIRMED
+  PROCESSING
+  SHIPPED
+  OUT_FOR_DELIVERY
+  DELIVERED
+  RETURNED
+  CANCELLED
+  UNKNOWN
+}
+
+model Order {
+  id                  String      @id @default(cuid())
+  codNetworkOrderId   String      @unique @map("cod_network_order_id")
+  customerName        String?     @map("customer_name")
+  customerPhone       String?     @map("customer_phone")
+  customerCity        String?     @map("customer_city")
+  customerAddress     String?     @map("customer_address")
+  productName         String?     @map("product_name")
+  trackingNumber      String?     @map("tracking_number")
+  deliveryCompany     String?     @map("delivery_company")
+  status              OrderStatus @default(UNKNOWN)
+  statusChangedAt     DateTime?   @map("status_changed_at")
+  rawOrderJson        Json?       @map("raw_order_json")
+  lastSyncedAt        DateTime?   @map("last_synced_at")
+  createdAt           DateTime    @default(now()) @map("created_at")
+  updatedAt           DateTime    @updatedAt @map("updated_at")
+
+  whatsappMessages WhatsappMessage[]
+
+  @@index([status])
+  @@index([codNetworkOrderId])
+  @@map("orders")
+}
+
+enum MessageStatus {
+  PENDING
+  SENT
+  DELIVERED
+  READ
+  FAILED
+}
+
+model WhatsappMessage {
+  id                    String        @id @default(cuid())
+  orderId               String        @map("order_id")
+  phoneNumber           String        @map("phone_number")
+  templateName          String        @map("template_name")
+  templateLanguage      String        @default("en") @map("template_language")
+  templateVariablesJson Json?         @map("template_variables_json")
+  providerMessageId     String?       @map("provider_message_id")
+  status                MessageStatus @default(PENDING)
+  errorMessage          String?       @map("error_message")
+  sentBy                String        @default("manual") @map("sent_by")
+  sentAt                DateTime?     @map("sent_at")
+  createdAt             DateTime      @default(now()) @map("created_at")
+
+  order Order @relation(fields: [orderId], references: [id])
+
+  @@index([orderId])
+  @@index([phoneNumber])
+  @@index([status])
+  @@map("whatsapp_messages")
+}
+
+model SyncLog {
+  id            String   @id @default(cuid())
+  syncType      String   @map("sync_type")
+  status        String
+  ordersFound   Int      @default(0) @map("orders_found")
+  ordersCreated Int      @default(0) @map("orders_created")
+  ordersUpdated Int      @default(0) @map("orders_updated")
+  messagesSent  Int      @default(0) @map("messages_sent")
+  errorMessage  String?  @map("error_message")
+  duration      Int      @default(0)
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  @@map("sync_logs")
+}
