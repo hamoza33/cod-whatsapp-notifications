@@ -42,6 +42,11 @@ enum OrderStatus {
 model Order {
   id                  String      @id @default(cuid())
   codNetworkOrderId   String      @unique @map("cod_network_order_id")
+  // Lead identifier from COD Network. Some accounts have the lead-id as the
+  // primary order reference; for others it's a separate field surfaced via
+  // the Webhook Lead Status events. Nullable+unique so historical orders can
+  // be back-filled when a webhook eventually delivers the lead id.
+  codNetworkLeadId    String?     @unique @map("cod_network_lead_id")
   customerName        String?     @map("customer_name")
   customerPhone       String?     @map("customer_phone")
   customerCity        String?     @map("customer_city")
@@ -53,6 +58,10 @@ model Order {
   deliveryCompany     String?     @map("delivery_company")
   status              OrderStatus @default(UNKNOWN)
   statusChangedAt     DateTime?   @map("status_changed_at")
+  // The raw status string from COD Network (e.g. "delivered", "out for
+  // delivery", "shipped") preserved verbatim for debugging / automation
+  // matching. Useful when COD adds new statuses we haven't mapped yet.
+  codDeliveryStatus   String?     @map("cod_delivery_status")
   rawOrderJson        Json?       @map("raw_order_json")
   lastSyncedAt        DateTime?   @map("last_synced_at")
   // The `created_at` reported by COD Network for the order itself, which is
@@ -72,9 +81,11 @@ model Order {
 
   whatsappMessages WhatsappMessage[]
   inboundMessages  InboundMessage[]
+  automationRuns   AutomationRun[]
 
   @@index([status])
   @@index([codNetworkOrderId])
+  @@index([codNetworkLeadId])
   @@index([codCreatedAt])
   @@index([whatsappSentAt])
   @@map("orders")
@@ -148,4 +159,75 @@ model SyncLog {
   createdAt     DateTime @default(now()) @map("created_at")
 
   @@map("sync_logs")
+}
+
+/// Cached snapshot of an approved (or rejected) WhatsApp message template
+/// pulled from Meta's Graph API. Periodically refreshed by
+/// `/api/whatsapp/templates/import` and surfaced in `/templates` + the Send
+/// dialog so we know exactly how many body params + which header type each
+/// template needs without hitting Meta on every interaction.
+model WhatsappTemplate {
+  id              String   @id @default(cuid())
+  name            String
+  language        String
+  status          String
+  category        String   @default("UTILITY")
+  bodyParamCount  Int      @default(0) @map("body_param_count")
+  bodyText        String?  @map("body_text")
+  headerType      String?  @map("header_type")
+  components      Json
+  lastFetchedAt   DateTime @default(now()) @map("last_fetched_at")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  @@unique([name, language])
+  @@index([status])
+  @@map("whatsapp_templates")
+}
+
+/// A user-defined automation rule. When an order's status changes (via drag,
+/// sync, or COD webhook) and matches the `whenStatusEquals` + product filters,
+/// the engine optionally moves the order to `thenMoveToStatus` and/or sends
+/// the configured WhatsApp template. Each (automation, order) pair runs at
+/// most once when `thenSendOnce` is true.
+model Automation {
+  id                       String       @id @default(cuid())
+  name                     String
+  isEnabled                Boolean      @default(false) @map("is_enabled")
+  whenStatusEquals         OrderStatus? @map("when_status_equals")
+  andProductContains       String?      @map("and_product_contains")
+  andProductDoesNotContain String?      @map("and_product_does_not_contain")
+  thenMoveToStatus         OrderStatus? @map("then_move_to_status")
+  thenSendTemplateName     String?      @map("then_send_template_name")
+  thenSendTemplateLanguage String?      @map("then_send_template_language")
+  thenSendOnce             Boolean      @default(true) @map("then_send_once")
+  createdAt                DateTime     @default(now()) @map("created_at")
+  updatedAt                DateTime     @updatedAt @map("updated_at")
+
+  runs AutomationRun[]
+
+  @@index([isEnabled])
+  @@map("automations")
+}
+
+/// One row per (automation, order) execution attempt. Acts as the de-dupe
+/// key for `thenSendOnce` and also surfaces a per-automation activity feed
+/// in the UI.
+model AutomationRun {
+  id              String   @id @default(cuid())
+  automationId    String   @map("automation_id")
+  orderId         String   @map("order_id")
+  status          String
+  movedFromStatus String?  @map("moved_from_status")
+  movedToStatus   String?  @map("moved_to_status")
+  sentMessage     Boolean  @default(false) @map("sent_message")
+  errorMessage    String?  @map("error_message")
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  automation Automation @relation(fields: [automationId], references: [id], onDelete: Cascade)
+  order      Order      @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@unique([automationId, orderId])
+  @@index([orderId])
+  @@map("automation_runs")
 }

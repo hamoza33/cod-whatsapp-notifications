@@ -10,6 +10,25 @@ import { WhatsAppClient, buildTemplateVariables } from "./whatsapp";
 import { getSetting, SETTING_KEYS } from "./settings";
 import { normalizePhoneNumber } from "./phone";
 import { OrderStatus } from "@prisma/client";
+import { deriveOrderStatus } from "./order-status";
+import { runAutomationsForOrder } from "./automations";
+
+function extractLeadId(codOrder: CodNetworkOrder): string | null {
+  // COD Network exposes the lead-id under various keys depending on which
+  // endpoint returns the order. Try the most common shapes and fall back
+  // to null when none are present.
+  const candidates: unknown[] = [
+    (codOrder as { lead_id?: unknown }).lead_id,
+    (codOrder as { leadId?: unknown }).leadId,
+    ((codOrder as { lead?: { id?: unknown } }).lead || {}).id,
+  ];
+  for (const c of candidates) {
+    if (c === null || c === undefined) continue;
+    const s = typeof c === "string" ? c : String(c);
+    if (s.length > 0) return s;
+  }
+  return null;
+}
 
 interface SyncResult {
   ordersFound: number;
@@ -153,10 +172,16 @@ async function upsertOrder(
   defaultCountryCode: string
 ): Promise<void> {
   const codOrderId = String(codOrder.id);
-  const status = mapCodStatus(
-    codOrder.status,
-    codOrder.tracking_status
-  ) as OrderStatus;
+  const codLeadId = extractLeadId(codOrder);
+  const trackingNumber = codOrder.tracking_number ?? null;
+  const trackingStatus = codOrder.tracking_status ?? null;
+  const rawStatusLabel =
+    typeof codOrder.status === "string"
+      ? codOrder.status
+      : typeof codOrder.status === "object" && codOrder.status
+        ? codOrder.status.label ?? null
+        : null;
+
   const productName = extractProductName(codOrder);
   const { price: productPrice, quantity: productQuantity } =
     extractProductPriceAndQuantity(codOrder);
@@ -179,11 +204,27 @@ async function upsertOrder(
     where: { codNetworkOrderId: codOrderId },
   });
 
+  // Apply the auto-status logic: tracking number → OUT_FOR_DELIVERY,
+  // explicit delivered/returned signals → final state, etc. Falls back to
+  // the previously-computed `mapCodStatus` result.
+  const mappedFromCode = mapCodStatus(
+    codOrder.status,
+    trackingStatus
+  ) as OrderStatus;
+  const status = deriveOrderStatus({
+    rawStatusLabel,
+    trackingStatus,
+    trackingNumber,
+    mappedFromCode,
+    previousStatus: existing?.status ?? null,
+  });
+
   if (existing) {
     const statusChanged = existing.status !== status;
     await prisma.order.update({
       where: { codNetworkOrderId: codOrderId },
       data: {
+        codNetworkLeadId: codLeadId ?? existing.codNetworkLeadId,
         customerName: codOrder.customer_name ?? existing.customerName,
         customerPhone: normalizedPhone ?? existing.customerPhone,
         customerCity: codOrder.customer_city ?? existing.customerCity,
@@ -191,10 +232,11 @@ async function upsertOrder(
         productName: productName ?? existing.productName,
         productPrice: productPrice ?? existing.productPrice,
         productQuantity: productQuantity ?? existing.productQuantity,
-        trackingNumber: codOrder.tracking_number ?? existing.trackingNumber,
+        trackingNumber: trackingNumber ?? existing.trackingNumber,
         deliveryCompany: codOrder.delivery_company ?? existing.deliveryCompany,
         status,
         ...(statusChanged ? { statusChangedAt: new Date() } : {}),
+        codDeliveryStatus: rawStatusLabel ?? existing.codDeliveryStatus,
         codCreatedAt: codCreatedAt ?? existing.codCreatedAt,
         codUpdatedAt: codUpdatedAt ?? existing.codUpdatedAt,
         rawOrderJson: JSON.parse(JSON.stringify(codOrder)) as Prisma.InputJsonValue,
@@ -202,10 +244,21 @@ async function upsertOrder(
       },
     });
     result.ordersUpdated++;
+
+    if (statusChanged) {
+      // Fire automations off the new derived status. Best-effort — never
+      // throw inside the sync loop.
+      try {
+        await runAutomationsForOrder(existing.id);
+      } catch (err) {
+        console.error("[sync] automation engine threw", err);
+      }
+    }
   } else {
-    await prisma.order.create({
+    const created = await prisma.order.create({
       data: {
         codNetworkOrderId: codOrderId,
+        codNetworkLeadId: codLeadId,
         customerName: codOrder.customer_name ?? null,
         customerPhone: normalizedPhone,
         customerCity: codOrder.customer_city ?? null,
@@ -213,10 +266,11 @@ async function upsertOrder(
         productName,
         productPrice,
         productQuantity,
-        trackingNumber: codOrder.tracking_number ?? null,
+        trackingNumber,
         deliveryCompany: codOrder.delivery_company ?? null,
         status,
         statusChangedAt: new Date(),
+        codDeliveryStatus: rawStatusLabel,
         codCreatedAt,
         codUpdatedAt,
         rawOrderJson: JSON.parse(JSON.stringify(codOrder)) as Prisma.InputJsonValue,
@@ -224,6 +278,12 @@ async function upsertOrder(
       },
     });
     result.ordersCreated++;
+
+    try {
+      await runAutomationsForOrder(created.id);
+    } catch (err) {
+      console.error("[sync] automation engine threw on new order", err);
+    }
   }
 }
 

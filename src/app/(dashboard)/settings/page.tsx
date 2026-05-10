@@ -13,6 +13,7 @@ export default function SettingsPage() {
   const [settings, setSettings] = useState<SettingsData>({});
   const [dirtyKeys, setDirtyKeys] = useState<Set<string>>(new Set());
   const [configuredSecrets, setConfiguredSecrets] = useState<Set<string>>(new Set());
+  const [sensitivePreviews, setSensitivePreviews] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [notification, setNotification] = useState<{
@@ -24,10 +25,15 @@ export default function SettingsPage() {
     let cancelled = false;
     async function fetchSettings() {
       try {
-        const data = await api.get<{ settings: SettingsData; sensitiveKeysSet: string[] }>("/settings");
+        const data = await api.get<{
+          settings: SettingsData;
+          sensitiveKeysSet: string[];
+          sensitivePreviews?: Record<string, string>;
+        }>("/settings");
         if (!cancelled) {
           setSettings(data.settings);
           setConfiguredSecrets(new Set(data.sensitiveKeysSet || []));
+          setSensitivePreviews(data.sensitivePreviews || {});
         }
       } catch {
         // ignore
@@ -131,6 +137,7 @@ export default function SettingsPage() {
           value={settings.cod_network_api_password || ""}
           onChange={(v) => updateSetting("cod_network_api_password", v)}
           type="password"
+          configuredPreview={sensitivePreviews.cod_network_api_password}
           placeholder={
             configuredSecrets.has("cod_network_api_password")
               ? "Currently configured — enter a new value to replace"
@@ -142,6 +149,7 @@ export default function SettingsPage() {
           value={settings.cod_network_api_token || ""}
           onChange={(v) => updateSetting("cod_network_api_token", v)}
           type="password"
+          configuredPreview={sensitivePreviews.cod_network_api_token}
           placeholder={
             configuredSecrets.has("cod_network_api_token")
               ? "Currently configured — enter a new value to replace"
@@ -149,6 +157,32 @@ export default function SettingsPage() {
           }
           help="Tokens generated from the seller portal's API Developer page may be rejected by api.cod.network. Prefer email + password."
         />
+      </SettingsSection>
+
+      {/* COD Network Webhooks */}
+      <SettingsSection
+        title="COD Network Webhooks"
+        description="Paste these URLs into seller.cod.network → My Account → API Developer → Webhook Lead Status / Webhook Order Status. Each event will create or update an order in real time and fire any matching automations."
+        onSave={() =>
+          handleSave("COD Webhooks", ["cod_network_webhook_secret"])
+        }
+        saving={saving}
+      >
+        <SettingsField
+          label="Webhook Secret Key"
+          value={settings.cod_network_webhook_secret || ""}
+          onChange={(v) => updateSetting("cod_network_webhook_secret", v)}
+          type="password"
+          configuredPreview={sensitivePreviews.cod_network_webhook_secret}
+          placeholder={
+            configuredSecrets.has("cod_network_webhook_secret")
+              ? "Currently configured — enter a new value to replace"
+              : "The 'Webhook secret key' from your COD Network account"
+          }
+          help="From seller.cod.network → My Account → API Developer → Webhook secret key. Used to verify HMAC-SHA256 signatures on the incoming webhook payloads."
+        />
+        <WebhookUrlReadout name="Lead Status" path="/api/cod-network/webhook/leads" />
+        <WebhookUrlReadout name="Order Status" path="/api/cod-network/webhook/orders" />
       </SettingsSection>
 
       {/* WhatsApp Settings */}
@@ -182,6 +216,7 @@ export default function SettingsPage() {
           value={settings.whatsapp_access_token || ""}
           onChange={(v) => updateSetting("whatsapp_access_token", v)}
           type="password"
+          configuredPreview={sensitivePreviews.whatsapp_access_token}
           placeholder={configuredSecrets.has("whatsapp_access_token") ? "Currently configured — enter new value to replace" : "Your WhatsApp Access Token"}
         />
         <SettingsField
@@ -223,6 +258,8 @@ export default function SettingsPage() {
           label="Webhook Verify Token"
           value={settings.whatsapp_webhook_verify_token || ""}
           onChange={(v) => updateSetting("whatsapp_webhook_verify_token", v)}
+          type="password"
+          configuredPreview={sensitivePreviews.whatsapp_webhook_verify_token}
           placeholder="any random string, e.g. cod-wa-verify-2026"
           help="Pasted into Meta App → WhatsApp → Configuration → Verify Token. Must match exactly. Used by /api/whatsapp/webhook for the GET handshake."
         />
@@ -232,6 +269,7 @@ export default function SettingsPage() {
           onChange={(v) => updateSetting("whatsapp_app_secret", v)}
           placeholder="From Meta App → Settings → Basic → App Secret"
           type="password"
+          configuredPreview={sensitivePreviews.whatsapp_app_secret}
           help="Used to verify the X-Hub-Signature-256 header on inbound webhook payloads. If left blank the webhook accepts any payload — only safe for local testing."
         />
       </SettingsSection>
@@ -425,6 +463,7 @@ function SettingsField({
   placeholder,
   help,
   warning,
+  configuredPreview,
 }: {
   label: string;
   value: string;
@@ -433,12 +472,29 @@ function SettingsField({
   placeholder?: string;
   help?: string;
   warning?: string;
+  /**
+   * If the field already has a value saved on the server (and is sensitive),
+   * the API returns a masked preview like `kuwa••••••••ar`. Render it as a
+   * tiny chip beside the label so the operator can confirm at a glance that
+   * the right value is saved without ever seeing the full secret.
+   */
+  configuredPreview?: string;
 }) {
   return (
     <div className="mb-4">
-      <label className="block text-sm font-medium text-gray-700 mb-1">
-        {label}
-      </label>
+      <div className="flex items-center justify-between mb-1 gap-3">
+        <label className="block text-sm font-medium text-gray-700">
+          {label}
+        </label>
+        {configuredPreview && (
+          <span
+            className="font-mono text-xs px-2 py-0.5 rounded bg-gray-100 text-gray-600 border border-gray-200"
+            title="Currently saved value, masked"
+          >
+            {configuredPreview}
+          </span>
+        )}
+      </div>
       <input
         type={type}
         value={value}
@@ -457,6 +513,52 @@ function SettingsField({
       {help && !warning && (
         <p className="mt-1 text-xs text-gray-500">{help}</p>
       )}
+    </div>
+  );
+}
+
+/**
+ * Read-only display of a webhook URL the operator pastes into a third-party
+ * dashboard (COD Network). Shows the fully-qualified URL based on the
+ * current browser origin and includes a Copy button.
+ */
+function WebhookUrlReadout({ name, path }: { name: string; path: string }) {
+  const [origin, setOrigin] = useState("");
+  const [copied, setCopied] = useState(false);
+  useEffect(() => {
+    // `window` is undefined during SSR, so we have to read it from an effect
+    // and surface it into state for the input below.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    if (typeof window !== "undefined") setOrigin(window.location.origin);
+  }, []);
+  const url = origin ? `${origin}${path}` : path;
+  return (
+    <div className="mb-3">
+      <label className="block text-xs font-medium text-gray-600 mb-1">
+        {name} webhook URL
+      </label>
+      <div className="flex gap-2">
+        <input
+          type="text"
+          readOnly
+          value={url}
+          className="flex-1 px-3 py-2 border border-gray-200 rounded-md text-xs font-mono bg-gray-50 text-gray-700 focus:outline-none"
+          onClick={(e) => (e.target as HTMLInputElement).select()}
+        />
+        <button
+          type="button"
+          onClick={() => {
+            if (typeof navigator !== "undefined" && navigator.clipboard) {
+              navigator.clipboard.writeText(url);
+              setCopied(true);
+              setTimeout(() => setCopied(false), 1500);
+            }
+          }}
+          className="px-3 py-2 text-xs font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50"
+        >
+          {copied ? "Copied" : "Copy"}
+        </button>
+      </div>
     </div>
   );
 }

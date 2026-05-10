@@ -1,5 +1,6 @@
 import { syncOrders, isSyncInProgress } from "./sync";
-import { getSetting, SETTING_KEYS } from "./settings";
+import { getSetting, setSetting, SETTING_KEYS } from "./settings";
+import { importTemplatesFromMeta } from "./template-import";
 
 /**
  * Lightweight in-process scheduler that runs `syncOrders()` on a recurring
@@ -13,10 +14,14 @@ import { getSetting, SETTING_KEYS } from "./settings";
 declare global {
   var __codWhatsappAutoSyncStarted__: boolean | undefined;
   var __codWhatsappAutoSyncTimer__: NodeJS.Timeout | undefined;
+  var __codWhatsappTemplateImportTimer__: NodeJS.Timeout | undefined;
 }
 
 const DEFAULT_INTERVAL_MINUTES = 5;
 const MIN_INTERVAL_MINUTES = 1;
+// Templates rarely change, so a long cadence is fine. The user can also
+// click "Sync now" in /templates whenever they want a fresh pull.
+const TEMPLATE_IMPORT_INTERVAL_MINUTES = 6 * 60;
 
 let lastRunStartedAt: Date | null = null;
 let lastRunFinishedAt: Date | null = null;
@@ -91,6 +96,48 @@ export async function startAutoSync(): Promise<void> {
   // Don't keep the Node process alive solely for the timer.
   if (typeof timer.unref === "function") timer.unref();
   globalThis.__codWhatsappAutoSyncTimer__ = timer;
+
+  // Kick off the template-import cron alongside the order-sync cron. It
+  // runs much less frequently (every 6 hours) so it won't slow boot time.
+  startTemplateImportCron();
+}
+
+async function tickTemplateImport(): Promise<void> {
+  try {
+    const result = await importTemplatesFromMeta();
+    await setSetting(
+      SETTING_KEYS.WHATSAPP_TEMPLATES_LAST_IMPORT_AT,
+      new Date().toISOString()
+    );
+    console.log(
+      `[template-import] cron pulled ${result.imported} templates (${JSON.stringify(result.statusCounts)})`
+    );
+  } catch (err) {
+    // Templates are non-critical — never crash the process if Meta is down
+    // or the user hasn't configured a WABA ID yet.
+    console.warn(
+      "[template-import] cron tick failed",
+      err instanceof Error ? err.message : err
+    );
+  }
+}
+
+function startTemplateImportCron(): void {
+  if (globalThis.__codWhatsappTemplateImportTimer__) return;
+  // Run once a minute after boot so the user sees templates on their first
+  // visit (assuming a WABA ID is configured), then settle into the long
+  // cadence so we don't hammer Meta.
+  setTimeout(() => {
+    tickTemplateImport().catch(() => undefined);
+  }, 60_000);
+  const timer = setInterval(
+    () => {
+      tickTemplateImport().catch(() => undefined);
+    },
+    TEMPLATE_IMPORT_INTERVAL_MINUTES * 60 * 1000
+  );
+  if (typeof timer.unref === "function") timer.unref();
+  globalThis.__codWhatsappTemplateImportTimer__ = timer;
 }
 
 export function getAutoSyncStatus(): AutoSyncStatus {

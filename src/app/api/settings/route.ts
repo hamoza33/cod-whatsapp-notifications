@@ -7,6 +7,7 @@ import {
   SETTING_KEYS,
   SENSITIVE_SETTING_KEYS,
   INTERNAL_SETTING_KEYS,
+  maskSecret,
 } from "@/lib/settings";
 
 // User-facing keys: everything except internal cached tokens.
@@ -23,17 +24,28 @@ export async function GET(request: NextRequest) {
 
   const settings = await getSettings([...PUBLIC_KEYS]);
 
-  // Redact sensitive values — return null but indicate which are configured.
-  const redacted = { ...settings };
+  // Mask sensitive values: show first 4 chars + dots + last 2 chars instead
+  // of nulling them out. The user explicitly asked for this UX so they can
+  // tell at a glance which secret is in which slot without ever exposing the
+  // full value. Stored separately on `sensitivePreviews` so the client can
+  // distinguish "configured" placeholder from a real input value.
+  const redacted: Record<string, string | null> = { ...settings };
   const sensitiveKeysSet: string[] = [];
+  const sensitivePreviews: Record<string, string> = {};
   for (const key of SENSITIVE_SETTING_KEYS) {
-    if (redacted[key]) {
+    const raw = settings[key];
+    if (raw) {
       sensitiveKeysSet.push(key);
+      sensitivePreviews[key] = maskSecret(raw);
       redacted[key] = null;
     }
   }
 
-  return NextResponse.json({ settings: redacted, sensitiveKeysSet });
+  return NextResponse.json({
+    settings: redacted,
+    sensitiveKeysSet,
+    sensitivePreviews,
+  });
 }
 
 export async function PUT(request: NextRequest) {

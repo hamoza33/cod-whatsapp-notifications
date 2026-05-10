@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getAuthUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { OrderStatus, Prisma } from "@prisma/client";
+import { runAutomationsForOrder } from "@/lib/automations";
 
 const ALLOWED_STATUSES: OrderStatus[] = [
   "PENDING",
@@ -90,6 +91,11 @@ export async function PATCH(
     return NextResponse.json({ error: "No fields to update" }, { status: 400 });
   }
 
+  const previousOrder = await prisma.order.findUnique({
+    where: { id },
+    select: { status: true },
+  });
+
   const order = await prisma.order
     .update({
       where: { id },
@@ -107,6 +113,21 @@ export async function PATCH(
 
   if (!order) {
     return NextResponse.json({ error: "Order not found" }, { status: 404 });
+  }
+
+  // Fire automations whenever the status actually changed (drag in the
+  // Pipeline UI, /api/orders PATCH, etc.). Best-effort — failure here MUST
+  // NOT 500 the PATCH because the status update already succeeded.
+  if (
+    body.status !== undefined &&
+    previousOrder &&
+    previousOrder.status !== order.status
+  ) {
+    try {
+      await runAutomationsForOrder(order.id);
+    } catch (err) {
+      console.error("[orders/PATCH] automation engine threw", err);
+    }
   }
 
   return NextResponse.json({ order });

@@ -33,6 +33,10 @@ export const SETTING_KEYS = {
   COD_API_PASSWORD: "cod_network_api_password",
   COD_API_TOKEN_CACHED: "cod_network_api_token_cached",
   COD_API_TOKEN_EXPIRES_AT: "cod_network_api_token_expires_at",
+  // The COD Network "Webhook secret key" used to verify HMAC signatures on
+  // inbound lead/order webhook payloads. See seller.cod.network → My Account
+  // → API Developer → Webhook secret key.
+  COD_WEBHOOK_SECRET: "cod_network_webhook_secret",
   WHATSAPP_PHONE_NUMBER_ID: "whatsapp_phone_number_id",
   WHATSAPP_ACCESS_TOKEN: "whatsapp_access_token",
   WHATSAPP_API_VERSION: "whatsapp_api_version",
@@ -53,11 +57,15 @@ export const SETTING_KEYS = {
   // webhook accepts any payload (intended only for local testing).
   WHATSAPP_APP_SECRET: "whatsapp_app_secret",
   WHATSAPP_DEFAULT_TEMPLATE_HEADER_IMAGE_URL: "whatsapp_default_template_header_image_url",
+  // ISO timestamp recording when `whatsapp_templates` was last refreshed
+  // from Meta. Used by the auto-import refresh window logic.
+  WHATSAPP_TEMPLATES_LAST_IMPORT_AT: "whatsapp_templates_last_import_at",
 } as const;
 
 export const SENSITIVE_SETTING_KEYS: readonly string[] = [
   SETTING_KEYS.COD_API_TOKEN,
   SETTING_KEYS.COD_API_PASSWORD,
+  SETTING_KEYS.COD_WEBHOOK_SECRET,
   SETTING_KEYS.WHATSAPP_ACCESS_TOKEN,
   SETTING_KEYS.WHATSAPP_APP_SECRET,
   SETTING_KEYS.WHATSAPP_WEBHOOK_VERIFY_TOKEN,
@@ -67,6 +75,20 @@ export const INTERNAL_SETTING_KEYS: readonly string[] = [
   SETTING_KEYS.COD_API_TOKEN_CACHED,
   SETTING_KEYS.COD_API_TOKEN_EXPIRES_AT,
 ];
+
+/**
+ * Generates a "preview mask" for a sensitive setting value: the first 4 chars
+ * verbatim, then 8 dots, then the last 2 chars. So `kuwait_ezihear_no_reply`
+ * becomes `kuwa••••••••ly`. Lets the operator confirm "yes, the right value is
+ * saved" without exposing the full secret in the response payload.
+ */
+export function maskSecret(value: string): string {
+  if (!value) return "";
+  if (value.length <= 6) return "••••••";
+  const head = value.slice(0, 4);
+  const tail = value.slice(-2);
+  return `${head}••••••••${tail}`;
+}
 
 export async function deleteSetting(key: string): Promise<void> {
   await prisma.setting.deleteMany({ where: { key } });

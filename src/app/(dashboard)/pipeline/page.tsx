@@ -65,6 +65,7 @@ const STATUS_COLORS: Record<OrderStatus, string> = {
 interface PipelineOrder {
   id: string;
   codNetworkOrderId: string;
+  codNetworkLeadId: string | null;
   customerName: string | null;
   customerPhone: string | null;
   customerCity: string | null;
@@ -416,6 +417,9 @@ function Card({
   const sentAt = order.whatsappSentAt
     ? new Date(order.whatsappSentAt).toLocaleString()
     : null;
+  const createdAt = order.codCreatedAt
+    ? new Date(order.codCreatedAt).toLocaleDateString()
+    : null;
   return (
     <div
       draggable
@@ -437,6 +441,16 @@ function Card({
           #{order.codNetworkOrderId.slice(-6)}
         </span>
       </div>
+      {(createdAt || order.codNetworkLeadId) && (
+        <div className="flex items-center gap-2 text-[10px] text-gray-500">
+          {createdAt && <span>{createdAt}</span>}
+          {order.codNetworkLeadId && (
+            <span className="font-mono" title={`Lead ID ${order.codNetworkLeadId}`}>
+              lead #{order.codNetworkLeadId.slice(-6)}
+            </span>
+          )}
+        </div>
+      )}
       {order.productName && (
         <div className="flex items-center gap-1.5 text-gray-700">
           <PackageIcon size={11} className="shrink-0 text-gray-400" />
