@@ -429,6 +429,67 @@ export class CodNetworkClient {
     );
     return response.data;
   }
+
+  async getProducts(
+    page = 1,
+    perPage = 50
+  ): Promise<CodNetworkListResponse> {
+    const search = new URLSearchParams({
+      page: String(page),
+      limit: String(perPage),
+      per_page: String(perPage),
+    });
+    return this.request<CodNetworkListResponse>(
+      `/seller/products?${search.toString()}`
+    );
+  }
+
+  /**
+   * Pull every product across all pages. The seller catalog rarely exceeds a
+   * few hundred entries, so we don't bother with a `sinceDate` filter — a full
+   * snapshot is cheap and avoids stale rows when products are edited in COD.
+   */
+  async getAllProducts(opts: { maxPages?: number } = {}): Promise<
+    CodNetworkProduct[]
+  > {
+    const { maxPages = 50 } = opts;
+    const all: CodNetworkProduct[] = [];
+    let page = 1;
+    let hasMore = true;
+    while (hasMore) {
+      const response = await this.getProducts(page, 50);
+      const items = (response.data as unknown as CodNetworkProduct[]) ?? [];
+      all.push(...items);
+      const pagination = response.meta?.pagination;
+      if (
+        pagination?.current_page !== undefined &&
+        pagination?.total_pages !== undefined
+      ) {
+        hasMore = pagination.current_page < pagination.total_pages;
+      } else {
+        hasMore = items.length === 50;
+      }
+      page++;
+      if (page > maxPages) break;
+    }
+    return all;
+  }
+}
+
+export interface CodNetworkProduct {
+  id: number | string;
+  sku?: string | null;
+  name?: string | null;
+  name_arabic?: string | null;
+  description?: string | null;
+  image_url?: string | null;
+  path_image?: string | null;
+  price?: string | number | null;
+  currency?: string | null;
+  url?: string | null;
+  type?: { label?: string; code?: number } | string | null;
+  status?: { label?: string; code?: number } | string | null;
+  [key: string]: unknown;
 }
 
 /**

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getAuthUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { OrderStatus } from "@prisma/client";
+import { OrderStatus, Prisma } from "@prisma/client";
 
 export async function GET(request: NextRequest) {
   const user = getAuthUser(request);
@@ -30,6 +30,8 @@ interface CreateAutomationBody {
   thenMoveToStatus?: string | null;
   thenSendTemplateName?: string | null;
   thenSendTemplateLanguage?: string | null;
+  thenSendTemplateVariables?: string[] | null;
+  thenSendHeaderImageUrl?: string | null;
   thenSendOnce?: boolean;
 }
 
@@ -88,6 +90,12 @@ export async function POST(request: NextRequest) {
       thenMoveToStatus: asStatus(body.thenMoveToStatus),
       thenSendTemplateName: body.thenSendTemplateName?.trim() || null,
       thenSendTemplateLanguage: body.thenSendTemplateLanguage?.trim() || null,
+      thenSendTemplateVariables:
+        Array.isArray(body.thenSendTemplateVariables) &&
+        body.thenSendTemplateVariables.length > 0
+          ? body.thenSendTemplateVariables
+          : Prisma.JsonNull,
+      thenSendHeaderImageUrl: body.thenSendHeaderImageUrl?.trim() || null,
       thenSendOnce: body.thenSendOnce ?? true,
     },
   });

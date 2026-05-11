@@ -2,7 +2,8 @@
 
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api-client";
-import { RefreshCw, Send, Eye, Search } from "lucide-react";
+import { RefreshCw, Send, Eye, Search, Plus } from "lucide-react";
+import ManualOrderModal from "@/components/manual-order-modal";
 
 interface OrderMessage {
   id: string;
@@ -65,6 +66,7 @@ export default function OrdersPage() {
   } | null>(null);
 
   const [refreshKey, setRefreshKey] = useState(0);
+  const [showManualOrder, setShowManualOrder] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -181,7 +183,16 @@ export default function OrdersPage() {
 
   return (
     <div>
-      <h1 className="text-2xl font-bold text-gray-900 mb-6">Orders</h1>
+      <div className="flex items-center justify-between mb-6">
+        <h1 className="text-2xl font-bold text-gray-900">Orders</h1>
+        <button
+          onClick={() => setShowManualOrder(true)}
+          className="flex items-center gap-2 px-3 py-2 bg-blue-600 text-white rounded-md text-sm font-medium hover:bg-blue-700"
+        >
+          <Plus size={16} />
+          New manual order
+        </button>
+      </div>
 
       {notification && (
         <div
@@ -370,6 +381,20 @@ export default function OrdersPage() {
             Next
           </button>
         </div>
+      )}
+
+      {showManualOrder && (
+        <ManualOrderModal
+          onClose={() => setShowManualOrder(false)}
+          onCreated={() => {
+            setShowManualOrder(false);
+            setNotification({
+              type: "success",
+              message: "Manual order created",
+            });
+            setRefreshKey((k) => k + 1);
+          }}
+        />
       )}
 
       {/* Preview Modal */}

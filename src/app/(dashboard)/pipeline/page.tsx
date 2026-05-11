@@ -13,7 +13,9 @@ import {
   CheckCircle2,
   X,
   AlertCircle,
+  Plus,
 } from "lucide-react";
+import ManualOrderModal from "@/components/manual-order-modal";
 
 type OrderStatus =
   | "PENDING"
@@ -115,6 +117,7 @@ export default function PipelinePage() {
   const draggingIdRef = useRef<string | null>(null);
   const [hoverColumn, setHoverColumn] = useState<string | null>(null);
   const [sendDialogOrder, setSendDialogOrder] = useState<PipelineOrder | null>(null);
+  const [showManualOrder, setShowManualOrder] = useState(false);
   const [toast, setToast] = useState<{ kind: "success" | "error"; text: string } | null>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -259,14 +262,23 @@ export default function PipelinePage() {
             column to send a templated message.
           </p>
         </div>
-        <button
-          onClick={refresh}
-          disabled={refreshing}
-          className="flex items-center gap-2 px-3 py-1.5 border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
-        >
-          <RefreshCw size={14} className={refreshing ? "animate-spin" : ""} />
-          Refresh
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setShowManualOrder(true)}
+            className="flex items-center gap-2 px-3 py-1.5 bg-blue-600 text-white rounded-md text-sm font-medium hover:bg-blue-700"
+          >
+            <Plus size={14} />
+            New manual order
+          </button>
+          <button
+            onClick={refresh}
+            disabled={refreshing}
+            className="flex items-center gap-2 px-3 py-1.5 border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+          >
+            <RefreshCw size={14} className={refreshing ? "animate-spin" : ""} />
+            Refresh
+          </button>
+        </div>
       </div>
 
       {error && (
@@ -308,6 +320,17 @@ export default function PipelinePage() {
           />
         </div>
       </div>
+
+      {showManualOrder && (
+        <ManualOrderModal
+          onClose={() => setShowManualOrder(false)}
+          onCreated={() => {
+            setShowManualOrder(false);
+            showToast("success", "Manual order created");
+            fetchOrders();
+          }}
+        />
+      )}
 
       {sendDialogOrder && (
         <SendDialog

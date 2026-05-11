@@ -68,19 +68,89 @@ export function matchesAutomation(
 }
 
 /**
+ * Variable tokens an operator can use in `Automation.thenSendTemplateVariables`.
+ * Each token resolves to a value pulled from the Order being processed. Any
+ * token not in this map is left literally (so static strings just pass through).
+ */
+const ORDER_VARIABLE_TOKENS = [
+  "{customer_name}",
+  "{phone}",
+  "{city}",
+  "{product}",
+  "{price}",
+  "{quantity}",
+  "{tracking}",
+  "{order_id}",
+  "{lead_id}",
+  "{delivery_company}",
+] as const;
+
+export type AutomationVariableToken = (typeof ORDER_VARIABLE_TOKENS)[number];
+
+export const AVAILABLE_AUTOMATION_TOKENS: ReadonlyArray<AutomationVariableToken> =
+  ORDER_VARIABLE_TOKENS;
+
+function resolveVariableToken(token: string, order: Order): string {
+  switch (token) {
+    case "{customer_name}":
+      return order.customerName || "Customer";
+    case "{phone}":
+      return order.customerPhone || "";
+    case "{city}":
+      return order.customerCity || "";
+    case "{product}":
+      return order.productName || "";
+    case "{price}":
+      return order.productPrice || "";
+    case "{quantity}":
+      return order.productQuantity || "";
+    case "{tracking}":
+      return order.trackingNumber || "";
+    case "{order_id}":
+      return order.codNetworkOrderId;
+    case "{lead_id}":
+      return order.codNetworkLeadId || "";
+    case "{delivery_company}":
+      return order.deliveryCompany || "";
+    default:
+      return token;
+  }
+}
+
+/**
  * Build the body variables for a template send triggered by an automation.
  * Uses positional `{{1}}`, `{{2}}` style — Meta templates have no named
  * params at the API layer. The defaults mirror the variable chips exposed
  * in the Pipeline → Send dialog so operators can match the order of values
  * to their template's body text.
  */
-function buildVariablesForOrder(order: Order): string[] {
-  // Defaults to "customer name, order id" which fits most operator templates
-  // (including the `kuwait_ezihear_no_reply` we tested with).
-  return [
-    order.customerName || "Customer",
-    order.codNetworkOrderId,
-  ];
+function buildVariablesForOrder(automation: Automation, order: Order): string[] {
+  // If the operator configured explicit variable slots, resolve any
+  // `{token}` placeholders against the order. Each non-token slot is passed
+  // through verbatim (operators can mix literals + tokens, e.g.
+  // ["Order", "{order_id}"]).
+  const configured = automation.thenSendTemplateVariables as
+    | string[]
+    | null
+    | undefined;
+  if (Array.isArray(configured) && configured.length > 0) {
+    return configured.map((slot) => {
+      if (typeof slot !== "string") return "";
+      // Replace every known {token} occurrence in the slot — supports both
+      // pure-token slots ("{customer_name}") and embedded ("Hello {customer_name}").
+      let out = slot;
+      for (const t of ORDER_VARIABLE_TOKENS) {
+        if (out.includes(t)) {
+          out = out.split(t).join(resolveVariableToken(t, order));
+        }
+      }
+      return out;
+    });
+  }
+
+  // Legacy default: "customer name, order id" — matches the `kuwait_ezihear_no_reply`
+  // template we tested with end-to-end.
+  return [order.customerName || "Customer", order.codNetworkOrderId];
 }
 
 /**
@@ -270,7 +340,7 @@ async function sendAutomationTemplate(
     (await getSetting(SETTING_KEYS.DEFAULT_COUNTRY_CODE)) || "212";
 
   const client = await WhatsAppClient.fromSettings();
-  const variables = buildVariablesForOrder(order);
+  const variables = buildVariablesForOrder(automation, order);
   let normalizedPhone: string;
   try {
     normalizedPhone = normalizePhoneNumber(order.customerPhone, defaultCountryCode);
@@ -278,20 +348,20 @@ async function sendAutomationTemplate(
     normalizedPhone = order.customerPhone;
   }
 
-  // Optional default header image — same setting used by the Test Message
-  // UI. Operators with IMAGE-header templates set this once globally and
-  // every automation send picks it up.
-  const defaultHeaderImage = await getSetting(
-    SETTING_KEYS.WHATSAPP_DEFAULT_TEMPLATE_HEADER_IMAGE_URL
-  );
+  // Header image: per-automation override wins, then the global Settings
+  // default. Operators with IMAGE-header templates can pin a default once
+  // and each automation can still override.
+  const headerImage =
+    automation.thenSendHeaderImageUrl ||
+    (await getSetting(SETTING_KEYS.WHATSAPP_DEFAULT_TEMPLATE_HEADER_IMAGE_URL));
 
   const result = await client.sendTemplate(
     normalizedPhone,
     automation.thenSendTemplateName,
     templateLanguage,
     variables,
-    defaultHeaderImage
-      ? { type: "image", value: defaultHeaderImage, imageKind: "url" }
+    headerImage
+      ? { type: "image", value: headerImage, imageKind: "url" }
       : undefined
   );
 

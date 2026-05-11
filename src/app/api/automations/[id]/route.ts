@@ -56,6 +56,8 @@ interface UpdateAutomationBody {
   thenMoveToStatus?: string | null;
   thenSendTemplateName?: string | null;
   thenSendTemplateLanguage?: string | null;
+  thenSendTemplateVariables?: string[] | null;
+  thenSendHeaderImageUrl?: string | null;
   thenSendOnce?: boolean;
 }
 
@@ -88,6 +90,15 @@ export async function PATCH(request: NextRequest, context: RouteContext) {
     data.thenSendTemplateName = body.thenSendTemplateName?.trim() || null;
   if (body.thenSendTemplateLanguage !== undefined)
     data.thenSendTemplateLanguage = body.thenSendTemplateLanguage?.trim() || null;
+  if (body.thenSendTemplateVariables !== undefined) {
+    data.thenSendTemplateVariables =
+      Array.isArray(body.thenSendTemplateVariables) &&
+      body.thenSendTemplateVariables.length > 0
+        ? body.thenSendTemplateVariables
+        : Prisma.JsonNull;
+  }
+  if (body.thenSendHeaderImageUrl !== undefined)
+    data.thenSendHeaderImageUrl = body.thenSendHeaderImageUrl?.trim() || null;
   if (body.thenSendOnce !== undefined) data.thenSendOnce = body.thenSendOnce;
 
   try {
