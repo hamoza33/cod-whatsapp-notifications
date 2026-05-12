@@ -13,9 +13,7 @@ import {
   CheckCircle2,
   X,
   AlertCircle,
-  Plus,
 } from "lucide-react";
-import ManualOrderModal from "@/components/manual-order-modal";
 
 type OrderStatus =
   | "PENDING"
@@ -117,7 +115,6 @@ export default function PipelinePage() {
   const draggingIdRef = useRef<string | null>(null);
   const [hoverColumn, setHoverColumn] = useState<string | null>(null);
   const [sendDialogOrder, setSendDialogOrder] = useState<PipelineOrder | null>(null);
-  const [showManualOrder, setShowManualOrder] = useState(false);
   const [toast, setToast] = useState<{ kind: "success" | "error"; text: string } | null>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -156,6 +153,14 @@ export default function PipelinePage() {
     for (const o of orders) {
       if (o.whatsappSentAt) groups.__SENT__.push(o);
       else groups[o.status]?.push(o);
+    }
+    // Sort each column oldest-first (first created → last created)
+    for (const key of Object.keys(groups)) {
+      groups[key].sort((a, b) => {
+        const aDate = a.codCreatedAt ? new Date(a.codCreatedAt).getTime() : 0;
+        const bDate = b.codCreatedAt ? new Date(b.codCreatedAt).getTime() : 0;
+        return aDate - bDate;
+      });
     }
     return groups;
   }, [orders]);
@@ -262,23 +267,14 @@ export default function PipelinePage() {
             column to send a templated message.
           </p>
         </div>
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => setShowManualOrder(true)}
-            className="flex items-center gap-2 px-3 py-1.5 bg-blue-600 text-white rounded-md text-sm font-medium hover:bg-blue-700"
-          >
-            <Plus size={14} />
-            New manual order
-          </button>
-          <button
-            onClick={refresh}
-            disabled={refreshing}
-            className="flex items-center gap-2 px-3 py-1.5 border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
-          >
-            <RefreshCw size={14} className={refreshing ? "animate-spin" : ""} />
-            Refresh
-          </button>
-        </div>
+        <button
+          onClick={refresh}
+          disabled={refreshing}
+          className="flex items-center gap-2 px-3 py-1.5 border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+        >
+          <RefreshCw size={14} className={refreshing ? "animate-spin" : ""} />
+          Refresh
+        </button>
       </div>
 
       {error && (
@@ -320,17 +316,6 @@ export default function PipelinePage() {
           />
         </div>
       </div>
-
-      {showManualOrder && (
-        <ManualOrderModal
-          onClose={() => setShowManualOrder(false)}
-          onCreated={() => {
-            setShowManualOrder(false);
-            showToast("success", "Manual order created");
-            fetchOrders();
-          }}
-        />
-      )}
 
       {sendDialogOrder && (
         <SendDialog
@@ -471,8 +456,13 @@ function Card({
         onDragStart(e);
       }}
       onDragEnd={onDragEnd}
-      onClick={onClick}
-      className={`bg-white rounded-md border p-3 cursor-grab active:cursor-grabbing shadow-sm hover:shadow-md transition-shadow text-xs space-y-1 ${
+      onClick={() => {
+        // Only trigger click if user wasn't selecting text
+        const sel = window.getSelection();
+        if (sel && sel.toString().length > 0) return;
+        onClick();
+      }}
+      className={`bg-white rounded-md border p-3 cursor-grab active:cursor-grabbing shadow-sm hover:shadow-md transition-shadow text-xs space-y-1 select-text ${
         sentColumn ? "border-green-200" : "border-gray-200"
       }`}
     >
