@@ -52,16 +52,21 @@ ENV HOSTNAME=0.0.0.0
 # Install prisma globally so the release_command `prisma migrate deploy`
 # resolves on PATH. The standalone bundle's own node_modules does not
 # include the prisma CLI shim, and npx cannot find it in a global cache
-# when offline inside the release machine.
+# when offline inside the release machine. NODE_PATH points node's module
+# resolver at the global node_modules too so `require('prisma/config')`
+# from /app/prisma.config.ts can find it.
 RUN npm install -g prisma@7
+ENV NODE_PATH=/usr/local/lib/node_modules
 
 # Bring over the standalone bundle (includes a minimal node_modules) plus
 # the static assets the runtime serves directly, plus the prisma client
-# engine binaries so `@prisma/client` works at runtime.
+# engine binaries so `@prisma/client` works at runtime, plus the
+# prisma.config.ts (Prisma 7 requires it for `migrate deploy`).
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
 COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 COPY --from=builder --chown=nextjs:nodejs /app/public ./public
 COPY --from=builder --chown=nextjs:nodejs /app/prisma ./prisma
+COPY --from=builder --chown=nextjs:nodejs /app/prisma.config.ts ./prisma.config.ts
 COPY --from=builder --chown=nextjs:nodejs /app/node_modules/.prisma ./node_modules/.prisma
 COPY --from=builder --chown=nextjs:nodejs /app/node_modules/@prisma ./node_modules/@prisma
 
