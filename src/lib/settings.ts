@@ -65,6 +65,7 @@ export const SETTING_KEYS = {
   AI_AGENT_MODEL: "ai_agent_model",
   AI_AGENT_SYSTEM_PROMPT: "ai_agent_system_prompt",
   AI_AGENT_MAX_TOKENS: "ai_agent_max_tokens",
+  AI_AGENT_PRODUCT_TYPES: "ai_agent_product_types",
 } as const;
 
 export const SENSITIVE_SETTING_KEYS: readonly string[] = [

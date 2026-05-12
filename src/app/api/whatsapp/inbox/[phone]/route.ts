@@ -36,6 +36,7 @@ export async function GET(
         providerMessageId: true,
         status: true,
         errorMessage: true,
+        sentBy: true,
         sentAt: true,
         createdAt: true,
       },
@@ -59,10 +60,25 @@ export async function GET(
         at: string;
         templateName: string;
         templateVariables: unknown;
+        renderedText: string | null;
+        sentBy: string | null;
         status: string;
         providerMessageId: string | null;
         errorMessage: string | null;
       };
+
+  // Pre-fetch template bodies for rendering outbound messages
+  const templateNames = [...new Set(outbound.map((m) => m.templateName).filter((n) => n !== "<text>"))];
+  const templateBodies = new Map<string, string>();
+  if (templateNames.length > 0) {
+    const templates = await prisma.whatsappTemplate.findMany({
+      where: { name: { in: templateNames } },
+      select: { name: true, bodyText: true },
+    });
+    for (const t of templates) {
+      if (t.bodyText) templateBodies.set(t.name, t.bodyText);
+    }
+  }
 
   const thread: ThreadEntry[] = [];
   for (const m of inbound) {
@@ -78,12 +94,32 @@ export async function GET(
     });
   }
   for (const m of outbound) {
+    let renderedText: string | null = null;
+    if (m.templateName === "<text>") {
+      const vars = m.templateVariablesJson;
+      if (vars && typeof vars === "object" && "text" in vars) {
+        renderedText = (vars as { text: string }).text;
+      }
+    } else {
+      const body = templateBodies.get(m.templateName);
+      if (body) {
+        const vars = Array.isArray(m.templateVariablesJson)
+          ? (m.templateVariablesJson as string[])
+          : [];
+        renderedText = body.replace(/\{\{(\d+)\}\}/g, (_, idx) => {
+          const i = parseInt(idx, 10) - 1;
+          return vars[i] ?? `{{${idx}}}`;
+        });
+      }
+    }
     thread.push({
       kind: "outbound",
       id: m.id,
       at: (m.sentAt ?? m.createdAt).toISOString(),
       templateName: m.templateName,
       templateVariables: m.templateVariablesJson,
+      renderedText,
+      sentBy: m.sentBy,
       status: m.status,
       providerMessageId: m.providerMessageId,
       errorMessage: m.errorMessage,
@@ -166,26 +202,24 @@ export async function POST(
   try {
     const result = await client.sendText(toForApi, body.text);
 
-    // Best-effort: link the outbound text to the same Order the last
-    // inbound was matched to.
-    if (lastInbound?.orderId) {
-      try {
-        await prisma.whatsappMessage.create({
-          data: {
-            orderId: lastInbound.orderId,
-            phoneNumber: decodedPhone,
-            templateName: "<text>",
-            templateLanguage: "",
-            templateVariablesJson: { text: body.text },
-            providerMessageId: result.messages?.[0]?.id ?? null,
-            status: "SENT",
-            sentBy: user.email,
-            sentAt: new Date(),
-          },
-        });
-      } catch {
-        // ignore logging failure
-      }
+    // Always record the outbound text in whatsapp_messages so it shows
+    // in the conversation thread. Link to the order if we have one.
+    try {
+      await prisma.whatsappMessage.create({
+        data: {
+          orderId: lastInbound?.orderId ?? "",
+          phoneNumber: decodedPhone,
+          templateName: "<text>",
+          templateLanguage: "",
+          templateVariablesJson: { text: body.text },
+          providerMessageId: result.messages?.[0]?.id ?? null,
+          status: "SENT",
+          sentBy: user.email,
+          sentAt: new Date(),
+        },
+      });
+    } catch {
+      // ignore logging failure
     }
 
     return NextResponse.json({

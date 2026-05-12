@@ -26,6 +26,22 @@ export async function handleAiAutoReply(
   const apiKey = await getSetting(SETTING_KEYS.OPENAI_API_KEY);
   if (!apiKey) return { replied: false, error: "OpenAI API key not configured" };
 
+  // Check product type filter
+  const productTypesFilter = await getSetting(SETTING_KEYS.AI_AGENT_PRODUCT_TYPES);
+  if (productTypesFilter && order?.productName) {
+    const allowedTypes = productTypesFilter.split(",").map((t) => t.trim().toLowerCase()).filter(Boolean);
+    if (allowedTypes.length > 0) {
+      const product = await prisma.product.findFirst({
+        where: { name: order.productName },
+        select: { productType: true },
+      });
+      const orderType = product?.productType?.toLowerCase() || "";
+      if (!allowedTypes.some((t) => orderType.includes(t))) {
+        return { replied: false, error: "Order product type not in allowed list" };
+      }
+    }
+  }
+
   const model = (await getSetting(SETTING_KEYS.AI_AGENT_MODEL)) || "gpt-4o-mini";
   const maxTokens = parseInt(
     (await getSetting(SETTING_KEYS.AI_AGENT_MAX_TOKENS)) || "300",

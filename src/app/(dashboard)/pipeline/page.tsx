@@ -83,6 +83,7 @@ interface PipelineOrder {
   status: OrderStatus;
   codCreatedAt: string | null;
   whatsappSentAt: string | null;
+  productImageUrl: string | null;
 }
 
 interface TemplateInfo {
@@ -602,7 +603,15 @@ function Card({
           )}
           {order.productName && (
             <div className="flex items-center gap-1.5 text-gray-700">
-              <PackageIcon size={11} className="shrink-0 text-gray-400" />
+              {order.productImageUrl ? (
+                <img
+                  src={order.productImageUrl}
+                  alt=""
+                  className="w-6 h-6 rounded object-cover shrink-0 border border-gray-200"
+                />
+              ) : (
+                <PackageIcon size={11} className="shrink-0 text-gray-400" />
+              )}
               <span className="truncate">{order.productName}</span>
             </div>
           )}

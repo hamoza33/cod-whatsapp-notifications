@@ -504,6 +504,7 @@ export default function SettingsPage() {
               "ai_agent_model",
               "ai_agent_system_prompt",
               "ai_agent_max_tokens",
+              "ai_agent_product_types",
             ])
           }
           saving={saving}
@@ -547,13 +548,27 @@ export default function SettingsPage() {
             }
             help="Your OpenAI API key from platform.openai.com/api-keys"
           />
-          <SettingsField
-            label="Model"
-            value={settings.ai_agent_model || "gpt-4o-mini"}
-            onChange={(v) => updateSetting("ai_agent_model", v)}
-            placeholder="gpt-4o-mini"
-            help="OpenAI model to use. gpt-4o-mini is cost-effective; gpt-4o for higher quality."
-          />
+          <div className="mb-4">
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Model
+            </label>
+            <select
+              value={settings.ai_agent_model || "gpt-4o-mini"}
+              onChange={(e) => updateSetting("ai_agent_model", e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+            >
+              <option value="gpt-4o-mini">GPT-4o Mini (fast, cost-effective)</option>
+              <option value="gpt-4o">GPT-4o (high quality)</option>
+              <option value="gpt-4.1-mini">GPT-4.1 Mini (latest mini)</option>
+              <option value="gpt-4.1">GPT-4.1 (latest)</option>
+              <option value="gpt-4.1-nano">GPT-4.1 Nano (fastest)</option>
+              <option value="gpt-3.5-turbo">GPT-3.5 Turbo (legacy, cheapest)</option>
+              <option value="o4-mini">o4-mini (reasoning)</option>
+            </select>
+            <p className="mt-1 text-xs text-gray-500">
+              Select the OpenAI model for AI auto-replies.
+            </p>
+          </div>
           <SettingsField
             label="Max Response Tokens"
             value={settings.ai_agent_max_tokens || "300"}
@@ -575,6 +590,21 @@ export default function SettingsPage() {
             />
             <p className="mt-1 text-xs text-gray-500">
               Instructions for the AI agent. Use {"{customer_name}"}, {"{product}"}, {"{order_status}"}, {"{tracking}"} as placeholders — they will be replaced with real order data.
+            </p>
+          </div>
+          <div className="mb-4">
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Product Type Filter
+            </label>
+            <input
+              type="text"
+              value={settings.ai_agent_product_types || ""}
+              onChange={(e) => updateSetting("ai_agent_product_types", e.target.value)}
+              placeholder="e.g. Gadget, Beauty (comma-separated, or leave empty for all)"
+              className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+            <p className="mt-1 text-xs text-gray-500">
+              Comma-separated list of product types. AI agent will only auto-respond for orders matching these types. Leave empty to respond to all products.
             </p>
           </div>
         </SettingsSection>
