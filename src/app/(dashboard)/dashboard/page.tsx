@@ -225,14 +225,14 @@ function StatCard({
   };
 
   return (
-    <div className="bg-white rounded-lg shadow-sm p-4 border border-gray-200">
+    <div className="bg-white rounded-xl shadow-sm p-4 border border-gray-100 hover:shadow-md transition-shadow">
       <div className="flex items-center justify-between">
         <div>
-          <p className="text-xs text-gray-500 mb-1">{label}</p>
-          <p className="text-xl font-bold text-gray-900">{value}</p>
+          <p className="text-[11px] font-medium text-gray-400 uppercase tracking-wide mb-1">{label}</p>
+          <p className="text-2xl font-bold text-gray-900">{value}</p>
         </div>
         <div
-          className={`w-10 h-10 rounded-full flex items-center justify-center ${
+          className={`w-10 h-10 rounded-xl flex items-center justify-center ${
             colorMap[color] || colorMap.blue
           }`}
         >

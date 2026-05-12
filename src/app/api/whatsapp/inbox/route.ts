@@ -3,8 +3,13 @@ import { getAuthUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 
 /**
- * Returns one row per inbound contact, with their most recent inbound +
- * outbound activity. Used by the Inbox conversation list.
+ * Returns one row per contact (both inbound and outbound-only), with their
+ * most recent activity. Used by the Inbox conversation list.
+ *
+ * Merges:
+ * 1. Inbound conversations (from inbound_messages)
+ * 2. Outbound-only conversations (from whatsapp_messages where the phone has
+ *    no inbound messages) — so every sent WhatsApp message is visible.
  */
 export async function GET(request: NextRequest) {
   const user = getAuthUser(request);
@@ -12,10 +17,8 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  // Group inbound messages by phone — Postgres doesn't expose `groupBy +
-  // include` cleanly through Prisma so we do a raw query, then a follow-up
-  // join to load contact name / last message / matching order.
-  const rows = await prisma.$queryRaw<
+  // 1. Inbound conversations grouped by phone
+  const inboundRows = await prisma.$queryRaw<
     Array<{
       from_phone_number: string;
       last_received_at: Date;
@@ -41,8 +44,38 @@ export async function GET(request: NextRequest) {
     ORDER BY from_phone_number, received_at DESC
   `;
 
-  const conversations = await Promise.all(
-    rows.map(async (row) => {
+  // 2. Outbound-only conversations: phones that have outbound messages
+  //    but NO inbound messages
+  const outboundRows = await prisma.$queryRaw<
+    Array<{
+      phone_number: string;
+      last_sent_at: Date;
+      total_messages: bigint;
+      last_template: string;
+      order_id: string | null;
+    }>
+  >`
+    SELECT DISTINCT ON (wm.phone_number)
+      wm.phone_number,
+      COALESCE(wm.sent_at, wm.created_at) AS last_sent_at,
+      (
+        SELECT COUNT(*) FROM whatsapp_messages wm2
+        WHERE wm2.phone_number = wm.phone_number
+      ) AS total_messages,
+      wm.template_name AS last_template,
+      wm.order_id
+    FROM whatsapp_messages wm
+    WHERE NOT EXISTS (
+      SELECT 1 FROM inbound_messages im
+      WHERE im.from_phone_number = wm.phone_number
+    )
+    ORDER BY wm.phone_number, COALESCE(wm.sent_at, wm.created_at) DESC
+  `;
+
+  const inboundPhones = new Set(inboundRows.map((r) => r.from_phone_number));
+
+  const conversations = await Promise.all([
+    ...inboundRows.map(async (row) => {
       const order = row.order_id
         ? await prisma.order.findUnique({
             where: { id: row.order_id },
@@ -63,11 +96,37 @@ export async function GET(request: NextRequest) {
         lastType: row.last_type,
         totalMessages: Number(row.total_messages),
         order,
+        isOutboundOnly: false,
       };
-    })
-  );
+    }),
+    ...outboundRows
+      .filter((r) => !inboundPhones.has(r.phone_number))
+      .map(async (row) => {
+        const order = row.order_id
+          ? await prisma.order.findUnique({
+              where: { id: row.order_id },
+              select: {
+                id: true,
+                codNetworkOrderId: true,
+                customerName: true,
+                productName: true,
+                status: true,
+              },
+            })
+          : null;
+        return {
+          phoneNumber: row.phone_number,
+          contactName: order?.customerName ?? null,
+          lastReceivedAt: row.last_sent_at,
+          lastText: `Template: ${row.last_template}`,
+          lastType: "template",
+          totalMessages: Number(row.total_messages),
+          order,
+          isOutboundOnly: true,
+        };
+      }),
+  ]);
 
-  // Newest-first conversation list.
   conversations.sort(
     (a, b) =>
       new Date(b.lastReceivedAt).getTime() -

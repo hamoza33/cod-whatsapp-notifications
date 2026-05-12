@@ -22,6 +22,7 @@ interface Conversation {
   lastText: string | null;
   lastType: string;
   totalMessages: number;
+  isOutboundOnly?: boolean;
   order: {
     id: string;
     codNetworkOrderId: string;
@@ -299,6 +300,12 @@ export default function InboxPage() {
                   {c.order && (
                     <div className="text-[11px] text-[#008069] mt-0.5 truncate font-medium">
                       Order #{c.order.codNetworkOrderId} · {c.order.status}
+                    </div>
+                  )}
+                  {c.isOutboundOnly && !c.order && (
+                    <div className="text-[11px] text-[#667781] mt-0.5 flex items-center gap-1">
+                      <Send size={9} />
+                      Outbound only
                     </div>
                   )}
                 </div>
