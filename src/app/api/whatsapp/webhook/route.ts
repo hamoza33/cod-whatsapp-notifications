@@ -149,8 +149,11 @@ export async function POST(request: NextRequest) {
   const signatureHeader = request.headers.get("x-hub-signature-256");
   const appSecret = await getSetting(SETTING_KEYS.WHATSAPP_APP_SECRET);
 
+  console.log("[webhook] POST received, body length:", rawBody.length);
+
   if (appSecret) {
     if (!verifySignature(rawBody, signatureHeader, appSecret)) {
+      console.warn("[webhook] signature verification failed");
       return new NextResponse("invalid signature", { status: 401 });
     }
   }
@@ -178,12 +181,15 @@ export async function POST(request: NextRequest) {
       }
 
       // Persist inbound messages
-      for (const msg of value.messages ?? []) {
+      const msgs = value.messages ?? [];
+      console.log("[webhook] processing", msgs.length, "inbound message(s)");
+      for (const msg of msgs) {
         if (!msg.id || !msg.from) continue;
         const fromPhone = normalizePhone(msg.from);
         const orderId = await findOrderByPhone(msg.from);
         const text = extractText(msg);
         const { id: mediaId, mimeType } = extractMedia(msg);
+        console.log("[webhook] persisting message from", fromPhone, "type:", msg.type, "text:", text?.slice(0, 50));
         try {
           await prisma.inboundMessage.create({
             data: {
