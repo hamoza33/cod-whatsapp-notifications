@@ -47,6 +47,10 @@ model Order {
   // the Webhook Lead Status events. Nullable+unique so historical orders can
   // be back-filled when a webhook eventually delivers the lead id.
   codNetworkLeadId    String?     @unique @map("cod_network_lead_id")
+  // Manually-created order — never reset by a sync from COD Network. The
+  // `codNetworkOrderId` for manual orders is a generated `MANUAL-<random>`
+  // string so the unique index is preserved.
+  isManual            Boolean     @default(false) @map("is_manual")
   customerName        String?     @map("customer_name")
   customerPhone       String?     @map("customer_phone")
   customerCity        String?     @map("customer_city")
@@ -200,6 +204,15 @@ model Automation {
   thenMoveToStatus         OrderStatus? @map("then_move_to_status")
   thenSendTemplateName     String?      @map("then_send_template_name")
   thenSendTemplateLanguage String?      @map("then_send_template_language")
+  // Ordered list of variable mappings — one entry per body param in the
+  // WhatsApp template. Each entry is either a literal string (e.g. "Hello")
+  // or a token like `{customer_name}`, `{phone}`, `{product}`, `{price}`,
+  // `{quantity}`, `{tracking}`, `{order_id}`, `{lead_id}`, `{city}`. The
+  // sender resolves the tokens against the order being processed.
+  thenSendTemplateVariables Json?       @map("then_send_template_variables")
+  // Optional header image URL — used when the template has an IMAGE header.
+  // If null, the per-Settings default header image URL is used.
+  thenSendHeaderImageUrl   String?      @map("then_send_header_image_url")
   thenSendOnce             Boolean      @default(true) @map("then_send_once")
   createdAt                DateTime     @default(now()) @map("created_at")
   updatedAt                DateTime     @updatedAt @map("updated_at")
@@ -230,4 +243,36 @@ model AutomationRun {
   @@unique([automationId, orderId])
   @@index([orderId])
   @@map("automation_runs")
+}
+
+/// Cached catalog of products pulled from COD Network's seller API
+/// (`GET /v2/seller/products`). Refreshed by the sync cron + on-demand via
+/// `/api/products/sync`. Surfaced in the Automation editor so the operator
+/// can pick products by name/SKU when writing rules (cleaner than typing a
+/// substring) and in the Manual Order form so they can autocomplete the
+/// product fields.
+model Product {
+  id                 String   @id @default(cuid())
+  codNetworkProductId String  @unique @map("cod_network_product_id")
+  sku                String?
+  name               String
+  nameArabic         String?  @map("name_arabic")
+  imageUrl           String?  @map("image_url")
+  // String to preserve currency precision (COD returns e.g. "199.00").
+  price              String?
+  currency           String?
+  // From COD type.label — e.g. "Gadget", "Beauty", etc.
+  productType        String?  @map("product_type")
+  // From COD status.label — e.g. "Enabled", "Disabled".
+  productStatus      String?  @map("product_status")
+  // Direct link to the seller's landing page for the product (from COD).
+  storeUrl           String?  @map("store_url")
+  rawProductJson    Json?    @map("raw_product_json")
+  lastSyncedAt       DateTime @default(now()) @map("last_synced_at")
+  createdAt          DateTime @default(now()) @map("created_at")
+  updatedAt          DateTime @updatedAt @map("updated_at")
+
+  @@index([name])
+  @@index([sku])
+  @@map("products")
 }

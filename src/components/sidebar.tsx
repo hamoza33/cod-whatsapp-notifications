@@ -14,6 +14,7 @@ import {
   Inbox,
   Zap,
   FileText,
+  ShoppingBag,
 } from "lucide-react";
 import { api } from "@/lib/api-client";
 import { useRouter } from "next/navigation";
@@ -22,6 +23,7 @@ const navItems = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { href: "/orders", label: "Orders", icon: Package },
   { href: "/pipeline", label: "Pipeline", icon: Columns3 },
+  { href: "/products", label: "Products", icon: ShoppingBag },
   { href: "/inbox", label: "WhatsApp Inbox", icon: Inbox },
   { href: "/automations", label: "Automations", icon: Zap },
   { href: "/templates", label: "Templates", icon: FileText },

@@ -1,6 +1,7 @@
 import { syncOrders, isSyncInProgress } from "./sync";
 import { getSetting, setSetting, SETTING_KEYS } from "./settings";
 import { importTemplatesFromMeta } from "./template-import";
+import { syncProductsFromCodNetwork } from "./product-sync";
 
 /**
  * Lightweight in-process scheduler that runs `syncOrders()` on a recurring
@@ -15,6 +16,7 @@ declare global {
   var __codWhatsappAutoSyncStarted__: boolean | undefined;
   var __codWhatsappAutoSyncTimer__: NodeJS.Timeout | undefined;
   var __codWhatsappTemplateImportTimer__: NodeJS.Timeout | undefined;
+  var __codWhatsappProductSyncTimer__: NodeJS.Timeout | undefined;
 }
 
 const DEFAULT_INTERVAL_MINUTES = 5;
@@ -22,6 +24,9 @@ const MIN_INTERVAL_MINUTES = 1;
 // Templates rarely change, so a long cadence is fine. The user can also
 // click "Sync now" in /templates whenever they want a fresh pull.
 const TEMPLATE_IMPORT_INTERVAL_MINUTES = 6 * 60;
+// Products change occasionally — once an hour keeps the automation editor
+// product picker fresh without hammering COD Network.
+const PRODUCT_SYNC_INTERVAL_MINUTES = 60;
 
 let lastRunStartedAt: Date | null = null;
 let lastRunFinishedAt: Date | null = null;
@@ -100,6 +105,7 @@ export async function startAutoSync(): Promise<void> {
   // Kick off the template-import cron alongside the order-sync cron. It
   // runs much less frequently (every 6 hours) so it won't slow boot time.
   startTemplateImportCron();
+  startProductSyncCron();
 }
 
 async function tickTemplateImport(): Promise<void> {
@@ -138,6 +144,40 @@ function startTemplateImportCron(): void {
   );
   if (typeof timer.unref === "function") timer.unref();
   globalThis.__codWhatsappTemplateImportTimer__ = timer;
+}
+
+async function tickProductSync(): Promise<void> {
+  try {
+    const result = await syncProductsFromCodNetwork();
+    console.log(
+      `[product-sync] cron pulled ${result.fetched} products (${result.created} new, ${result.updated} updated)`
+    );
+  } catch (err) {
+    // Products are non-critical — never crash the process if COD is down or
+    // the user hasn't configured COD creds yet.
+    console.warn(
+      "[product-sync] cron tick failed",
+      err instanceof Error ? err.message : err
+    );
+  }
+}
+
+function startProductSyncCron(): void {
+  if (globalThis.__codWhatsappProductSyncTimer__) return;
+  // Run 90 seconds after boot so the first visit to /products + the
+  // automation editor's product picker have data, then settle into the
+  // hourly cadence.
+  setTimeout(() => {
+    tickProductSync().catch(() => undefined);
+  }, 90_000);
+  const timer = setInterval(
+    () => {
+      tickProductSync().catch(() => undefined);
+    },
+    PRODUCT_SYNC_INTERVAL_MINUTES * 60 * 1000
+  );
+  if (typeof timer.unref === "function") timer.unref();
+  globalThis.__codWhatsappProductSyncTimer__ = timer;
 }
 
 export function getAutoSyncStatus(): AutoSyncStatus {
