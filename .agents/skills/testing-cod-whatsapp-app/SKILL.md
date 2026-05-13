@@ -1,6 +1,6 @@
 ---
 name: testing-cod-whatsapp-app
-description: Reference knowledge for testing the COD WhatsApp Notifications app — local accounts, webhook HMAC signing pattern, known WABA-vs-PNI gotcha, and Devin-tunnel basic-auth limitation. Use when verifying changes to /api/cod-network/webhook/*, /api/whatsapp/*, or the Settings/Pipeline/Automations/Templates pages.
+description: Reference knowledge for testing the COD WhatsApp Notifications app — local accounts, webhook HMAC signing pattern, known WABA-vs-PNI gotcha, Devin-tunnel basic-auth limitation, and PR #12 feature testing patterns. Use when verifying changes to /api/cod-network/webhook/*, /api/whatsapp/*, /api/voice-agent/*, or the Settings/Pipeline/Automations/Templates/Products pages.
 ---
 
 # Testing the COD WhatsApp Notifications app
@@ -73,14 +73,59 @@ The real WABA ID lives in **Meta Business Manager → WhatsApp Manager → API S
 
 ## Sending a template message to the real test recipient
 
-Use the Test Message page (`/test-message`) with the user's recipient `+212690415194` for end-to-end verification. Default template `kuwait_ezihear_no_reply` (en) requires 2 body parameters + 1 IMAGE header parameter. Example body parameters: `Hamza, ORDER-12345`. For the image header, any public HTTPS image URL works (e.g. `https://upload.wikimedia.org/wikipedia/commons/thumb/4/47/PNG_transparency_demonstration_1.png/600px-PNG_transparency_demonstration_1.png`).
+See the `testing-cod-whatsapp` skill for login + curl patterns.
 
-Success is indicated by a green banner on the Test Message page: *"Test message sent using template '...' (en). Check the recipient's WhatsApp."*
+## Testing Call Agent column (Pipeline)
 
-## Drag-and-drop on /pipeline
+The Call Agent column groups orders where `callAgentQueued = true`. To test:
 
-The computer-use `left_click_drag` is unreliable on `react-dnd` cards in this app — drags often snap back. Prefer one of:
-- The keyboard-accessible status change in `/orders` (status dropdown) — same `PATCH /api/orders/[id]` path.
-- CDP-driven `dispatchEvent(new DragEvent(...))` sequence via `browser_console`. See the previous testing-cod-whatsapp-app skill / past PR comments for a working snippet.
+1. Pick any order ID (e.g., from `GET /api/orders?pageSize=5`)
+2. `PATCH /api/orders/:id` with `{"callAgentQueued": true}` — order moves to Call Agent column
+3. Refresh `/pipeline` and verify the card appears in the purple "CALL AGENT" column
+4. **Important**: After PATCH, you may need to click the Refresh button on the pipeline page to force a client-side data refetch. The page might show stale cached data.
+5. Revert with `{"callAgentQueued": false}` after testing
 
-Both paths fire the same automations engine via `runAutomationsForOrder(orderId)`.
+## Testing multi-product images on pipeline cards
+
+Orders with multiple products in `rawOrderJson.items` show multiple `<img>` elements on the card. Check the DOM for orders like "Nour Ali #807054" or "jari alharithi #767724" — they should have 2+ `<img>` tags and combined product names like "Varicose 3 vein cream, Electric Foot Massager".
+
+Visual scrolling to find these cards might be slow — checking the DOM is more reliable.
+
+## Testing WA Numbers CRUD
+
+Create test numbers via API, verify they appear in Settings > WA Numbers tab, then clean up:
+
+```bash
+# Create
+curl -s -b /tmp/cookies.txt -X POST $BASE_URL/api/whatsapp/numbers \
+  -H 'content-type: application/json' \
+  -d '{"label":"Test Number","phoneNumberId":"123456","displayPhone":"+212600000000"}'
+
+# List
+curl -s -b /tmp/cookies.txt $BASE_URL/api/whatsapp/numbers
+
+# Delete (use the id from create response)
+curl -s -b /tmp/cookies.txt -X DELETE $BASE_URL/api/whatsapp/numbers/<id>
+```
+
+## Testing Inbox WA number dropdown
+
+The dropdown only appears when **2 or more** WA numbers are configured. Create 2+ numbers first, then navigate to `/inbox`, select a conversation, and verify the `<select>` element appears in the chat header.
+
+## Testing Voice Agent tab
+
+Navigate to Settings > Voice Agent tab. Verify all fields render: Enable toggle, Provider dropdown (ElevenLabs/Bland AI), Voice API Key, Voice ID, Caller ID, Language (6 options), Call Script/System Prompt, Webhook URL, LLM API Key, LLM Model.
+
+## Testing Voice Agent API error handling
+
+```bash
+curl -s -b /tmp/cookies.txt -X POST $BASE_URL/api/voice-agent \
+  -H 'content-type: application/json' \
+  -d '{"orderId":"<any-valid-order-id>"}'
+```
+
+Expected: structured error JSON like `{"error":"Voice agent is not enabled..."}` — NOT a 500 crash.
+
+## Known gotcha: Product import might fail with schema errors
+
+The `POST /api/products/sync` endpoint might fail if the product sync code references database columns that don't exist in the current migration (e.g., `products.description`). Check for "Unexpected end of JSON input" errors on the Products page, which may indicate schema mismatches. The Products page error and the sync endpoint error are related — both stem from the product table schema.
