@@ -18,10 +18,12 @@ export async function GET(request: NextRequest) {
   const search = searchParams.get("search");
   const dateFrom = searchParams.get("dateFrom");
   const dateTo = searchParams.get("dateTo");
+  const product = searchParams.get("product");
 
   const where: Record<string, unknown> = {};
   if (carrier) where.carrier = carrier;
   if (status) where.status = status;
+  if (product) where.productName = { contains: product, mode: "insensitive" };
   if (search) {
     where.OR = [
       { trackingNumber: { contains: search, mode: "insensitive" } },

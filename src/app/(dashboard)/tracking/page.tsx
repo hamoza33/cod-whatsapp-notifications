@@ -112,6 +112,8 @@ export default function TrackingPage() {
   const [search, setSearch] = useState("");
   const [filterCarrier, setFilterCarrier] = useState<string>("");
   const [filterStatus, setFilterStatus] = useState<string>("");
+  const [filterProduct, setFilterProduct] = useState<string>("");
+  const [productNames, setProductNames] = useState<string[]>([]);
   const [dateFrom, setDateFrom] = useState<string>("");
   const [dateTo, setDateTo] = useState<string>("");
   const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -133,6 +135,7 @@ export default function TrackingPage() {
       const params: Record<string, string> = {};
       if (filterCarrier) params.carrier = filterCarrier;
       if (filterStatus) params.status = filterStatus;
+      if (filterProduct) params.product = filterProduct;
       if (search) params.search = search;
       if (dateFrom) params.dateFrom = dateFrom;
       if (dateTo) params.dateTo = dateTo;
@@ -141,6 +144,13 @@ export default function TrackingPage() {
         imported: number;
       }>("/tracking", params);
       setOrders(data.orders);
+      // Build product name list from all returned orders
+      const names = new Set<string>();
+      for (const o of data.orders) {
+        const pn = o.productName || o.order?.productName;
+        if (pn) names.add(pn);
+      }
+      setProductNames(Array.from(names).sort());
       if (data.imported > 0) {
         setImported(data.imported);
         showToast(
@@ -156,7 +166,7 @@ export default function TrackingPage() {
     } finally {
       setLoading(false);
     }
-  }, [filterCarrier, filterStatus, search, dateFrom, dateTo, showToast]);
+  }, [filterCarrier, filterStatus, filterProduct, search, dateFrom, dateTo, showToast]);
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
@@ -233,6 +243,7 @@ export default function TrackingPage() {
     const params = new URLSearchParams();
     if (filterCarrier) params.set("carrier", filterCarrier);
     if (filterStatus) params.set("status", filterStatus);
+    if (filterProduct) params.set("product", filterProduct);
     if (search) params.set("search", search);
     if (dateFrom) params.set("dateFrom", dateFrom);
     if (dateTo) params.set("dateTo", dateTo);
@@ -372,6 +383,18 @@ export default function TrackingPage() {
           <option value="INJAZ">Injaz Express</option>
           <option value="OTHER">Other</option>
         </select>
+        <select
+          value={filterProduct}
+          onChange={(e) => setFilterProduct(e.target.value)}
+          className="px-3 py-2 border border-gray-300 rounded-md text-sm bg-white max-w-[200px]"
+        >
+          <option value="">All Products</option>
+          {productNames.map((name) => (
+            <option key={name} value={name}>
+              {name}
+            </option>
+          ))}
+        </select>
         <div className="flex items-center gap-2">
           <label className="text-xs text-gray-500">From:</label>
           <input
@@ -390,13 +413,14 @@ export default function TrackingPage() {
             className="px-3 py-2 border border-gray-300 rounded-md text-sm bg-white"
           />
         </div>
-        {(dateFrom || dateTo || filterCarrier || filterStatus) && (
+        {(dateFrom || dateTo || filterCarrier || filterStatus || filterProduct) && (
           <button
             onClick={() => {
               setDateFrom("");
               setDateTo("");
               setFilterCarrier("");
               setFilterStatus("");
+              setFilterProduct("");
             }}
             className="px-3 py-2 text-sm text-red-600 hover:text-red-700"
           >
@@ -440,7 +464,7 @@ export default function TrackingPage() {
         <div className="bg-white border border-dashed border-gray-300 rounded-lg p-8 text-center">
           <Package className="mx-auto text-gray-300" size={32} />
           <p className="text-gray-500 mt-2 text-sm">
-            {filterCarrier || filterStatus || dateFrom || dateTo || search
+            {filterCarrier || filterStatus || filterProduct || dateFrom || dateTo || search
               ? "No orders match your current filters."
               : 'No orders with tracking numbers found. Click "Sync All Orders" to import all orders from COD Network since January 2025.'}
           </p>
