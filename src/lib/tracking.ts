@@ -256,8 +256,9 @@ export async function refreshTracking(trackingOrderId: string) {
 }
 
 // ---------------------------------------------------------------------------
-// Auto-import: scan the orders table for tracking numbers that match iMile
-// or Injaz patterns and create TrackingOrder records for any new ones.
+// Auto-import: scan the orders table for ALL orders with tracking numbers
+// and create TrackingOrder records. iMile/Injaz get auto-status-fetching;
+// other carriers are listed as OTHER with the delivery company name.
 // ---------------------------------------------------------------------------
 
 export async function syncTrackingFromOrders() {
@@ -270,6 +271,9 @@ export async function syncTrackingFromOrders() {
       trackingNumber: true,
       customerName: true,
       customerPhone: true,
+      deliveryCompany: true,
+      productName: true,
+      codCreatedAt: true,
     },
   });
 
@@ -279,11 +283,7 @@ export async function syncTrackingFromOrders() {
   for (const order of orders) {
     if (!order.trackingNumber) continue;
     const tn = order.trackingNumber.trim();
-    const carrier = detectCarrier(tn);
-    if (!carrier) {
-      skipped++;
-      continue;
-    }
+    if (!tn) { skipped++; continue; }
 
     const existing = await prisma.trackingOrder.findUnique({
       where: { trackingNumber: tn },
@@ -293,12 +293,23 @@ export async function syncTrackingFromOrders() {
       continue;
     }
 
+    const carrier = detectCarrier(tn) ?? TrackingCarrier.OTHER;
+    const carrierName =
+      carrier === TrackingCarrier.IMILE
+        ? "iMile"
+        : carrier === TrackingCarrier.INJAZ
+          ? "Injaz Express"
+          : order.deliveryCompany || "Other";
+
     await prisma.trackingOrder.create({
       data: {
         trackingNumber: tn,
         carrier,
+        carrierName,
         customerName: order.customerName,
         customerPhone: order.customerPhone,
+        productName: order.productName,
+        codCreatedAt: order.codCreatedAt,
         orderId: order.id,
       },
     });

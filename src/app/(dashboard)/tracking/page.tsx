@@ -12,9 +12,11 @@ import {
   ExternalLink,
   Search,
   Clock,
+  Download,
+  Database,
 } from "lucide-react";
 
-type TrackingCarrier = "IMILE" | "INJAZ";
+type TrackingCarrier = "IMILE" | "INJAZ" | "OTHER";
 type TrackingStatus =
   | "PENDING"
   | "IN_TRANSIT"
@@ -36,11 +38,14 @@ interface TrackingOrder {
   id: string;
   trackingNumber: string;
   carrier: TrackingCarrier;
+  carrierName: string | null;
   status: TrackingStatus;
   latestEvent: string | null;
   latestEventAt: string | null;
   customerName: string | null;
   customerPhone: string | null;
+  productName: string | null;
+  codCreatedAt: string | null;
   lastCheckedAt: string | null;
   createdAt: string;
   events: TrackingEvent[];
@@ -52,14 +57,14 @@ interface TrackingOrder {
   } | null;
 }
 
-const STATUS_COLORS: Record<TrackingStatus, { bg: string; text: string; dot: string }> = {
-  PENDING: { bg: "bg-gray-100", text: "text-gray-700", dot: "bg-gray-400" },
-  IN_TRANSIT: { bg: "bg-blue-100", text: "text-blue-700", dot: "bg-blue-500" },
-  OUT_FOR_DELIVERY: { bg: "bg-amber-100", text: "text-amber-700", dot: "bg-amber-500" },
-  DELIVERED: { bg: "bg-green-100", text: "text-green-700", dot: "bg-green-500" },
-  RETURNED: { bg: "bg-red-100", text: "text-red-700", dot: "bg-red-500" },
-  EXCEPTION: { bg: "bg-orange-100", text: "text-orange-700", dot: "bg-orange-500" },
-  UNKNOWN: { bg: "bg-gray-100", text: "text-gray-500", dot: "bg-gray-300" },
+const STATUS_COLORS: Record<TrackingStatus, { bg: string; text: string }> = {
+  PENDING: { bg: "bg-gray-100", text: "text-gray-700" },
+  IN_TRANSIT: { bg: "bg-blue-100", text: "text-blue-700" },
+  OUT_FOR_DELIVERY: { bg: "bg-amber-100", text: "text-amber-700" },
+  DELIVERED: { bg: "bg-green-100", text: "text-green-700" },
+  RETURNED: { bg: "bg-red-100", text: "text-red-700" },
+  EXCEPTION: { bg: "bg-orange-100", text: "text-orange-700" },
+  UNKNOWN: { bg: "bg-gray-100", text: "text-gray-500" },
 };
 
 const STATUS_LABELS: Record<TrackingStatus, string> = {
@@ -72,33 +77,56 @@ const STATUS_LABELS: Record<TrackingStatus, string> = {
   UNKNOWN: "Unknown",
 };
 
-const CARRIER_LABELS: Record<TrackingCarrier, string> = {
-  IMILE: "iMile",
-  INJAZ: "Injaz Express",
-};
+function carrierLabel(order: TrackingOrder): string {
+  if (order.carrierName) return order.carrierName;
+  if (order.carrier === "IMILE") return "iMile";
+  if (order.carrier === "INJAZ") return "Injaz Express";
+  return "Other";
+}
 
-function trackingUrl(carrier: TrackingCarrier, trackingNumber: string): string {
+function trackingUrl(
+  carrier: TrackingCarrier,
+  trackingNumber: string
+): string | null {
   if (carrier === "IMILE") {
     return `https://www.imile.com/AE-en/track?waybillNo=${trackingNumber}`;
   }
-  return "https://injaz-express.com/track_order.php";
+  if (carrier === "INJAZ") {
+    return "https://injaz-express.com/track_order.php";
+  }
+  return null;
+}
+
+function carrierIcon(carrier: TrackingCarrier): string {
+  if (carrier === "IMILE") return "bg-blue-100 text-blue-600";
+  if (carrier === "INJAZ") return "bg-orange-100 text-orange-600";
+  return "bg-gray-100 text-gray-600";
 }
 
 export default function TrackingPage() {
   const [orders, setOrders] = useState<TrackingOrder[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [syncing, setSyncing] = useState(false);
   const [imported, setImported] = useState(0);
   const [search, setSearch] = useState("");
   const [filterCarrier, setFilterCarrier] = useState<string>("");
   const [filterStatus, setFilterStatus] = useState<string>("");
+  const [dateFrom, setDateFrom] = useState<string>("");
+  const [dateTo, setDateTo] = useState<string>("");
   const [expandedId, setExpandedId] = useState<string | null>(null);
-  const [toast, setToast] = useState<{ kind: "success" | "error"; text: string } | null>(null);
+  const [toast, setToast] = useState<{
+    kind: "success" | "error";
+    text: string;
+  } | null>(null);
 
-  const showToast = useCallback((kind: "success" | "error", text: string) => {
-    setToast({ kind, text });
-    setTimeout(() => setToast(null), 4000);
-  }, []);
+  const showToast = useCallback(
+    (kind: "success" | "error", text: string) => {
+      setToast({ kind, text });
+      setTimeout(() => setToast(null), 4000);
+    },
+    []
+  );
 
   const fetchOrders = useCallback(async () => {
     try {
@@ -106,21 +134,29 @@ export default function TrackingPage() {
       if (filterCarrier) params.carrier = filterCarrier;
       if (filterStatus) params.status = filterStatus;
       if (search) params.search = search;
-      const data = await api.get<{ orders: TrackingOrder[]; imported: number }>(
-        "/tracking",
-        params
-      );
+      if (dateFrom) params.dateFrom = dateFrom;
+      if (dateTo) params.dateTo = dateTo;
+      const data = await api.get<{
+        orders: TrackingOrder[];
+        imported: number;
+      }>("/tracking", params);
       setOrders(data.orders);
       if (data.imported > 0) {
         setImported(data.imported);
-        showToast("success", `Auto-imported ${data.imported} new order(s) for tracking`);
+        showToast(
+          "success",
+          `Auto-imported ${data.imported} new order(s) for tracking`
+        );
       }
     } catch (err) {
-      showToast("error", err instanceof Error ? err.message : "Failed to load");
+      showToast(
+        "error",
+        err instanceof Error ? err.message : "Failed to load"
+      );
     } finally {
       setLoading(false);
     }
-  }, [filterCarrier, filterStatus, search, showToast]);
+  }, [filterCarrier, filterStatus, search, dateFrom, dateTo, showToast]);
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
@@ -134,9 +170,35 @@ export default function TrackingPage() {
       await fetchOrders();
       showToast("success", "All tracking data refreshed");
     } catch (err) {
-      showToast("error", err instanceof Error ? err.message : "Refresh failed");
+      showToast(
+        "error",
+        err instanceof Error ? err.message : "Refresh failed"
+      );
     } finally {
       setRefreshing(false);
+    }
+  };
+
+  const handleSyncAll = async () => {
+    setSyncing(true);
+    try {
+      const result = await api.post<{
+        ordersFound: number;
+        ordersCreated: number;
+        trackingImported: number;
+      }>("/tracking/sync");
+      await fetchOrders();
+      showToast(
+        "success",
+        `Synced ${result.ordersFound} orders from COD Network, ${result.trackingImported} new tracking entries`
+      );
+    } catch (err) {
+      showToast(
+        "error",
+        err instanceof Error ? err.message : "Full sync failed"
+      );
+    } finally {
+      setSyncing(false);
     }
   };
 
@@ -146,7 +208,10 @@ export default function TrackingPage() {
       await fetchOrders();
       showToast("success", "Tracking updated");
     } catch (err) {
-      showToast("error", err instanceof Error ? err.message : "Refresh failed");
+      showToast(
+        "error",
+        err instanceof Error ? err.message : "Refresh failed"
+      );
     }
   };
 
@@ -157,8 +222,21 @@ export default function TrackingPage() {
       setOrders((prev) => prev.filter((o) => o.id !== id));
       showToast("success", "Tracking removed");
     } catch (err) {
-      showToast("error", err instanceof Error ? err.message : "Delete failed");
+      showToast(
+        "error",
+        err instanceof Error ? err.message : "Delete failed"
+      );
     }
+  };
+
+  const handleExport = () => {
+    const params = new URLSearchParams();
+    if (filterCarrier) params.set("carrier", filterCarrier);
+    if (filterStatus) params.set("status", filterStatus);
+    if (search) params.set("search", search);
+    if (dateFrom) params.set("dateFrom", dateFrom);
+    if (dateTo) params.set("dateTo", dateTo);
+    window.open(`/api/tracking/export?${params.toString()}`, "_blank");
   };
 
   const statusCounts = orders.reduce(
@@ -169,6 +247,11 @@ export default function TrackingPage() {
     {} as Record<string, number>
   );
 
+  // Unique carrier names for the filter dropdown
+  const carrierNames = Array.from(
+    new Set(orders.map((o) => o.carrierName || o.carrier))
+  ).sort();
+
   return (
     <div className="max-w-6xl">
       <div className="flex items-start justify-between mb-6">
@@ -178,19 +261,43 @@ export default function TrackingPage() {
             Package Tracking
           </h1>
           <p className="text-sm text-gray-600 mt-1">
-            Automatically tracks orders shipped via iMile (tracking # starts
-            with &ldquo;60&rdquo;) and Injaz Express (&ldquo;INJAZ.&rdquo;).
-            Refreshes every 30 minutes.
+            Automatically tracks all orders with tracking numbers. iMile and
+            Injaz Express get live status updates every 30 minutes.
           </p>
         </div>
-        <button
-          onClick={handleRefreshAll}
-          disabled={refreshing}
-          className="flex items-center gap-2 px-3 py-2 bg-blue-600 text-white rounded-md text-sm font-medium hover:bg-blue-700 disabled:opacity-50"
-        >
-          <RefreshCw size={16} className={refreshing ? "animate-spin" : ""} />
-          {refreshing ? "Refreshing..." : "Refresh All"}
-        </button>
+        <div className="flex gap-2">
+          <button
+            onClick={handleSyncAll}
+            disabled={syncing}
+            className="flex items-center gap-2 px-3 py-2 bg-gray-100 text-gray-700 rounded-md text-sm font-medium hover:bg-gray-200 disabled:opacity-50"
+            title="Import all orders from Jan 2025"
+          >
+            <Database
+              size={16}
+              className={syncing ? "animate-pulse" : ""}
+            />
+            {syncing ? "Syncing..." : "Sync All Orders"}
+          </button>
+          <button
+            onClick={handleRefreshAll}
+            disabled={refreshing}
+            className="flex items-center gap-2 px-3 py-2 bg-gray-100 text-gray-700 rounded-md text-sm font-medium hover:bg-gray-200 disabled:opacity-50"
+          >
+            <RefreshCw
+              size={16}
+              className={refreshing ? "animate-spin" : ""}
+            />
+            Refresh All
+          </button>
+          <button
+            onClick={handleExport}
+            disabled={orders.length === 0}
+            className="flex items-center gap-2 px-3 py-2 bg-green-600 text-white rounded-md text-sm font-medium hover:bg-green-700 disabled:opacity-50"
+          >
+            <Download size={16} />
+            Export Excel
+          </button>
+        </div>
       </div>
 
       {toast && (
@@ -207,7 +314,8 @@ export default function TrackingPage() {
 
       {imported > 0 && !toast && (
         <div className="mb-4 p-3 rounded-md text-sm border bg-blue-50 text-blue-700 border-blue-200">
-          Auto-imported {imported} new order(s) from your dashboard for tracking.
+          Auto-imported {imported} new order(s) from your dashboard for
+          tracking.
         </div>
       )}
 
@@ -219,14 +327,18 @@ export default function TrackingPage() {
           return (
             <button
               key={s}
-              onClick={() => setFilterStatus(filterStatus === s ? "" : s)}
+              onClick={() =>
+                setFilterStatus(filterStatus === s ? "" : s)
+              }
               className={`p-3 rounded-lg border text-center transition-all ${
                 filterStatus === s
                   ? "ring-2 ring-blue-500 border-blue-300"
                   : "border-gray-200 hover:border-gray-300"
               }`}
             >
-              <div className={`text-2xl font-bold ${c.text}`}>{count}</div>
+              <div className={`text-2xl font-bold ${c.text}`}>
+                {count}
+              </div>
               <div className="text-xs text-gray-500 mt-0.5">
                 {STATUS_LABELS[s]}
               </div>
@@ -258,7 +370,66 @@ export default function TrackingPage() {
           <option value="">All Carriers</option>
           <option value="IMILE">iMile</option>
           <option value="INJAZ">Injaz Express</option>
+          <option value="OTHER">Other</option>
         </select>
+        <div className="flex items-center gap-2">
+          <label className="text-xs text-gray-500">From:</label>
+          <input
+            type="date"
+            value={dateFrom}
+            onChange={(e) => setDateFrom(e.target.value)}
+            className="px-3 py-2 border border-gray-300 rounded-md text-sm bg-white"
+          />
+        </div>
+        <div className="flex items-center gap-2">
+          <label className="text-xs text-gray-500">To:</label>
+          <input
+            type="date"
+            value={dateTo}
+            onChange={(e) => setDateTo(e.target.value)}
+            className="px-3 py-2 border border-gray-300 rounded-md text-sm bg-white"
+          />
+        </div>
+        {(dateFrom || dateTo || filterCarrier || filterStatus) && (
+          <button
+            onClick={() => {
+              setDateFrom("");
+              setDateTo("");
+              setFilterCarrier("");
+              setFilterStatus("");
+            }}
+            className="px-3 py-2 text-sm text-red-600 hover:text-red-700"
+          >
+            Clear filters
+          </button>
+        )}
+      </div>
+
+      {/* Quick date shortcuts */}
+      <div className="flex gap-2 mb-4">
+        {[
+          { label: "Last 7 days", days: 7 },
+          { label: "Last 30 days", days: 30 },
+          { label: "Last 90 days", days: 90 },
+          { label: "This year", days: 0 },
+        ].map((preset) => (
+          <button
+            key={preset.label}
+            onClick={() => {
+              if (preset.days === 0) {
+                setDateFrom("2025-01-01");
+              } else {
+                const d = new Date();
+                d.setDate(d.getDate() - preset.days);
+                setDateFrom(d.toISOString().slice(0, 10));
+              }
+              setDateTo(new Date().toISOString().slice(0, 10));
+            }}
+            className="px-3 py-1 text-xs border border-gray-200 rounded-full hover:bg-gray-50 text-gray-600"
+          >
+            {preset.label}
+          </button>
+        ))}
       </div>
 
       {loading ? (
@@ -269,26 +440,33 @@ export default function TrackingPage() {
         <div className="bg-white border border-dashed border-gray-300 rounded-lg p-8 text-center">
           <Package className="mx-auto text-gray-300" size={32} />
           <p className="text-gray-500 mt-2 text-sm">
-            No orders with iMile or Injaz Express tracking numbers found.
-            Orders with tracking numbers starting with &ldquo;60&rdquo; or
-            &ldquo;INJAZ.&rdquo; will appear here automatically.
+            {filterCarrier || filterStatus || dateFrom || dateTo || search
+              ? "No orders match your current filters."
+              : 'No orders with tracking numbers found. Click "Sync All Orders" to import all orders from COD Network since January 2025.'}
           </p>
         </div>
       ) : (
-        <div className="space-y-3">
-          {orders.map((order) => (
-            <TrackingCard
-              key={order.id}
-              order={order}
-              expanded={expandedId === order.id}
-              onToggle={() =>
-                setExpandedId(expandedId === order.id ? null : order.id)
-              }
-              onRefresh={() => handleRefreshOne(order.id)}
-              onDelete={() => handleDelete(order.id)}
-            />
-          ))}
-        </div>
+        <>
+          <p className="text-xs text-gray-400 mb-2">
+            {orders.length} order{orders.length !== 1 ? "s" : ""}
+          </p>
+          <div className="space-y-3">
+            {orders.map((order) => (
+              <TrackingCard
+                key={order.id}
+                order={order}
+                expanded={expandedId === order.id}
+                onToggle={() =>
+                  setExpandedId(
+                    expandedId === order.id ? null : order.id
+                  )
+                }
+                onRefresh={() => handleRefreshOne(order.id)}
+                onDelete={() => handleDelete(order.id)}
+              />
+            ))}
+          </div>
+        </>
       )}
     </div>
   );
@@ -313,6 +491,8 @@ function TrackingCard({
 }) {
   const c = STATUS_COLORS[order.status];
   const [refreshing, setRefreshing] = useState(false);
+  const url = trackingUrl(order.carrier, order.trackingNumber);
+  const canRefresh = order.carrier !== "OTHER";
 
   const handleRefresh = async () => {
     setRefreshing(true);
@@ -329,11 +509,7 @@ function TrackingCard({
       >
         {/* Carrier icon */}
         <div
-          className={`w-10 h-10 rounded-lg flex items-center justify-center ${
-            order.carrier === "IMILE"
-              ? "bg-blue-100 text-blue-600"
-              : "bg-orange-100 text-orange-600"
-          }`}
+          className={`w-10 h-10 rounded-lg flex items-center justify-center ${carrierIcon(order.carrier)}`}
         >
           <Truck size={20} />
         </div>
@@ -350,22 +526,29 @@ function TrackingCard({
               {STATUS_LABELS[order.status]}
             </span>
             <span className="text-xs text-gray-400">
-              {CARRIER_LABELS[order.carrier]}
+              {carrierLabel(order)}
             </span>
           </div>
           <div className="text-xs text-gray-500 mt-0.5 truncate">
             {order.latestEvent || "No updates yet"}
             {(order.customerName || order.order?.customerName) && (
               <span className="ml-2 text-gray-400">
-                — {order.customerName || order.order?.customerName}
+                —{" "}
+                {order.customerName || order.order?.customerName}
               </span>
             )}
-            {order.order?.productName && (
+            {(order.productName || order.order?.productName) && (
               <span className="ml-1 text-gray-400">
-                ({order.order.productName})
+                ({order.productName || order.order?.productName})
               </span>
             )}
           </div>
+          {order.codCreatedAt && (
+            <div className="text-xs text-gray-400 mt-0.5">
+              COD Created:{" "}
+              {new Date(order.codCreatedAt).toLocaleDateString()}
+            </div>
+          )}
         </div>
 
         {/* Last checked */}
@@ -381,26 +564,30 @@ function TrackingCard({
           className="flex items-center gap-1"
           onClick={(e) => e.stopPropagation()}
         >
-          <a
-            href={trackingUrl(order.carrier, order.trackingNumber)}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="p-1.5 rounded hover:bg-gray-100 text-gray-400 hover:text-blue-600"
-            title="View on carrier site"
-          >
-            <ExternalLink size={15} />
-          </a>
-          <button
-            onClick={handleRefresh}
-            disabled={refreshing}
-            className="p-1.5 rounded hover:bg-gray-100 text-gray-400 hover:text-blue-600 disabled:opacity-50"
-            title="Refresh tracking"
-          >
-            <RefreshCw
-              size={15}
-              className={refreshing ? "animate-spin" : ""}
-            />
-          </button>
+          {url && (
+            <a
+              href={url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="p-1.5 rounded hover:bg-gray-100 text-gray-400 hover:text-blue-600"
+              title="View on carrier site"
+            >
+              <ExternalLink size={15} />
+            </a>
+          )}
+          {canRefresh && (
+            <button
+              onClick={handleRefresh}
+              disabled={refreshing}
+              className="p-1.5 rounded hover:bg-gray-100 text-gray-400 hover:text-blue-600 disabled:opacity-50"
+              title="Refresh tracking"
+            >
+              <RefreshCw
+                size={15}
+                className={refreshing ? "animate-spin" : ""}
+              />
+            </button>
+          )}
           <button
             onClick={onDelete}
             className="p-1.5 rounded hover:bg-gray-100 text-gray-400 hover:text-red-600"
@@ -422,19 +609,22 @@ function TrackingCard({
         <div className="border-t border-gray-100 px-4 py-4 bg-gray-50">
           {order.events.length === 0 ? (
             <p className="text-sm text-gray-500 text-center py-4">
-              No tracking events yet. Click refresh to fetch the latest status.
+              {canRefresh
+                ? "No tracking events yet. Click refresh to fetch the latest status."
+                : "Live tracking is not available for this carrier. Visit the carrier website for status updates."}
             </p>
           ) : (
             <div className="relative pl-6">
               {order.events.map((evt, i) => {
                 const isFirst = i === 0;
                 return (
-                  <div key={evt.id} className="relative pb-5 last:pb-0">
-                    {/* Vertical line */}
+                  <div
+                    key={evt.id}
+                    className="relative pb-5 last:pb-0"
+                  >
                     {i < order.events.length - 1 && (
                       <div className="absolute left-[-17px] top-[10px] bottom-0 w-0.5 bg-gray-200" />
                     )}
-                    {/* Dot */}
                     <div
                       className={`absolute left-[-21px] top-[5px] w-[9px] h-[9px] rounded-full border-2 ${
                         isFirst
@@ -442,7 +632,6 @@ function TrackingCard({
                           : "bg-white border-gray-300"
                       }`}
                     />
-                    {/* Content */}
                     <div>
                       <p
                         className={`text-sm ${
@@ -455,9 +644,13 @@ function TrackingCard({
                       </p>
                       <div className="flex gap-3 mt-0.5 text-xs text-gray-400">
                         <span>
-                          {new Date(evt.occurredAt).toLocaleString()}
+                          {new Date(
+                            evt.occurredAt
+                          ).toLocaleString()}
                         </span>
-                        {evt.location && <span>{evt.location}</span>}
+                        {evt.location && (
+                          <span>{evt.location}</span>
+                        )}
                       </div>
                     </div>
                   </div>

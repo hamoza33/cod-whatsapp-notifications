@@ -303,6 +303,7 @@ model WhatsappNumber {
 enum TrackingCarrier {
   IMILE
   INJAZ
+  OTHER
 }
 
 enum TrackingStatus {
@@ -323,11 +324,14 @@ model TrackingOrder {
   id              String          @id @default(cuid())
   trackingNumber  String          @unique @map("tracking_number")
   carrier         TrackingCarrier
+  carrierName     String?         @map("carrier_name")
   status          TrackingStatus  @default(PENDING)
   latestEvent     String?         @map("latest_event")
   latestEventAt   DateTime?       @map("latest_event_at")
   customerName    String?         @map("customer_name")
   customerPhone   String?         @map("customer_phone")
+  productName     String?         @map("product_name")
+  codCreatedAt    DateTime?       @map("cod_created_at")
   orderId         String?         @map("order_id")
   order           Order?          @relation(fields: [orderId], references: [id])
   lastCheckedAt   DateTime?       @map("last_checked_at")

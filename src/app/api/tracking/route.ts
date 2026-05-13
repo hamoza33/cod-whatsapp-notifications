@@ -9,13 +9,15 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  // Auto-import any new orders with iMile/Injaz tracking numbers
+  // Auto-import any new orders with tracking numbers
   const syncResult = await syncTrackingFromOrders();
 
   const { searchParams } = new URL(request.url);
   const carrier = searchParams.get("carrier");
   const status = searchParams.get("status");
   const search = searchParams.get("search");
+  const dateFrom = searchParams.get("dateFrom");
+  const dateTo = searchParams.get("dateTo");
 
   const where: Record<string, unknown> = {};
   if (carrier) where.carrier = carrier;
@@ -25,6 +27,16 @@ export async function GET(request: NextRequest) {
       { trackingNumber: { contains: search, mode: "insensitive" } },
       { customerName: { contains: search, mode: "insensitive" } },
     ];
+  }
+  if (dateFrom || dateTo) {
+    const dateFilter: Record<string, Date> = {};
+    if (dateFrom) dateFilter.gte = new Date(dateFrom);
+    if (dateTo) {
+      const to = new Date(dateTo);
+      to.setHours(23, 59, 59, 999);
+      dateFilter.lte = to;
+    }
+    where.codCreatedAt = dateFilter;
   }
 
   const orders = await prisma.trackingOrder.findMany({
@@ -37,6 +49,7 @@ export async function GET(request: NextRequest) {
           codNetworkOrderId: true,
           customerName: true,
           productName: true,
+          customerCity: true,
         },
       },
     },
