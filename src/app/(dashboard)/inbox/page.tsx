@@ -22,6 +22,7 @@ interface Conversation {
   lastText: string | null;
   lastType: string;
   totalMessages: number;
+  isOutboundOnly?: boolean;
   order: {
     id: string;
     codNetworkOrderId: string;
@@ -48,6 +49,8 @@ type ThreadEntry =
       at: string;
       templateName: string;
       templateVariables: unknown;
+      renderedText: string | null;
+      sentBy: string | null;
       status: string;
       providerMessageId: string | null;
       errorMessage: string | null;
@@ -301,6 +304,12 @@ export default function InboxPage() {
                       Order #{c.order.codNetworkOrderId} · {c.order.status}
                     </div>
                   )}
+                  {c.isOutboundOnly && !c.order && (
+                    <div className="text-[11px] text-[#667781] mt-0.5 flex items-center gap-1">
+                      <Send size={9} />
+                      Outbound only
+                    </div>
+                  )}
                 </div>
               </button>
             );
@@ -496,13 +505,7 @@ function OutboundBubble({
   msg: Extract<ThreadEntry, { kind: "outbound" }>;
 }) {
   const isText = msg.templateName === "<text>";
-  const variables = Array.isArray(msg.templateVariables)
-    ? (msg.templateVariables as string[])
-    : msg.templateVariables &&
-      typeof msg.templateVariables === "object" &&
-      "text" in msg.templateVariables
-    ? [(msg.templateVariables as { text: string }).text]
-    : [];
+  const isAiAgent = msg.sentBy === "ai_agent";
   const statusIcon = (() => {
     switch (msg.status) {
       case "READ":
@@ -521,6 +524,9 @@ function OutboundBubble({
         return null;
     }
   })();
+
+  const displayText = msg.renderedText;
+
   return (
     <div className="flex justify-end">
       <div
@@ -530,20 +536,24 @@ function OutboundBubble({
             : "bg-[#D9FDD3]"
         }`}
       >
-        <div className="text-[11px] text-[#667781] mb-0.5">
-          {isText ? "Text message" : `Template: ${msg.templateName}`}
+        <div className="text-[11px] text-[#667781] mb-0.5 flex items-center gap-1">
+          {isAiAgent ? (
+            <span className="text-purple-600 font-medium">AI Agent</span>
+          ) : isText ? (
+            <span>You</span>
+          ) : (
+            <span>Template: {msg.templateName}</span>
+          )}
         </div>
-        {isText ? (
+        {displayText ? (
           <p className="text-sm text-[#111B21] whitespace-pre-wrap break-words leading-[19px]">
-            {variables[0] ?? ""}
+            {displayText}
           </p>
-        ) : (
-          variables.length > 0 && (
-            <p className="text-sm font-mono text-[#111B21]">
-              [{variables.join(", ")}]
-            </p>
-          )
-        )}
+        ) : !isText ? (
+          <p className="text-sm text-[#111B21] italic">
+            [Template sent with variables]
+          </p>
+        ) : null}
         {msg.errorMessage && (
           <p className="text-xs text-red-600 mt-1">{msg.errorMessage}</p>
         )}

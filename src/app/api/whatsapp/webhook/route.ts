@@ -3,6 +3,7 @@ import crypto from "crypto";
 import { prisma } from "@/lib/prisma";
 import { getSetting, SETTING_KEYS } from "@/lib/settings";
 import { Prisma } from "@prisma/client";
+import { handleAiAutoReply } from "@/lib/ai-agent";
 
 export const dynamic = "force-dynamic";
 
@@ -216,6 +217,31 @@ export async function POST(request: NextRequest) {
             console.error("[webhook] failed to persist inbound message", err);
           }
         }
+      }
+
+      // Trigger AI auto-reply for each inbound text message (fire-and-forget)
+      for (const msg of msgs) {
+        if (!msg.from) continue;
+        const fromPhone = normalizePhone(msg.from);
+        const text = extractText(msg);
+        if (!text) continue;
+        const orderId = await findOrderByPhone(msg.from);
+        const order = orderId
+          ? await prisma.order.findUnique({
+              where: { id: orderId },
+              select: {
+                customerName: true,
+                productName: true,
+                status: true,
+                trackingNumber: true,
+                customerCity: true,
+                codNetworkOrderId: true,
+              },
+            })
+          : null;
+        handleAiAutoReply(fromPhone, text, order).catch((err) =>
+          console.error("[webhook] AI auto-reply error:", err)
+        );
       }
 
       // Update status of outbound messages we previously sent.
