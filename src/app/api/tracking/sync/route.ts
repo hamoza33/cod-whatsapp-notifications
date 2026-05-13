@@ -23,8 +23,8 @@ export async function POST(request: NextRequest) {
     // Temporarily set days-back to cover all of 2025+
     await setSetting(SETTING_KEYS.SYNC_DAYS_BACK, String(daysSinceStart + 1));
 
-    // Run the full sync
-    const syncResult = await syncOrders();
+    // Run the full sync — skip automations to prevent unintended WhatsApp messages
+    const syncResult = await syncOrders({ skipAutomations: true });
 
     // Restore old setting
     if (oldDaysBack) {

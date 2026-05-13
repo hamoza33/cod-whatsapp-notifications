@@ -78,6 +78,7 @@ export const SETTING_KEYS = {
   VOICE_AGENT_LLM_API_KEY: "voice_agent_llm_api_key",
   VOICE_AGENT_LLM_MODEL: "voice_agent_llm_model",
   VOICE_AGENT_WEBHOOK_URL: "voice_agent_webhook_url",
+  TRACKING_REFRESH_INTERVAL_MINUTES: "tracking_refresh_interval_minutes",
 } as const;
 
 export const SENSITIVE_SETTING_KEYS: readonly string[] = [

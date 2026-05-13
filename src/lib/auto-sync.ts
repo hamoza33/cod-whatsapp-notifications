@@ -29,7 +29,7 @@ const TEMPLATE_IMPORT_INTERVAL_MINUTES = 6 * 60;
 // Products change occasionally — once an hour keeps the automation editor
 // product picker fresh without hammering COD Network.
 const PRODUCT_SYNC_INTERVAL_MINUTES = 60;
-const TRACKING_REFRESH_INTERVAL_MINUTES = 60;
+const DEFAULT_TRACKING_REFRESH_INTERVAL_MINUTES = 60;
 
 let lastRunStartedAt: Date | null = null;
 let lastRunFinishedAt: Date | null = null;
@@ -109,7 +109,7 @@ export async function startAutoSync(): Promise<void> {
   // runs much less frequently (every 6 hours) so it won't slow boot time.
   startTemplateImportCron();
   startProductSyncCron();
-  startTrackingRefreshCron();
+  startTrackingRefreshCron().catch(() => undefined);
 }
 
 async function tickTemplateImport(): Promise<void> {
@@ -208,9 +208,19 @@ async function tickTrackingRefresh(): Promise<void> {
   }
 }
 
-function startTrackingRefreshCron(): void {
+async function resolveTrackingIntervalMinutes(): Promise<number> {
+  const stored = await getSetting(SETTING_KEYS.TRACKING_REFRESH_INTERVAL_MINUTES);
+  const parsed = stored ? parseInt(stored, 10) : DEFAULT_TRACKING_REFRESH_INTERVAL_MINUTES;
+  if (!Number.isFinite(parsed) || parsed < 1) {
+    return DEFAULT_TRACKING_REFRESH_INTERVAL_MINUTES;
+  }
+  return parsed;
+}
+
+async function startTrackingRefreshCron(): Promise<void> {
   if (globalThis.__codWhatsappTrackingRefreshTimer__) return;
-  // First run 2 minutes after boot, then every 60 minutes.
+  const intervalMinutes = await resolveTrackingIntervalMinutes();
+  // First run 2 minutes after boot, then at configured interval.
   setTimeout(() => {
     tickTrackingRefresh().catch(() => undefined);
   }, 120_000);
@@ -218,7 +228,7 @@ function startTrackingRefreshCron(): void {
     () => {
       tickTrackingRefresh().catch(() => undefined);
     },
-    TRACKING_REFRESH_INTERVAL_MINUTES * 60 * 1000
+    intervalMinutes * 60 * 1000
   );
   if (typeof timer.unref === "function") timer.unref();
   globalThis.__codWhatsappTrackingRefreshTimer__ = timer;
