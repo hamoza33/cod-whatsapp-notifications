@@ -2,7 +2,7 @@ import { syncOrders, isSyncInProgress } from "./sync";
 import { getSetting, setSetting, SETTING_KEYS } from "./settings";
 import { importTemplatesFromMeta } from "./template-import";
 import { syncProductsFromCodNetwork } from "./product-sync";
-import { refreshAllTracking } from "./tracking";
+import { refreshAllTracking, syncTrackingFromOrders } from "./tracking";
 
 /**
  * Lightweight in-process scheduler that runs `syncOrders()` on a recurring
@@ -186,6 +186,14 @@ function startProductSyncCron(): void {
 
 async function tickTrackingRefresh(): Promise<void> {
   try {
+    // Auto-import new orders with iMile/Injaz tracking numbers
+    const syncResult = await syncTrackingFromOrders();
+    if (syncResult.imported > 0) {
+      console.log(
+        `[tracking-refresh] auto-imported ${syncResult.imported} new tracking orders from orders table`
+      );
+    }
+
     const results = await refreshAllTracking();
     const updated = results.filter((r) => r.eventsCount > 0).length;
     const errors = results.filter((r) => r.error).length;

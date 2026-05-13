@@ -1,13 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getAuthUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { detectCarrier } from "@/lib/tracking";
+import { syncTrackingFromOrders } from "@/lib/tracking";
 
 export async function GET(request: NextRequest) {
   const user = getAuthUser(request);
   if (!user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
+
+  // Auto-import any new orders with iMile/Injaz tracking numbers
+  const syncResult = await syncTrackingFromOrders();
 
   const { searchParams } = new URL(request.url);
   const carrier = searchParams.get("carrier");
@@ -40,55 +43,5 @@ export async function GET(request: NextRequest) {
     orderBy: { updatedAt: "desc" },
   });
 
-  return NextResponse.json({ orders });
-}
-
-export async function POST(request: NextRequest) {
-  const user = getAuthUser(request);
-  if (!user) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
-  const body = await request.json();
-  const { trackingNumber, customerName, customerPhone, orderId } = body;
-
-  if (!trackingNumber || typeof trackingNumber !== "string") {
-    return NextResponse.json(
-      { error: "trackingNumber is required" },
-      { status: 400 }
-    );
-  }
-
-  const carrier = detectCarrier(trackingNumber.trim());
-  if (!carrier) {
-    return NextResponse.json(
-      {
-        error:
-          "Unsupported tracking number. Must start with '60' (iMile) or 'INJAZ.' (Injaz Express).",
-      },
-      { status: 400 }
-    );
-  }
-
-  const existing = await prisma.trackingOrder.findUnique({
-    where: { trackingNumber: trackingNumber.trim() },
-  });
-  if (existing) {
-    return NextResponse.json(
-      { error: "This tracking number is already being tracked." },
-      { status: 409 }
-    );
-  }
-
-  const order = await prisma.trackingOrder.create({
-    data: {
-      trackingNumber: trackingNumber.trim(),
-      carrier,
-      customerName: customerName || null,
-      customerPhone: customerPhone || null,
-      orderId: orderId || null,
-    },
-  });
-
-  return NextResponse.json({ order }, { status: 201 });
+  return NextResponse.json({ orders, imported: syncResult.imported });
 }

@@ -256,6 +256,59 @@ export async function refreshTracking(trackingOrderId: string) {
 }
 
 // ---------------------------------------------------------------------------
+// Auto-import: scan the orders table for tracking numbers that match iMile
+// or Injaz patterns and create TrackingOrder records for any new ones.
+// ---------------------------------------------------------------------------
+
+export async function syncTrackingFromOrders() {
+  const orders = await prisma.order.findMany({
+    where: {
+      trackingNumber: { not: null },
+    },
+    select: {
+      id: true,
+      trackingNumber: true,
+      customerName: true,
+      customerPhone: true,
+    },
+  });
+
+  let imported = 0;
+  let skipped = 0;
+
+  for (const order of orders) {
+    if (!order.trackingNumber) continue;
+    const tn = order.trackingNumber.trim();
+    const carrier = detectCarrier(tn);
+    if (!carrier) {
+      skipped++;
+      continue;
+    }
+
+    const existing = await prisma.trackingOrder.findUnique({
+      where: { trackingNumber: tn },
+    });
+    if (existing) {
+      skipped++;
+      continue;
+    }
+
+    await prisma.trackingOrder.create({
+      data: {
+        trackingNumber: tn,
+        carrier,
+        customerName: order.customerName,
+        customerPhone: order.customerPhone,
+        orderId: order.id,
+      },
+    });
+    imported++;
+  }
+
+  return { imported, skipped, totalScanned: orders.length };
+}
+
+// ---------------------------------------------------------------------------
 // Refresh all active tracking orders
 // ---------------------------------------------------------------------------
 

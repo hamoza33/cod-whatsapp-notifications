@@ -3,7 +3,6 @@
 import { useEffect, useState, useCallback } from "react";
 import { api } from "@/lib/api-client";
 import {
-  Plus,
   RefreshCw,
   Trash2,
   Package,
@@ -89,7 +88,7 @@ export default function TrackingPage() {
   const [orders, setOrders] = useState<TrackingOrder[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [showAdd, setShowAdd] = useState(false);
+  const [imported, setImported] = useState(0);
   const [search, setSearch] = useState("");
   const [filterCarrier, setFilterCarrier] = useState<string>("");
   const [filterStatus, setFilterStatus] = useState<string>("");
@@ -107,11 +106,15 @@ export default function TrackingPage() {
       if (filterCarrier) params.carrier = filterCarrier;
       if (filterStatus) params.status = filterStatus;
       if (search) params.search = search;
-      const data = await api.get<{ orders: TrackingOrder[] }>(
+      const data = await api.get<{ orders: TrackingOrder[]; imported: number }>(
         "/tracking",
         params
       );
       setOrders(data.orders);
+      if (data.imported > 0) {
+        setImported(data.imported);
+        showToast("success", `Auto-imported ${data.imported} new order(s) for tracking`);
+      }
     } catch (err) {
       showToast("error", err instanceof Error ? err.message : "Failed to load");
     } finally {
@@ -175,27 +178,19 @@ export default function TrackingPage() {
             Package Tracking
           </h1>
           <p className="text-sm text-gray-600 mt-1">
-            Track orders shipped via iMile and Injaz Express. Auto-refreshes
-            every 30 minutes.
+            Automatically tracks orders shipped via iMile (tracking # starts
+            with &ldquo;60&rdquo;) and Injaz Express (&ldquo;INJAZ.&rdquo;).
+            Refreshes every 30 minutes.
           </p>
         </div>
-        <div className="flex gap-2">
-          <button
-            onClick={handleRefreshAll}
-            disabled={refreshing}
-            className="flex items-center gap-2 px-3 py-2 bg-gray-100 text-gray-700 rounded-md text-sm font-medium hover:bg-gray-200 disabled:opacity-50"
-          >
-            <RefreshCw size={16} className={refreshing ? "animate-spin" : ""} />
-            Refresh All
-          </button>
-          <button
-            onClick={() => setShowAdd((v) => !v)}
-            className="flex items-center gap-2 px-3 py-2 bg-blue-600 text-white rounded-md text-sm font-medium hover:bg-blue-700"
-          >
-            <Plus size={16} />
-            Add Tracking
-          </button>
-        </div>
+        <button
+          onClick={handleRefreshAll}
+          disabled={refreshing}
+          className="flex items-center gap-2 px-3 py-2 bg-blue-600 text-white rounded-md text-sm font-medium hover:bg-blue-700 disabled:opacity-50"
+        >
+          <RefreshCw size={16} className={refreshing ? "animate-spin" : ""} />
+          {refreshing ? "Refreshing..." : "Refresh All"}
+        </button>
       </div>
 
       {toast && (
@@ -207,6 +202,12 @@ export default function TrackingPage() {
           }`}
         >
           {toast.text}
+        </div>
+      )}
+
+      {imported > 0 && !toast && (
+        <div className="mb-4 p-3 rounded-md text-sm border bg-blue-50 text-blue-700 border-blue-200">
+          Auto-imported {imported} new order(s) from your dashboard for tracking.
         </div>
       )}
 
@@ -260,18 +261,6 @@ export default function TrackingPage() {
         </select>
       </div>
 
-      {showAdd && (
-        <AddTrackingForm
-          onClose={() => setShowAdd(false)}
-          onAdded={() => {
-            setShowAdd(false);
-            fetchOrders();
-            showToast("success", "Tracking number added");
-          }}
-          onError={(msg) => showToast("error", msg)}
-        />
-      )}
-
       {loading ? (
         <div className="flex items-center justify-center py-12">
           <RefreshCw className="animate-spin text-gray-400" size={24} />
@@ -280,8 +269,9 @@ export default function TrackingPage() {
         <div className="bg-white border border-dashed border-gray-300 rounded-lg p-8 text-center">
           <Package className="mx-auto text-gray-300" size={32} />
           <p className="text-gray-500 mt-2 text-sm">
-            No packages being tracked. Click <strong>Add Tracking</strong> to
-            start tracking a shipment.
+            No orders with iMile or Injaz Express tracking numbers found.
+            Orders with tracking numbers starting with &ldquo;60&rdquo; or
+            &ldquo;INJAZ.&rdquo; will appear here automatically.
           </p>
         </div>
       ) : (
@@ -300,112 +290,6 @@ export default function TrackingPage() {
           ))}
         </div>
       )}
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Add tracking form
-// ---------------------------------------------------------------------------
-
-function AddTrackingForm({
-  onClose,
-  onAdded,
-  onError,
-}: {
-  onClose: () => void;
-  onAdded: () => void;
-  onError: (msg: string) => void;
-}) {
-  const [trackingNumber, setTrackingNumber] = useState("");
-  const [customerName, setCustomerName] = useState("");
-  const [customerPhone, setCustomerPhone] = useState("");
-  const [saving, setSaving] = useState(false);
-
-  const detectedCarrier = trackingNumber.startsWith("60")
-    ? "iMile"
-    : trackingNumber.toUpperCase().startsWith("INJAZ.")
-      ? "Injaz Express"
-      : null;
-
-  const handleSubmit = async () => {
-    if (!trackingNumber.trim()) return;
-    setSaving(true);
-    try {
-      await api.post("/tracking", {
-        trackingNumber: trackingNumber.trim(),
-        customerName: customerName.trim() || undefined,
-        customerPhone: customerPhone.trim() || undefined,
-      });
-      onAdded();
-    } catch (err) {
-      onError(err instanceof Error ? err.message : "Failed to add");
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  return (
-    <div className="bg-white border border-gray-200 rounded-lg p-5 mb-4 shadow-sm">
-      <h3 className="text-sm font-semibold text-gray-800 mb-3">
-        Add Package Tracking
-      </h3>
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-        <div>
-          <label className="block text-xs font-medium text-gray-600 mb-1">
-            Tracking Number *
-          </label>
-          <input
-            type="text"
-            value={trackingNumber}
-            onChange={(e) => setTrackingNumber(e.target.value)}
-            placeholder="e.g. 6051226645152 or INJAZ.12345"
-            className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:ring-blue-500 focus:border-blue-500"
-          />
-          {detectedCarrier && (
-            <p className="text-xs text-blue-600 mt-1">
-              Detected: {detectedCarrier}
-            </p>
-          )}
-        </div>
-        <div>
-          <label className="block text-xs font-medium text-gray-600 mb-1">
-            Customer Name
-          </label>
-          <input
-            type="text"
-            value={customerName}
-            onChange={(e) => setCustomerName(e.target.value)}
-            className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:ring-blue-500 focus:border-blue-500"
-          />
-        </div>
-        <div>
-          <label className="block text-xs font-medium text-gray-600 mb-1">
-            Customer Phone
-          </label>
-          <input
-            type="text"
-            value={customerPhone}
-            onChange={(e) => setCustomerPhone(e.target.value)}
-            className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:ring-blue-500 focus:border-blue-500"
-          />
-        </div>
-      </div>
-      <div className="flex gap-2 mt-4">
-        <button
-          onClick={handleSubmit}
-          disabled={saving || !trackingNumber.trim() || !detectedCarrier}
-          className="px-4 py-2 bg-blue-600 text-white rounded-md text-sm font-medium hover:bg-blue-700 disabled:opacity-50"
-        >
-          {saving ? "Adding..." : "Add & Track"}
-        </button>
-        <button
-          onClick={onClose}
-          className="px-4 py-2 bg-gray-100 text-gray-700 rounded-md text-sm font-medium hover:bg-gray-200"
-        >
-          Cancel
-        </button>
-      </div>
     </div>
   );
 }
@@ -456,7 +340,7 @@ function TrackingCard({
 
         {/* Main info */}
         <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
             <span className="font-mono font-semibold text-sm text-gray-900">
               {order.trackingNumber}
             </span>
@@ -471,9 +355,14 @@ function TrackingCard({
           </div>
           <div className="text-xs text-gray-500 mt-0.5 truncate">
             {order.latestEvent || "No updates yet"}
-            {order.customerName && (
+            {(order.customerName || order.order?.customerName) && (
               <span className="ml-2 text-gray-400">
-                — {order.customerName}
+                — {order.customerName || order.order?.customerName}
+              </span>
+            )}
+            {order.order?.productName && (
+              <span className="ml-1 text-gray-400">
+                ({order.order.productName})
               </span>
             )}
           </div>
