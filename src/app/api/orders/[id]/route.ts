@@ -48,7 +48,7 @@ export async function PATCH(
 
   const { id } = await params;
 
-  let body: { status?: unknown; pipelineNote?: unknown };
+  let body: { status?: unknown; pipelineNote?: unknown; callAgentQueued?: unknown };
   try {
     body = (await request.json()) as typeof body;
   } catch {
@@ -85,6 +85,16 @@ export async function PATCH(
       );
     }
     data.pipelineNote = body.pipelineNote as string | null;
+  }
+
+  if (body.callAgentQueued !== undefined) {
+    if (typeof body.callAgentQueued !== "boolean") {
+      return NextResponse.json(
+        { error: "callAgentQueued must be a boolean" },
+        { status: 400 }
+      );
+    }
+    data.callAgentQueued = body.callAgentQueued;
   }
 
   if (Object.keys(data).length === 0) {

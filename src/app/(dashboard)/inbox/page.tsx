@@ -13,7 +13,16 @@ import {
   X,
   Search,
   Phone,
+  ChevronDown,
 } from "lucide-react";
+
+interface WhatsAppNumberOption {
+  id: string;
+  label: string;
+  phoneNumberId: string;
+  displayPhone: string | null;
+  isDefault: boolean;
+}
 
 interface Conversation {
   phoneNumber: string;
@@ -93,8 +102,28 @@ export default function InboxPage() {
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<{ kind: "error" | "success"; text: string } | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
+  const [waNumbers, setWaNumbers] = useState<WhatsAppNumberOption[]>([]);
+  const [activeWaNumberId, setActiveWaNumberId] = useState<string | null>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const threadEndRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadNumbers() {
+      try {
+        const data = await api.get<{ numbers: WhatsAppNumberOption[] }>("/whatsapp/numbers");
+        if (!cancelled && data.numbers.length > 0) {
+          setWaNumbers(data.numbers);
+          const def = data.numbers.find((n) => n.isDefault);
+          setActiveWaNumberId(def?.id ?? data.numbers[0].id);
+        }
+      } catch {
+        // numbers feature not available
+      }
+    }
+    loadNumbers();
+    return () => { cancelled = true; };
+  }, []);
 
   const showToast = useCallback((kind: "error" | "success", text: string) => {
     setToast({ kind, text });
@@ -344,6 +373,22 @@ export default function InboxPage() {
                   {selectedPhone}
                 </div>
               </div>
+              {waNumbers.length > 1 && (
+                <div className="relative">
+                  <select
+                    value={activeWaNumberId || ""}
+                    onChange={(e) => setActiveWaNumberId(e.target.value)}
+                    className="appearance-none bg-white/20 text-white text-xs px-3 py-1.5 pr-7 rounded-full font-medium border border-white/30 cursor-pointer focus:outline-none focus:ring-2 focus:ring-white/50"
+                  >
+                    {waNumbers.map((n) => (
+                      <option key={n.id} value={n.id} className="text-gray-900">
+                        {n.label}{n.displayPhone ? ` (${n.displayPhone})` : ""}
+                      </option>
+                    ))}
+                  </select>
+                  <ChevronDown size={12} className="absolute right-2 top-1/2 -translate-y-1/2 text-white pointer-events-none" />
+                </div>
+              )}
               {thread && (
                 <span
                   className={`text-xs px-3 py-1 rounded-full font-medium ${
@@ -476,7 +521,11 @@ function InboundBubble({
           </div>
         )}
         {msg.text ? (
-          <p className="text-sm text-[#111B21] whitespace-pre-wrap break-words leading-[19px]">{msg.text}</p>
+          <p
+            className="text-sm text-[#111B21] whitespace-pre-wrap break-words leading-[19px]"
+            dir={isArabic(msg.text) ? "rtl" : "ltr"}
+            style={{ textAlign: isArabic(msg.text) ? "right" : "left" }}
+          >{msg.text}</p>
         ) : (
           <p className="text-sm text-[#8696A0] italic">
             ({msg.type} attachment)
@@ -488,6 +537,10 @@ function InboundBubble({
       </div>
     </div>
   );
+}
+
+function isArabic(text: string): boolean {
+  return /[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF]/.test(text);
 }
 
 function OutboundBubble({
@@ -503,6 +556,18 @@ function OutboundBubble({
       "text" in msg.templateVariables
     ? [(msg.templateVariables as { text: string }).text]
     : [];
+
+  const headerImage = msg.templateVariables &&
+    typeof msg.templateVariables === "object" &&
+    "headerImage" in (msg.templateVariables as Record<string, unknown>)
+    ? (msg.templateVariables as Record<string, string>).headerImage
+    : null;
+
+  const contentText = isText
+    ? (variables[0] ?? "")
+    : variables.join(", ");
+  const textDir = isArabic(contentText) ? "rtl" : "ltr";
+
   const statusIcon = (() => {
     switch (msg.status) {
       case "READ":
@@ -533,14 +598,28 @@ function OutboundBubble({
         <div className="text-[11px] text-[#667781] mb-0.5">
           {isText ? "Text message" : `Template: ${msg.templateName}`}
         </div>
+        {headerImage && (
+          <div className="mb-1 rounded overflow-hidden">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src={headerImage} alt="Header" className="max-w-full rounded" />
+          </div>
+        )}
         {isText ? (
-          <p className="text-sm text-[#111B21] whitespace-pre-wrap break-words leading-[19px]">
+          <p
+            className="text-sm text-[#111B21] whitespace-pre-wrap break-words leading-[19px]"
+            dir={textDir}
+            style={{ textAlign: textDir === "rtl" ? "right" : "left" }}
+          >
             {variables[0] ?? ""}
           </p>
         ) : (
           variables.length > 0 && (
-            <p className="text-sm font-mono text-[#111B21]">
-              [{variables.join(", ")}]
+            <p
+              className="text-sm text-[#111B21] whitespace-pre-wrap break-words leading-[19px]"
+              dir={textDir}
+              style={{ textAlign: textDir === "rtl" ? "right" : "left" }}
+            >
+              {variables.join(", ")}
             </p>
           )
         )}

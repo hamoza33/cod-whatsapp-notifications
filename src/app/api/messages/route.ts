@@ -34,6 +34,7 @@ export async function GET(request: NextRequest) {
       orderBy: { createdAt: "desc" },
       skip: (page - 1) * pageSize,
       take: pageSize,
+      // Include template variables and header image info for full content display
     }),
     prisma.whatsappMessage.count({ where }),
   ]);

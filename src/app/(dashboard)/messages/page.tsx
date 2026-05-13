@@ -2,12 +2,14 @@
 
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api-client";
-import { RefreshCw } from "lucide-react";
+import { RefreshCw, ChevronDown, ChevronUp } from "lucide-react";
 
 interface MessageLog {
   id: string;
   phoneNumber: string;
   templateName: string;
+  templateLanguage: string;
+  templateVariablesJson: unknown;
   status: string;
   errorMessage: string | null;
   sentBy: string;
@@ -123,6 +125,9 @@ export default function MessagesPage() {
                   Sent At
                 </th>
                 <th className="text-left px-4 py-3 font-medium text-gray-600">
+                  Content
+                </th>
+                <th className="text-left px-4 py-3 font-medium text-gray-600">
                   Error
                 </th>
               </tr>
@@ -130,7 +135,7 @@ export default function MessagesPage() {
             <tbody>
               {loading ? (
                 <tr>
-                  <td colSpan={8} className="text-center py-8">
+                  <td colSpan={9} className="text-center py-8">
                     <RefreshCw
                       className="animate-spin text-gray-400 mx-auto"
                       size={20}
@@ -140,7 +145,7 @@ export default function MessagesPage() {
               ) : messages.length === 0 ? (
                 <tr>
                   <td
-                    colSpan={8}
+                    colSpan={9}
                     className="text-center py-8 text-gray-500"
                   >
                     No messages found.
@@ -170,6 +175,9 @@ export default function MessagesPage() {
                       {msg.sentAt
                         ? new Date(msg.sentAt).toLocaleString()
                         : "—"}
+                    </td>
+                    <td className="px-4 py-3">
+                      <MessageContentCell msg={msg} />
                     </td>
                     <td className="px-4 py-3 text-xs text-red-600 max-w-[200px] truncate">
                       {msg.errorMessage || "—"}
@@ -201,6 +209,64 @@ export default function MessagesPage() {
           >
             Next
           </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function isArabic(text: string): boolean {
+  return /[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF]/.test(text);
+}
+
+function MessageContentCell({ msg }: { msg: MessageLog }) {
+  const [expanded, setExpanded] = useState(false);
+  const isText = msg.templateName === "<text>";
+  const variables = Array.isArray(msg.templateVariablesJson)
+    ? (msg.templateVariablesJson as string[])
+    : msg.templateVariablesJson &&
+      typeof msg.templateVariablesJson === "object" &&
+      "text" in (msg.templateVariablesJson as Record<string, unknown>)
+    ? [(msg.templateVariablesJson as { text: string }).text]
+    : [];
+
+  const contentText = isText
+    ? (variables[0] ?? "")
+    : variables.length > 0
+    ? variables.join(", ")
+    : "";
+
+  const hasContent = contentText.length > 0;
+  const textDir = isArabic(contentText) ? "rtl" : "ltr";
+
+  if (!hasContent) {
+    return <span className="text-xs text-gray-400">—</span>;
+  }
+
+  return (
+    <div className="max-w-[300px]">
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="text-xs text-blue-600 hover:text-blue-800 flex items-center gap-1"
+      >
+        {expanded ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+        {expanded ? "Hide" : "View content"}
+      </button>
+      {expanded && (
+        <div
+          className="mt-1 p-2 rounded bg-gray-50 border border-gray-200 text-xs whitespace-pre-wrap break-words"
+          dir={textDir}
+          style={{ textAlign: textDir === "rtl" ? "right" : "left" }}
+        >
+          {isText && (
+            <span className="text-gray-400 text-[10px] block mb-1">Text message</span>
+          )}
+          {!isText && (
+            <span className="text-gray-400 text-[10px] block mb-1">
+              Template: {msg.templateName} ({msg.templateLanguage})
+            </span>
+          )}
+          <p className="text-gray-800">{contentText}</p>
         </div>
       )}
     </div>

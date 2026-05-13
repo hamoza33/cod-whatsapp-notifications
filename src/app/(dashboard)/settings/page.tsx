@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api-client";
-import { Save, RefreshCw, AlertTriangle } from "lucide-react";
+import { Save, RefreshCw, AlertTriangle, Plus, Trash2 } from "lucide-react";
 import { looksLikePhoneNumber } from "@/lib/whatsapp-validation";
 
 interface SettingsData {
@@ -365,6 +365,109 @@ export default function SettingsPage() {
         />
       </SettingsSection>
 
+      {/* WhatsApp Numbers Management */}
+      <WhatsAppNumbersSection />
+
+      {/* Voice Agent / Call Agent Configuration */}
+      <SettingsSection
+        title="Voice Agent (Call Agent)"
+        description="Configure the AI voice agent that calls customers when orders are dragged to the 'Call Agent' pipeline column. Set up the API endpoint, credentials, and behavior."
+        onSave={() =>
+          handleSave("Voice Agent", [
+            "voice_agent_api_endpoint",
+            "voice_agent_api_key",
+            "voice_agent_model",
+            "voice_agent_prompt",
+            "voice_agent_enabled",
+            "voice_agent_caller_id",
+            "voice_agent_language",
+          ])
+        }
+        saving={saving}
+      >
+        <div className="flex items-center gap-3 mb-4">
+          <label className="text-sm font-medium text-gray-700">
+            Enable Voice Agent
+          </label>
+          <button
+            onClick={() =>
+              updateSetting(
+                "voice_agent_enabled",
+                settings.voice_agent_enabled === "true" ? "false" : "true"
+              )
+            }
+            className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+              settings.voice_agent_enabled === "true"
+                ? "bg-purple-600"
+                : "bg-gray-300"
+            }`}
+          >
+            <span
+              className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                settings.voice_agent_enabled === "true"
+                  ? "translate-x-6"
+                  : "translate-x-1"
+              }`}
+            />
+          </button>
+        </div>
+        <SettingsField
+          label="API Endpoint"
+          value={settings.voice_agent_api_endpoint || ""}
+          onChange={(v) => updateSetting("voice_agent_api_endpoint", v)}
+          placeholder="https://api.example.com/v1/calls"
+          help="The endpoint to POST to when triggering a voice call. Must accept JSON with { phone, customerName, orderId, productName }."
+        />
+        <SettingsField
+          label="API Key"
+          value={settings.voice_agent_api_key || ""}
+          onChange={(v) => updateSetting("voice_agent_api_key", v)}
+          type="password"
+          configuredPreview={sensitivePreviews.voice_agent_api_key}
+          placeholder={
+            configuredSecrets.has("voice_agent_api_key")
+              ? "Currently configured — enter a new value to replace"
+              : "Your voice agent API key"
+          }
+        />
+        <SettingsField
+          label="AI Model / Agent ID"
+          value={settings.voice_agent_model || ""}
+          onChange={(v) => updateSetting("voice_agent_model", v)}
+          placeholder="e.g. gpt-4o-realtime or agent-abc123"
+          help="The model or agent identifier used by the voice API."
+        />
+        <SettingsField
+          label="Caller ID / Phone Number"
+          value={settings.voice_agent_caller_id || ""}
+          onChange={(v) => updateSetting("voice_agent_caller_id", v)}
+          placeholder="+1234567890"
+          help="The phone number displayed to the customer when the AI agent calls."
+        />
+        <SettingsField
+          label="Language"
+          value={settings.voice_agent_language || "ar"}
+          onChange={(v) => updateSetting("voice_agent_language", v)}
+          placeholder="ar"
+          help="Language code for the voice agent (e.g. 'ar' for Arabic, 'en' for English, 'fr' for French)."
+        />
+        <div className="mb-4">
+          <label className="block text-sm font-medium text-gray-700 mb-1">
+            Agent System Prompt
+          </label>
+          <textarea
+            value={settings.voice_agent_prompt || ""}
+            onChange={(e) => updateSetting("voice_agent_prompt", e.target.value)}
+            placeholder="You are a friendly COD delivery confirmation agent. Call the customer to confirm their order details and delivery address..."
+            rows={4}
+            className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+          />
+          <p className="mt-1 text-xs text-gray-500">
+            Instructions for the AI voice agent. Variables available: {"{customer_name}"}, {"{product_name}"}, {"{order_id}"}, {"{city}"}.
+          </p>
+        </div>
+      </SettingsSection>
+
       {/* Automation Settings */}
       <SettingsSection
         title="Automation"
@@ -455,6 +558,178 @@ export default function SettingsPage() {
           placeholder="212"
         />
       </SettingsSection>
+    </div>
+  );
+}
+
+function WhatsAppNumbersSection() {
+  const [numbers, setNumbers] = useState<Array<{
+    id: string;
+    label: string;
+    phoneNumberId: string;
+    displayPhone: string;
+    isDefault: boolean;
+  }>>([]);
+  const [loading, setLoading] = useState(true);
+  const [newLabel, setNewLabel] = useState("");
+  const [newPhoneNumberId, setNewPhoneNumberId] = useState("");
+  const [newDisplayPhone, setNewDisplayPhone] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [notification, setNotification] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function load() {
+      try {
+        const data = await api.get<{ numbers: typeof numbers }>("/whatsapp/numbers");
+        if (!cancelled) setNumbers(data.numbers);
+      } catch {
+        // API may not exist yet
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }
+    load();
+    return () => { cancelled = true; };
+  }, []);
+
+  const handleAdd = async () => {
+    if (!newLabel.trim() || !newPhoneNumberId.trim()) return;
+    setSaving(true);
+    try {
+      const data = await api.post<{ number: (typeof numbers)[0] }>("/whatsapp/numbers", {
+        label: newLabel.trim(),
+        phoneNumberId: newPhoneNumberId.trim(),
+        displayPhone: newDisplayPhone.trim(),
+      });
+      setNumbers((prev) => [...prev, data.number]);
+      setNewLabel("");
+      setNewPhoneNumberId("");
+      setNewDisplayPhone("");
+      setNotification("Number added!");
+      setTimeout(() => setNotification(null), 3000);
+    } catch (err) {
+      setNotification(err instanceof Error ? err.message : "Failed to add");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleDelete = async (id: string) => {
+    try {
+      await api.del(`/whatsapp/numbers/${id}`);
+      setNumbers((prev) => prev.filter((n) => n.id !== id));
+    } catch {
+      // ignore
+    }
+  };
+
+  const handleSetDefault = async (id: string) => {
+    try {
+      await api.put(`/whatsapp/numbers/${id}/default`, {});
+      setNumbers((prev) =>
+        prev.map((n) => ({ ...n, isDefault: n.id === id }))
+      );
+    } catch {
+      // ignore
+    }
+  };
+
+  return (
+    <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6 mb-6">
+      <h2 className="text-lg font-semibold text-gray-900 mb-1">WhatsApp Numbers</h2>
+      <p className="text-sm text-gray-500 mb-4">
+        Manage multiple WhatsApp Business numbers. Add numbers here to switch between them in the chat inbox.
+      </p>
+
+      {notification && (
+        <div className="mb-3 p-2 rounded text-sm bg-green-50 text-green-700 border border-green-200">
+          {notification}
+        </div>
+      )}
+
+      {loading ? (
+        <RefreshCw className="animate-spin text-gray-400" size={20} />
+      ) : (
+        <>
+          {numbers.length > 0 && (
+            <div className="space-y-2 mb-4">
+              {numbers.map((n) => (
+                <div
+                  key={n.id}
+                  className={`flex items-center justify-between p-3 rounded-md border ${
+                    n.isDefault ? "border-blue-300 bg-blue-50" : "border-gray-200"
+                  }`}
+                >
+                  <div>
+                    <span className="font-medium text-sm">{n.label}</span>
+                    {n.displayPhone && (
+                      <span className="text-xs text-gray-500 ml-2">{n.displayPhone}</span>
+                    )}
+                    <span className="text-xs text-gray-400 ml-2 font-mono">ID: {n.phoneNumberId.slice(0, 8)}…</span>
+                    {n.isDefault && (
+                      <span className="ml-2 px-2 py-0.5 rounded-full text-[10px] font-medium bg-blue-100 text-blue-700">
+                        Default
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {!n.isDefault && (
+                      <button
+                        onClick={() => handleSetDefault(n.id)}
+                        className="text-xs text-blue-600 hover:text-blue-800"
+                      >
+                        Set Default
+                      </button>
+                    )}
+                    <button
+                      onClick={() => handleDelete(n.id)}
+                      className="text-gray-400 hover:text-red-600"
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <div className="border border-gray-200 rounded-md p-3 space-y-2">
+            <h3 className="text-sm font-medium text-gray-700 flex items-center gap-1">
+              <Plus size={14} /> Add Number
+            </h3>
+            <input
+              type="text"
+              value={newLabel}
+              onChange={(e) => setNewLabel(e.target.value)}
+              placeholder="Label (e.g. Main Business, Support)"
+              className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm"
+            />
+            <input
+              type="text"
+              value={newPhoneNumberId}
+              onChange={(e) => setNewPhoneNumberId(e.target.value)}
+              placeholder="Meta Phone Number ID (15-16 digits)"
+              className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm"
+            />
+            <input
+              type="text"
+              value={newDisplayPhone}
+              onChange={(e) => setNewDisplayPhone(e.target.value)}
+              placeholder="Display phone (optional, e.g. +212 6XX XXX XXX)"
+              className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm"
+            />
+            <button
+              onClick={handleAdd}
+              disabled={saving || !newLabel.trim() || !newPhoneNumberId.trim()}
+              className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-md text-sm font-medium hover:bg-blue-700 disabled:opacity-50"
+            >
+              <Plus size={14} />
+              {saving ? "Adding…" : "Add Number"}
+            </button>
+          </div>
+        </>
+      )}
     </div>
   );
 }

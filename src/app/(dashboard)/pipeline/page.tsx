@@ -7,6 +7,7 @@ import {
   Send,
   Image as ImageIcon,
   Phone,
+  PhoneCall,
   MapPin,
   Package as PackageIcon,
   Hash,
@@ -78,6 +79,8 @@ interface PipelineOrder {
   status: OrderStatus;
   codCreatedAt: string | null;
   whatsappSentAt: string | null;
+  callAgentQueued: boolean;
+  productImages: string[];
 }
 
 interface TemplateInfo {
@@ -148,10 +151,11 @@ export default function PipelinePage() {
   }, [fetchOrders]);
 
   const grouped = useMemo(() => {
-    const groups: Record<string, PipelineOrder[]> = { __SENT__: [] };
+    const groups: Record<string, PipelineOrder[]> = { __SENT__: [], __CALL_AGENT__: [] };
     REAL_STATUSES.forEach((s) => (groups[s] = []));
     for (const o of orders) {
-      if (o.whatsappSentAt) groups.__SENT__.push(o);
+      if (o.callAgentQueued) groups.__CALL_AGENT__.push(o);
+      else if (o.whatsappSentAt) groups.__SENT__.push(o);
       else groups[o.status]?.push(o);
     }
     // Sort each column oldest-first (first created → last created)
@@ -176,6 +180,12 @@ export default function PipelinePage() {
     setHoverColumn(null);
   };
 
+  const handleDragEnter = (e: React.DragEvent, columnKey: string) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+    if (hoverColumn !== columnKey) setHoverColumn(columnKey);
+  };
+
   const handleDragOver = (e: React.DragEvent, columnKey: string) => {
     e.preventDefault();
     e.dataTransfer.dropEffect = "move";
@@ -198,11 +208,30 @@ export default function PipelinePage() {
     const order = orders.find((o) => o.id === id);
     if (!order) return;
 
+    if (columnKey === "__CALL_AGENT__") {
+      // Trigger the AI voice agent call for this order
+      setOrders((prev) =>
+        prev.map((o) => (o.id === id ? { ...o, callAgentQueued: true } : o))
+      );
+      try {
+        await fetch(`/api/orders/${id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ callAgentQueued: true }),
+        }).then(async (r) => {
+          if (!r.ok) throw new Error((await r.json()).error || `HTTP ${r.status}`);
+        });
+        showToast("success", "Call Agent triggered — AI will call the customer");
+      } catch (err) {
+        setOrders((prev) =>
+          prev.map((o) => (o.id === id ? { ...o, callAgentQueued: false } : o))
+        );
+        showToast("error", err instanceof Error ? err.message : "Failed to trigger call agent");
+      }
+      return;
+    }
+
     if (columnKey === "__SENT__") {
-      // Open the Send dialog instead of immediately sending — the user
-      // typically wants to pick variables / verify the header first. Once
-      // they confirm, the dialog calls the send endpoint and the card moves
-      // into this column on success.
       setSendDialogOrder(order);
       return;
     }
@@ -293,6 +322,7 @@ export default function PipelinePage() {
               colorClass={STATUS_COLORS[s]}
               orders={grouped[s] || []}
               isHover={hoverColumn === s}
+              onDragEnter={(e) => handleDragEnter(e, s)}
               onDragOver={(e) => handleDragOver(e, s)}
               onDragLeave={() => handleDragLeave(s)}
               onDrop={(e) => handleDrop(e, s)}
@@ -301,12 +331,28 @@ export default function PipelinePage() {
               onCardClick={setSendDialogOrder}
             />
           ))}
+          {/* Call Agent column */}
+          <Column
+            columnKey="__CALL_AGENT__"
+            title="Call Agent"
+            callAgentColumn
+            orders={grouped.__CALL_AGENT__ || []}
+            isHover={hoverColumn === "__CALL_AGENT__"}
+            onDragEnter={(e) => handleDragEnter(e, "__CALL_AGENT__")}
+            onDragOver={(e) => handleDragOver(e, "__CALL_AGENT__")}
+            onDragLeave={() => handleDragLeave("__CALL_AGENT__")}
+            onDrop={(e) => handleDrop(e, "__CALL_AGENT__")}
+            onCardDragStart={handleDragStart}
+            onCardDragEnd={handleDragEnd}
+            onCardClick={setSendDialogOrder}
+          />
           <Column
             columnKey="__SENT__"
             title="WhatsApp Sent"
             sentColumn
             orders={grouped.__SENT__ || []}
             isHover={hoverColumn === "__SENT__"}
+            onDragEnter={(e) => handleDragEnter(e, "__SENT__")}
             onDragOver={(e) => handleDragOver(e, "__SENT__")}
             onDragLeave={() => handleDragLeave("__SENT__")}
             onDrop={(e) => handleDrop(e, "__SENT__")}
@@ -357,7 +403,9 @@ function Column({
   orders,
   colorClass,
   sentColumn,
+  callAgentColumn,
   isHover,
+  onDragEnter,
   onDragOver,
   onDragLeave,
   onDrop,
@@ -370,7 +418,9 @@ function Column({
   orders: PipelineOrder[];
   colorClass?: string;
   sentColumn?: boolean;
+  callAgentColumn?: boolean;
   isHover: boolean;
+  onDragEnter: (e: React.DragEvent) => void;
   onDragOver: (e: React.DragEvent) => void;
   onDragLeave: () => void;
   onDrop: (e: React.DragEvent) => void;
@@ -380,17 +430,24 @@ function Column({
 }) {
   return (
     <div
+      onDragEnter={onDragEnter}
       onDragOver={onDragOver}
       onDragLeave={onDragLeave}
-      onDrop={(e) => onDrop(e)}
+      onDrop={(e) => { e.preventDefault(); onDrop(e); }}
       className={`w-80 flex flex-col rounded-md border ${
-        sentColumn ? "border-green-300 bg-green-50/30" : "border-gray-200 bg-gray-50"
+        sentColumn
+          ? "border-green-300 bg-green-50/30"
+          : callAgentColumn
+          ? "border-purple-300 bg-purple-50/30"
+          : "border-gray-200 bg-gray-50"
       } ${isHover ? "ring-2 ring-blue-400" : ""}`}
     >
       <div
         className={`px-3 py-2 border-b rounded-t-md flex items-center justify-between ${
           sentColumn
             ? "bg-green-100 border-green-200"
+            : callAgentColumn
+            ? "bg-purple-100 border-purple-200 text-purple-700"
             : `${colorClass || "bg-gray-100 border-gray-200"}`
         }`}
       >
@@ -402,6 +459,8 @@ function Column({
           <p className="text-xs text-gray-400 text-center py-6">
             {sentColumn
               ? "Drop a card here to send the WhatsApp message"
+              : callAgentColumn
+              ? "Drop a card here to trigger AI voice call"
               : "No orders"}
           </p>
         )}
@@ -410,14 +469,12 @@ function Column({
             key={o.id}
             order={o}
             sentColumn={sentColumn}
+            callAgentColumn={callAgentColumn}
             onDragStart={() => onCardDragStart(o.id)}
             onDragEnd={onCardDragEnd}
             onClick={() => onCardClick(o)}
           />
         ))}
-        {/* Spacer at the bottom so users have an empty drop area even when the
-            column is full — avoids the "no valid drop target" snap-back when a
-            card is dragged onto another card. */}
         <div className="h-12 shrink-0" />
       </div>
     </div>
@@ -427,12 +484,14 @@ function Column({
 function Card({
   order,
   sentColumn,
+  callAgentColumn,
   onDragStart,
   onDragEnd,
   onClick,
 }: {
   order: PipelineOrder;
   sentColumn?: boolean;
+  callAgentColumn?: boolean;
   onDragStart: (e: React.DragEvent) => void;
   onDragEnd: () => void;
   onClick: () => void;
@@ -463,7 +522,7 @@ function Card({
         onClick();
       }}
       className={`bg-white rounded-md border p-3 cursor-grab active:cursor-grabbing shadow-sm hover:shadow-md transition-shadow text-xs space-y-1 select-text ${
-        sentColumn ? "border-green-200" : "border-gray-200"
+        sentColumn ? "border-green-200" : callAgentColumn ? "border-purple-200" : "border-gray-200"
       }`}
     >
       <div className="flex items-start justify-between gap-2">
@@ -482,6 +541,16 @@ function Card({
               lead #{order.codNetworkLeadId.slice(-6)}
             </span>
           )}
+        </div>
+      )}
+      {order.productImages && order.productImages.length > 0 && (
+        <div className="flex gap-1 flex-wrap">
+          {order.productImages.map((img, i) => (
+            <div key={i} className="w-8 h-8 rounded overflow-hidden bg-gray-100 shrink-0">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={img} alt="Product" className="w-full h-full object-cover" />
+            </div>
+          ))}
         </div>
       )}
       {order.productName && (
@@ -522,6 +591,12 @@ function Card({
         <div className="flex items-center gap-1.5 text-green-700 pt-1 border-t border-green-100">
           <CheckCircle2 size={11} className="shrink-0" />
           <span className="truncate">Sent {sentAt}</span>
+        </div>
+      )}
+      {order.callAgentQueued && (
+        <div className="flex items-center gap-1.5 text-purple-700 pt-1 border-t border-purple-100">
+          <PhoneCall size={11} className="shrink-0" />
+          <span className="truncate">Call Agent queued</span>
         </div>
       )}
     </div>

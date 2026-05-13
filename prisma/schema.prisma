@@ -80,6 +80,9 @@ model Order {
   // Free-form notes the operator can attach to an order from the Pipeline
   // (e.g. "called customer, no answer"). Not synced from COD Network.
   pipelineNote        String?     @map("pipeline_note")
+  // Set when the order is dragged to the "Call Agent" pipeline column,
+  // triggering the AI voice agent to call the customer.
+  callAgentQueued     Boolean     @default(false) @map("call_agent_queued")
   createdAt           DateTime    @default(now()) @map("created_at")
   updatedAt           DateTime    @updatedAt @map("updated_at")
 
@@ -251,11 +254,24 @@ model AutomationRun {
 /// can pick products by name/SKU when writing rules (cleaner than typing a
 /// substring) and in the Manual Order form so they can autocomplete the
 /// product fields.
+model WhatsappNumber {
+  id            String   @id @default(cuid())
+  label         String
+  phoneNumberId String   @map("phone_number_id")
+  displayPhone  String?  @map("display_phone")
+  isDefault     Boolean  @default(false) @map("is_default")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  @@map("whatsapp_numbers")
+}
+
 model Product {
-  id                 String   @id @default(cuid())
-  codNetworkProductId String  @unique @map("cod_network_product_id")
-  sku                String?
-  name               String
+  id                  String   @id @default(cuid())
+  codNetworkProductId String   @unique @map("cod_network_product_id")
+  sku                 String?
+  name                String
+  aiAgentEnabled      Boolean  @default(false) @map("ai_agent_enabled")
   nameArabic         String?  @map("name_arabic")
   imageUrl           String?  @map("image_url")
   // String to preserve currency precision (COD returns e.g. "199.00").

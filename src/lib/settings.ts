@@ -60,6 +60,13 @@ export const SETTING_KEYS = {
   // ISO timestamp recording when `whatsapp_templates` was last refreshed
   // from Meta. Used by the auto-import refresh window logic.
   WHATSAPP_TEMPLATES_LAST_IMPORT_AT: "whatsapp_templates_last_import_at",
+  VOICE_AGENT_ENABLED: "voice_agent_enabled",
+  VOICE_AGENT_API_ENDPOINT: "voice_agent_api_endpoint",
+  VOICE_AGENT_API_KEY: "voice_agent_api_key",
+  VOICE_AGENT_MODEL: "voice_agent_model",
+  VOICE_AGENT_PROMPT: "voice_agent_prompt",
+  VOICE_AGENT_CALLER_ID: "voice_agent_caller_id",
+  VOICE_AGENT_LANGUAGE: "voice_agent_language",
 } as const;
 
 export const SENSITIVE_SETTING_KEYS: readonly string[] = [
@@ -69,6 +76,7 @@ export const SENSITIVE_SETTING_KEYS: readonly string[] = [
   SETTING_KEYS.WHATSAPP_ACCESS_TOKEN,
   SETTING_KEYS.WHATSAPP_APP_SECRET,
   SETTING_KEYS.WHATSAPP_WEBHOOK_VERIFY_TOKEN,
+  SETTING_KEYS.VOICE_AGENT_API_KEY,
 ];
 
 /**

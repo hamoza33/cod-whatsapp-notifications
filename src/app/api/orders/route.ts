@@ -70,8 +70,13 @@ export async function GET(request: NextRequest) {
     prisma.order.count({ where }),
   ]);
 
+  const enrichedOrders = orders.map((o) => ({
+    ...o,
+    productImages: extractProductImages(o.rawOrderJson),
+  }));
+
   return NextResponse.json({
-    orders,
+    orders: enrichedOrders,
     pagination: {
       page,
       pageSize,
@@ -79,6 +84,32 @@ export async function GET(request: NextRequest) {
       totalPages: Math.ceil(total / pageSize),
     },
   });
+}
+
+function extractProductImages(rawJson: unknown): string[] {
+  if (!rawJson || typeof rawJson !== "object") return [];
+  const order = rawJson as Record<string, unknown>;
+  const images: string[] = [];
+  let items = order.items;
+  if (items && typeof items === "object" && !Array.isArray(items)) {
+    items = (items as Record<string, unknown>).data;
+  }
+  if (Array.isArray(items)) {
+    for (const item of items) {
+      if (!item || typeof item !== "object") continue;
+      const it = item as Record<string, unknown>;
+      const productData = it.product && typeof it.product === "object"
+        ? ((it.product as Record<string, unknown>).data as Record<string, unknown> | undefined) ?? (it.product as Record<string, unknown>)
+        : null;
+      const img = (it.image_url ?? it.path_image ?? productData?.image_url ?? productData?.path_image) as string | undefined;
+      if (img && typeof img === "string") images.push(img);
+    }
+  }
+  if (images.length === 0) {
+    const directImg = (order.image_url ?? order.path_image) as string | undefined;
+    if (directImg && typeof directImg === "string") images.push(directImg);
+  }
+  return images;
 }
 
 const VALID_STATUSES = new Set<OrderStatus>([

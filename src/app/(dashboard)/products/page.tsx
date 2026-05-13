@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback } from "react";
 import Image from "next/image";
 import { api } from "@/lib/api-client";
-import { RefreshCw, Search, Tag, Package as PackageIcon } from "lucide-react";
+import { RefreshCw, Search, Tag, Package as PackageIcon, Bot } from "lucide-react";
 
 interface Product {
   id: string;
@@ -18,6 +18,7 @@ interface Product {
   productStatus: string | null;
   storeUrl: string | null;
   lastSyncedAt: string;
+  aiAgentEnabled: boolean;
 }
 
 export default function ProductsPage() {
@@ -204,6 +205,36 @@ export default function ProductsPage() {
                     </span>
                   </div>
                 )}
+                <div className="mt-2 pt-2 border-t border-gray-100">
+                  <button
+                    onClick={async (e) => {
+                      e.stopPropagation();
+                      const newVal = !p.aiAgentEnabled;
+                      setProducts((prev) =>
+                        prev.map((prod) =>
+                          prod.id === p.id ? { ...prod, aiAgentEnabled: newVal } : prod
+                        )
+                      );
+                      try {
+                        await api.patch(`/products/${p.id}`, { aiAgentEnabled: newVal });
+                      } catch {
+                        setProducts((prev) =>
+                          prev.map((prod) =>
+                            prod.id === p.id ? { ...prod, aiAgentEnabled: !newVal } : prod
+                          )
+                        );
+                      }
+                    }}
+                    className={`flex items-center gap-1.5 text-xs font-medium px-2 py-1 rounded-md transition-colors w-full justify-center ${
+                      p.aiAgentEnabled
+                        ? "bg-purple-100 text-purple-700 hover:bg-purple-200"
+                        : "bg-gray-100 text-gray-500 hover:bg-gray-200"
+                    }`}
+                  >
+                    <Bot size={12} />
+                    {p.aiAgentEnabled ? "AI Agent Active" : "Activate AI Agent"}
+                  </button>
+                </div>
               </div>
             </div>
           ))}

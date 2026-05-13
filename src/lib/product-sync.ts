@@ -16,19 +16,44 @@ export async function syncProductsFromCodNetwork(): Promise<{
   fetched: number;
   created: number;
   updated: number;
+  errors: number;
 }> {
   const client = await CodNetworkClient.fromSettings();
-  const products = await client.getAllProducts();
+
+  // Fetch "My Products" (seller products)
+  let myProducts: CodNetworkProduct[] = [];
+  try {
+    myProducts = await client.getAllProducts();
+  } catch (err) {
+    console.error("[product-sync] Failed to fetch My Products:", err);
+  }
+
+  // Fetch "COD Drop Products" (drop-shipping products)
+  let dropProducts: CodNetworkProduct[] = [];
+  try {
+    dropProducts = await client.getAllDropProducts();
+  } catch (err) {
+    // Drop products endpoint may not exist for all accounts
+    console.warn("[product-sync] Drop products endpoint not available:", err instanceof Error ? err.message : err);
+  }
+
+  const allProducts = [...myProducts, ...dropProducts];
 
   let created = 0;
   let updated = 0;
-  for (const p of products) {
-    const result = await upsertProduct(p);
-    if (result === "created") created++;
-    else if (result === "updated") updated++;
+  let errors = 0;
+  for (const p of allProducts) {
+    try {
+      const result = await upsertProduct(p);
+      if (result === "created") created++;
+      else if (result === "updated") updated++;
+    } catch (err) {
+      errors++;
+      console.error("[product-sync] Failed to upsert product:", p.id, err);
+    }
   }
 
-  return { fetched: products.length, created, updated };
+  return { fetched: allProducts.length, created, updated, errors };
 }
 
 async function upsertProduct(
@@ -37,7 +62,8 @@ async function upsertProduct(
   const codId = String(p.id ?? "").trim();
   if (!codId) return "skipped";
 
-  const name = (p.name ?? "").trim();
+  // Try multiple name fields — COD Drop Products may use different keys
+  const name = (p.name ?? p.name_arabic ?? (p as Record<string, unknown>).title as string ?? "").trim();
   if (!name) return "skipped";
 
   const data = {
