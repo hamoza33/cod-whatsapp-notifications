@@ -3,8 +3,13 @@ import { getAuthUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 
 /**
- * Returns one row per contact (inbound + outbound-only), with their most
- * recent activity. Used by the Inbox conversation list.
+ * Returns one row per contact (both inbound and outbound-only), with their
+ * most recent activity. Used by the Inbox conversation list.
+ *
+ * Merges:
+ * 1. Inbound conversations (from inbound_messages)
+ * 2. Outbound-only conversations (from whatsapp_messages where the phone has
+ *    no inbound messages) — so every sent WhatsApp message is visible.
  */
 export async function GET(request: NextRequest) {
   const user = getAuthUser(request);
@@ -12,7 +17,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  // Inbound conversations
+  // 1. Inbound conversations grouped by phone
   const inboundRows = await prisma.$queryRaw<
     Array<{
       from_phone_number: string;
@@ -39,8 +44,8 @@ export async function GET(request: NextRequest) {
     ORDER BY from_phone_number, received_at DESC
   `;
 
-  // Outbound-only conversations (manual replies & templates sent to contacts
-  // who never messaged us back). These won't appear in inbound_messages.
+  // 2. Outbound-only conversations: phones that have outbound messages
+  //    but NO inbound messages
   const outboundRows = await prisma.$queryRaw<
     Array<{
       phone_number: string;
@@ -50,19 +55,24 @@ export async function GET(request: NextRequest) {
       order_id: string | null;
     }>
   >`
-    SELECT DISTINCT ON (phone_number)
-      phone_number,
-      COALESCE(sent_at, created_at) AS last_sent_at,
+    SELECT DISTINCT ON (wm.phone_number)
+      wm.phone_number,
+      COALESCE(wm.sent_at, wm.created_at) AS last_sent_at,
       (
         SELECT COUNT(*) FROM whatsapp_messages wm2
-        WHERE wm2.phone_number = whatsapp_messages.phone_number
+        WHERE wm2.phone_number = wm.phone_number
       ) AS total_messages,
-      template_name AS last_template,
-      order_id
-    FROM whatsapp_messages
-    WHERE phone_number NOT IN (SELECT DISTINCT from_phone_number FROM inbound_messages)
-    ORDER BY phone_number, COALESCE(sent_at, created_at) DESC
+      wm.template_name AS last_template,
+      wm.order_id
+    FROM whatsapp_messages wm
+    WHERE NOT EXISTS (
+      SELECT 1 FROM inbound_messages im
+      WHERE im.from_phone_number = wm.phone_number
+    )
+    ORDER BY wm.phone_number, COALESCE(wm.sent_at, wm.created_at) DESC
   `;
+
+  const inboundPhones = new Set(inboundRows.map((r) => r.from_phone_number));
 
   const conversations = await Promise.all([
     ...inboundRows.map(async (row) => {
@@ -86,35 +96,37 @@ export async function GET(request: NextRequest) {
         lastType: row.last_type,
         totalMessages: Number(row.total_messages),
         order,
+        isOutboundOnly: false,
       };
     }),
-    ...outboundRows.map(async (row) => {
-      const order = row.order_id
-        ? await prisma.order.findUnique({
-            where: { id: row.order_id },
-            select: {
-              id: true,
-              codNetworkOrderId: true,
-              customerName: true,
-              productName: true,
-              status: true,
-            },
-          })
-        : null;
-      const isTextReply = row.last_template === "<text>";
-      return {
-        phoneNumber: row.phone_number,
-        contactName: order?.customerName ?? null,
-        lastReceivedAt: row.last_sent_at,
-        lastText: isTextReply ? "(sent reply)" : `Template: ${row.last_template}`,
-        lastType: "text",
-        totalMessages: Number(row.total_messages),
-        order,
-      };
-    }),
+    ...outboundRows
+      .filter((r) => !inboundPhones.has(r.phone_number))
+      .map(async (row) => {
+        const order = row.order_id
+          ? await prisma.order.findUnique({
+              where: { id: row.order_id },
+              select: {
+                id: true,
+                codNetworkOrderId: true,
+                customerName: true,
+                productName: true,
+                status: true,
+              },
+            })
+          : null;
+        return {
+          phoneNumber: row.phone_number,
+          contactName: order?.customerName ?? null,
+          lastReceivedAt: row.last_sent_at,
+          lastText: row.last_template === "<text>" ? "(sent reply)" : `Template: ${row.last_template}`,
+          lastType: row.last_template === "<text>" ? "text" : "template",
+          totalMessages: Number(row.total_messages),
+          order,
+          isOutboundOnly: true,
+        };
+      }),
   ]);
 
-  // Newest-first conversation list.
   conversations.sort(
     (a, b) =>
       new Date(b.lastReceivedAt).getTime() -

@@ -274,6 +274,7 @@ model Product {
   aiAgentEnabled      Boolean  @default(false) @map("ai_agent_enabled")
   nameArabic         String?  @map("name_arabic")
   imageUrl           String?  @map("image_url")
+  description        String?  @map("description")
   // String to preserve currency precision (COD returns e.g. "199.00").
   price              String?
   currency           String?
@@ -281,6 +282,8 @@ model Product {
   productType        String?  @map("product_type")
   // From COD status.label — e.g. "Enabled", "Disabled".
   productStatus      String?  @map("product_status")
+  // Whether this is a COD Drop product (vs seller's own product).
+  isDropProduct      Boolean  @default(false) @map("is_drop_product")
   // Direct link to the seller's landing page for the product (from COD).
   storeUrl           String?  @map("store_url")
   rawProductJson    Json?    @map("raw_product_json")

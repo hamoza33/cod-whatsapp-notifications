@@ -903,10 +903,11 @@ function AutomationCard({
         <div className="flex items-center gap-2">
           <button
             onClick={() => setEditing(true)}
-            className="p-1.5 text-gray-500 hover:text-blue-600 hover:bg-blue-50 rounded-md"
-            title="Edit"
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-blue-600 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-md transition-colors"
+            title="Edit automation"
           >
-            <Pencil size={16} />
+            <Pencil size={14} />
+            Edit
           </button>
           <button
             onClick={toggleEnabled}

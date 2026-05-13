@@ -31,6 +31,7 @@ interface Conversation {
   lastText: string | null;
   lastType: string;
   totalMessages: number;
+  isOutboundOnly?: boolean;
   order: {
     id: string;
     codNetworkOrderId: string;
@@ -57,9 +58,12 @@ type ThreadEntry =
       at: string;
       templateName: string;
       templateVariables: unknown;
+      renderedText: string | null;
+      sentBy: string | null;
       status: string;
       providerMessageId: string | null;
       errorMessage: string | null;
+      headerImageUrl?: string | null;
     };
 
 interface ThreadResponse {
@@ -330,6 +334,12 @@ export default function InboxPage() {
                       Order #{c.order.codNetworkOrderId} · {c.order.status}
                     </div>
                   )}
+                  {c.isOutboundOnly && !c.order && (
+                    <div className="text-[11px] text-[#667781] mt-0.5 flex items-center gap-1">
+                      <Send size={9} />
+                      Outbound only
+                    </div>
+                  )}
                 </div>
               </button>
             );
@@ -500,11 +510,16 @@ export default function InboxPage() {
   );
 }
 
+function isArabic(text: string): boolean {
+  return /[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF]/.test(text);
+}
+
 function InboundBubble({
   msg,
 }: {
   msg: Extract<ThreadEntry, { kind: "inbound" }>;
 }) {
+  const rtl = msg.text ? isArabic(msg.text) : false;
   return (
     <div className="flex justify-start">
       <div className="max-w-[65%] bg-white rounded-lg rounded-tl-none px-3 py-2 shadow-sm relative">
@@ -521,11 +536,7 @@ function InboundBubble({
           </div>
         )}
         {msg.text ? (
-          <p
-            className="text-sm text-[#111B21] whitespace-pre-wrap break-words leading-[19px]"
-            dir={isArabic(msg.text) ? "rtl" : "ltr"}
-            style={{ textAlign: isArabic(msg.text) ? "right" : "left" }}
-          >{msg.text}</p>
+          <p className="text-sm text-[#111B21] whitespace-pre-wrap break-words leading-[19px]" dir={rtl ? "rtl" : undefined} style={rtl ? { textAlign: "right" } : undefined}>{msg.text}</p>
         ) : (
           <p className="text-sm text-[#8696A0] italic">
             ({msg.type} attachment)
@@ -539,35 +550,13 @@ function InboundBubble({
   );
 }
 
-function isArabic(text: string): boolean {
-  return /[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF]/.test(text);
-}
-
 function OutboundBubble({
   msg,
 }: {
   msg: Extract<ThreadEntry, { kind: "outbound" }>;
 }) {
   const isText = msg.templateName === "<text>";
-  const variables = Array.isArray(msg.templateVariables)
-    ? (msg.templateVariables as string[])
-    : msg.templateVariables &&
-      typeof msg.templateVariables === "object" &&
-      "text" in msg.templateVariables
-    ? [(msg.templateVariables as { text: string }).text]
-    : [];
-
-  const headerImage = msg.templateVariables &&
-    typeof msg.templateVariables === "object" &&
-    "headerImage" in (msg.templateVariables as Record<string, unknown>)
-    ? (msg.templateVariables as Record<string, string>).headerImage
-    : null;
-
-  const contentText = isText
-    ? (variables[0] ?? "")
-    : variables.join(", ");
-  const textDir = isArabic(contentText) ? "rtl" : "ltr";
-
+  const isAiAgent = msg.sentBy === "ai_agent";
   const statusIcon = (() => {
     switch (msg.status) {
       case "READ":
@@ -586,6 +575,9 @@ function OutboundBubble({
         return null;
     }
   })();
+
+  const displayText = msg.renderedText;
+
   return (
     <div className="flex justify-end">
       <div
@@ -595,34 +587,29 @@ function OutboundBubble({
             : "bg-[#D9FDD3]"
         }`}
       >
-        <div className="text-[11px] text-[#667781] mb-0.5">
-          {isText ? "Text message" : `Template: ${msg.templateName}`}
+        <div className="text-[11px] text-[#667781] mb-0.5 flex items-center gap-1">
+          {isAiAgent ? (
+            <span className="text-purple-600 font-medium">AI Agent</span>
+          ) : isText ? (
+            <span>You</span>
+          ) : (
+            <span>Template: {msg.templateName}</span>
+          )}
         </div>
-        {headerImage && (
-          <div className="mb-1 rounded overflow-hidden">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src={headerImage} alt="Header" className="max-w-full rounded" />
+        {msg.headerImageUrl && (
+          <div className="mb-1.5 rounded overflow-hidden">
+            <img src={msg.headerImageUrl} alt="" className="max-w-full rounded" />
           </div>
         )}
-        {isText ? (
-          <p
-            className="text-sm text-[#111B21] whitespace-pre-wrap break-words leading-[19px]"
-            dir={textDir}
-            style={{ textAlign: textDir === "rtl" ? "right" : "left" }}
-          >
-            {variables[0] ?? ""}
+        {displayText ? (
+          <p className="text-sm text-[#111B21] whitespace-pre-wrap break-words leading-[19px]" dir={displayText && isArabic(displayText) ? "rtl" : undefined} style={displayText && isArabic(displayText) ? { textAlign: "right" } : undefined}>
+            {displayText}
           </p>
-        ) : (
-          variables.length > 0 && (
-            <p
-              className="text-sm text-[#111B21] whitespace-pre-wrap break-words leading-[19px]"
-              dir={textDir}
-              style={{ textAlign: textDir === "rtl" ? "right" : "left" }}
-            >
-              {variables.join(", ")}
-            </p>
-          )
-        )}
+        ) : !isText ? (
+          <p className="text-sm text-[#111B21] italic">
+            [Template sent with variables]
+          </p>
+        ) : null}
         {msg.errorMessage && (
           <p className="text-xs text-red-600 mt-1">{msg.errorMessage}</p>
         )}

@@ -66,15 +66,20 @@ async function upsertProduct(
   const name = (p.name ?? p.name_arabic ?? (p as Record<string, unknown>).title as string ?? "").trim();
   if (!name) return "skipped";
 
+  const productType = extractLabel(p.type);
+  const isDropProduct = detectDropProduct(p, productType);
+
   const data = {
     sku: p.sku ?? null,
     name,
     nameArabic: p.name_arabic ?? null,
     imageUrl: p.image_url ?? p.path_image ?? null,
+    description: typeof p.description === "string" ? p.description : null,
     price: p.price !== undefined && p.price !== null ? String(p.price) : null,
     currency: p.currency ?? null,
-    productType: extractLabel(p.type),
+    productType,
     productStatus: extractLabel(p.status),
+    isDropProduct,
     storeUrl: p.url ?? null,
     rawProductJson: p as unknown as Prisma.InputJsonValue,
     lastSyncedAt: new Date(),
@@ -99,6 +104,20 @@ async function upsertProduct(
     },
   });
   return "created";
+}
+
+function detectDropProduct(
+  p: CodNetworkProduct,
+  productType: string | null
+): boolean {
+  // Heuristic: COD Drop products often have "drop" in type, source, or
+  // specific flags from the raw payload. Adjust if COD provides a clear flag.
+  const raw = p as Record<string, unknown>;
+  if (typeof raw.is_drop === "boolean") return raw.is_drop;
+  if (typeof raw.source === "string" && raw.source.toLowerCase().includes("drop"))
+    return true;
+  if (productType?.toLowerCase().includes("drop")) return true;
+  return false;
 }
 
 function extractLabel(

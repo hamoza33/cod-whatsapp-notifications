@@ -43,38 +43,50 @@ export function Sidebar() {
   };
 
   return (
-    <aside className="w-64 bg-gray-900 text-white flex flex-col min-h-screen">
-      <div className="p-4 border-b border-gray-700">
-        <h1 className="text-lg font-bold">COD WhatsApp</h1>
-        <p className="text-xs text-gray-400">Delivery Notifications</p>
+    <aside className="w-64 bg-gradient-to-b from-gray-900 via-gray-900 to-gray-950 text-white flex flex-col min-h-screen shadow-xl">
+      <div className="px-5 py-5 border-b border-gray-800/50">
+        <div className="flex items-center gap-3">
+          <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-green-400 to-green-600 flex items-center justify-center shadow-lg shadow-green-500/20">
+            <Send size={16} className="text-white" />
+          </div>
+          <div>
+            <h1 className="text-base font-bold tracking-tight">COD WhatsApp</h1>
+            <p className="text-[11px] text-gray-400 leading-none mt-0.5">
+              Delivery Notifications
+            </p>
+          </div>
+        </div>
       </div>
 
-      <nav className="flex-1 p-2">
+      <nav className="flex-1 px-3 py-3 space-y-0.5 overflow-y-auto">
         {navItems.map((item) => {
           const isActive = pathname === item.href;
           return (
             <Link
               key={item.href}
               href={item.href}
-              className={`flex items-center gap-3 px-3 py-2 rounded-md text-sm mb-1 transition-colors ${
+              className={`flex items-center gap-3 px-3 py-2 rounded-lg text-[13px] font-medium transition-all ${
                 isActive
-                  ? "bg-blue-600 text-white"
-                  : "text-gray-300 hover:bg-gray-800 hover:text-white"
+                  ? "bg-blue-600/90 text-white shadow-md shadow-blue-500/20"
+                  : "text-gray-400 hover:text-gray-100 hover:bg-white/5"
               }`}
             >
-              <item.icon size={18} />
+              <item.icon
+                size={17}
+                className={isActive ? "text-white" : "text-gray-500"}
+              />
               {item.label}
             </Link>
           );
         })}
       </nav>
 
-      <div className="p-2 border-t border-gray-700">
+      <div className="px-3 py-3 border-t border-gray-800/50">
         <button
           onClick={handleLogout}
-          className="flex items-center gap-3 px-3 py-2 rounded-md text-sm text-gray-300 hover:bg-gray-800 hover:text-white w-full transition-colors"
+          className="flex items-center gap-3 px-3 py-2 rounded-lg text-[13px] font-medium text-gray-400 hover:text-red-400 hover:bg-red-500/10 w-full transition-all"
         >
-          <LogOut size={18} />
+          <LogOut size={17} className="text-gray-500" />
           Logout
         </button>
       </div>

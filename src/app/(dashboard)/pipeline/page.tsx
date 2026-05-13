@@ -2,18 +2,22 @@
 
 import { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import { api } from "@/lib/api-client";
+import ManualOrderModal from "@/components/manual-order-modal";
 import {
   RefreshCw,
   Send,
   Image as ImageIcon,
   Phone,
-  PhoneCall,
   MapPin,
   Package as PackageIcon,
   Hash,
   CheckCircle2,
   X,
   AlertCircle,
+  GripVertical,
+  Plus,
+  CheckSquare,
+  ArrowRightLeft,
 } from "lucide-react";
 
 type OrderStatus =
@@ -79,8 +83,9 @@ interface PipelineOrder {
   status: OrderStatus;
   codCreatedAt: string | null;
   whatsappSentAt: string | null;
-  callAgentQueued: boolean;
-  productImages: string[];
+  productImageUrl: string | null;
+  callAgentQueued?: boolean;
+  productImages?: string[];
 }
 
 interface TemplateInfo {
@@ -111,15 +116,14 @@ export default function PipelinePage() {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [draggingId, setDraggingId] = useState<string | null>(null);
-  // Mirror `draggingId` into a ref so `handleDrop` can read the current value
-  // synchronously even if React has not yet flushed the state update from
-  // `handleDragStart`. We also stash the id in `dataTransfer` for browsers
-  // (and programmatic drivers) that drop events when state is stale.
   const draggingIdRef = useRef<string | null>(null);
   const [hoverColumn, setHoverColumn] = useState<string | null>(null);
   const [sendDialogOrder, setSendDialogOrder] = useState<PipelineOrder | null>(null);
   const [toast, setToast] = useState<{ kind: "success" | "error"; text: string } | null>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [bulkMoveTarget, setBulkMoveTarget] = useState<string | null>(null);
+  const [showManualOrder, setShowManualOrder] = useState(false);
 
   const showToast = useCallback((kind: "success" | "error", text: string) => {
     setToast({ kind, text });
@@ -143,9 +147,6 @@ export default function PipelinePage() {
   }, []);
 
   useEffect(() => {
-    // Fetch on mount. The setState calls inside `fetchOrders` are the whole
-    // point of this effect (sync external API state into local state), so the
-    // `set-state-in-effect` rule is opted-out here intentionally.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     fetchOrders();
   }, [fetchOrders]);
@@ -158,7 +159,6 @@ export default function PipelinePage() {
       else if (o.whatsappSentAt) groups.__SENT__.push(o);
       else groups[o.status]?.push(o);
     }
-    // Sort each column oldest-first (first created → last created)
     for (const key of Object.keys(groups)) {
       groups[key].sort((a, b) => {
         const aDate = a.codCreatedAt ? new Date(a.codCreatedAt).getTime() : 0;
@@ -180,13 +180,13 @@ export default function PipelinePage() {
     setHoverColumn(null);
   };
 
-  const handleDragEnter = (e: React.DragEvent, columnKey: string) => {
+  const handleDragOver = (e: React.DragEvent, columnKey: string) => {
     e.preventDefault();
     e.dataTransfer.dropEffect = "move";
     if (hoverColumn !== columnKey) setHoverColumn(columnKey);
   };
 
-  const handleDragOver = (e: React.DragEvent, columnKey: string) => {
+  const handleDragEnter = (e: React.DragEvent, columnKey: string) => {
     e.preventDefault();
     e.dataTransfer.dropEffect = "move";
     if (hoverColumn !== columnKey) setHoverColumn(columnKey);
@@ -197,8 +197,6 @@ export default function PipelinePage() {
   };
 
   const handleDrop = async (e: React.DragEvent, columnKey: string) => {
-    // Prefer the id from dataTransfer (set in dragStart) over the ref/state
-    // — some browsers null out the ref before the drop event fires.
     const idFromData = e.dataTransfer?.getData("text/plain") || null;
     const id = idFromData || draggingIdRef.current || draggingId;
     draggingIdRef.current = null;
@@ -208,8 +206,12 @@ export default function PipelinePage() {
     const order = orders.find((o) => o.id === id);
     if (!order) return;
 
+    if (columnKey === "__SENT__") {
+      setSendDialogOrder(order);
+      return;
+    }
+
     if (columnKey === "__CALL_AGENT__") {
-      // Trigger the AI voice agent call for this order
       setOrders((prev) =>
         prev.map((o) => (o.id === id ? { ...o, callAgentQueued: true } : o))
       );
@@ -221,24 +223,18 @@ export default function PipelinePage() {
         }).then(async (r) => {
           if (!r.ok) throw new Error((await r.json()).error || `HTTP ${r.status}`);
         });
-        showToast("success", "Call Agent triggered — AI will call the customer");
+        showToast("success", "Call Agent queued — voice agent will call the customer");
       } catch (err) {
         setOrders((prev) =>
           prev.map((o) => (o.id === id ? { ...o, callAgentQueued: false } : o))
         );
-        showToast("error", err instanceof Error ? err.message : "Failed to trigger call agent");
+        showToast("error", err instanceof Error ? err.message : "Failed to queue call");
       }
-      return;
-    }
-
-    if (columnKey === "__SENT__") {
-      setSendDialogOrder(order);
       return;
     }
 
     if (columnKey === order.status) return;
 
-    // Optimistic update
     const previousStatus = order.status;
     setOrders((prev) =>
       prev.map((o) => (o.id === id ? { ...o, status: columnKey as OrderStatus } : o))
@@ -253,7 +249,6 @@ export default function PipelinePage() {
       });
       showToast("success", `Moved to ${STATUS_LABELS[columnKey as OrderStatus]}`);
     } catch (err) {
-      // Roll back on error
       setOrders((prev) =>
         prev.map((o) => (o.id === id ? { ...o, status: previousStatus } : o))
       );
@@ -270,6 +265,52 @@ export default function PipelinePage() {
     );
     setSendDialogOrder(null);
     showToast("success", "WhatsApp message sent");
+  };
+
+  const toggleSelect = (orderId: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(orderId)) next.delete(orderId);
+      else next.add(orderId);
+      return next;
+    });
+  };
+
+  const handleBulkMove = async (targetStatus: string) => {
+    setBulkMoveTarget(null);
+    const ids = Array.from(selectedIds);
+    if (ids.length === 0) return;
+
+    const previousOrders = [...orders];
+    setOrders((prev) =>
+      prev.map((o) =>
+        selectedIds.has(o.id) ? { ...o, status: targetStatus as OrderStatus } : o
+      )
+    );
+
+    let successCount = 0;
+    let failCount = 0;
+    for (const id of ids) {
+      try {
+        const r = await fetch(`/api/orders/${id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ status: targetStatus }),
+        });
+        if (!r.ok) throw new Error("failed");
+        successCount++;
+      } catch {
+        failCount++;
+      }
+    }
+
+    if (failCount > 0) {
+      setOrders(previousOrders);
+      showToast("error", `${failCount} of ${ids.length} moves failed`);
+    } else {
+      showToast("success", `Moved ${successCount} orders to ${STATUS_LABELS[targetStatus as OrderStatus] || targetStatus}`);
+    }
+    setSelectedIds(new Set());
   };
 
   const refresh = () => {
@@ -291,19 +332,58 @@ export default function PipelinePage() {
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Pipeline</h1>
           <p className="text-sm text-gray-500">
-            Drag cards between columns to update status. Drop on the
-            <span className="font-medium text-green-700"> WhatsApp Sent </span>
-            column to send a templated message.
+            Drag cards between columns to update status. Use the grip handle to drag; click card text to select it.
           </p>
         </div>
-        <button
-          onClick={refresh}
-          disabled={refreshing}
-          className="flex items-center gap-2 px-3 py-1.5 border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
-        >
-          <RefreshCw size={14} className={refreshing ? "animate-spin" : ""} />
-          Refresh
-        </button>
+        <div className="flex items-center gap-2">
+          {selectedIds.size > 0 && (
+            <div className="relative">
+              <button
+                onClick={() => setBulkMoveTarget(bulkMoveTarget ? null : "open")}
+                className="flex items-center gap-2 px-3 py-1.5 bg-indigo-600 text-white rounded-md text-sm font-medium hover:bg-indigo-700"
+              >
+                <ArrowRightLeft size={14} />
+                Move {selectedIds.size} selected
+              </button>
+              {bulkMoveTarget === "open" && (
+                <div className="absolute right-0 top-full mt-1 bg-white border border-gray-200 rounded-lg shadow-xl z-30 w-56 py-1">
+                  {REAL_STATUSES.map((s) => (
+                    <button
+                      key={s}
+                      onClick={() => handleBulkMove(s)}
+                      className="w-full text-left px-3 py-2 text-sm hover:bg-gray-50 text-gray-700"
+                    >
+                      {STATUS_LABELS[s]}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+          {selectedIds.size > 0 && (
+            <button
+              onClick={() => setSelectedIds(new Set())}
+              className="px-3 py-1.5 text-sm text-gray-600 hover:text-gray-900 border border-gray-300 rounded-md"
+            >
+              Clear
+            </button>
+          )}
+          <button
+            onClick={() => setShowManualOrder(true)}
+            className="flex items-center gap-2 px-3 py-1.5 bg-blue-600 text-white rounded-md text-sm font-medium hover:bg-blue-700"
+          >
+            <Plus size={14} />
+            New Order
+          </button>
+          <button
+            onClick={refresh}
+            disabled={refreshing}
+            className="flex items-center gap-2 px-3 py-1.5 border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+          >
+            <RefreshCw size={14} className={refreshing ? "animate-spin" : ""} />
+            Refresh
+          </button>
+        </div>
       </div>
 
       {error && (
@@ -322,43 +402,48 @@ export default function PipelinePage() {
               colorClass={STATUS_COLORS[s]}
               orders={grouped[s] || []}
               isHover={hoverColumn === s}
-              onDragEnter={(e) => handleDragEnter(e, s)}
+              selectedIds={selectedIds}
               onDragOver={(e) => handleDragOver(e, s)}
+              onDragEnter={(e) => handleDragEnter(e, s)}
               onDragLeave={() => handleDragLeave(s)}
               onDrop={(e) => handleDrop(e, s)}
               onCardDragStart={handleDragStart}
               onCardDragEnd={handleDragEnd}
               onCardClick={setSendDialogOrder}
+              onToggleSelect={toggleSelect}
             />
           ))}
-          {/* Call Agent column */}
-          <Column
-            columnKey="__CALL_AGENT__"
-            title="Call Agent"
-            callAgentColumn
-            orders={grouped.__CALL_AGENT__ || []}
-            isHover={hoverColumn === "__CALL_AGENT__"}
-            onDragEnter={(e) => handleDragEnter(e, "__CALL_AGENT__")}
-            onDragOver={(e) => handleDragOver(e, "__CALL_AGENT__")}
-            onDragLeave={() => handleDragLeave("__CALL_AGENT__")}
-            onDrop={(e) => handleDrop(e, "__CALL_AGENT__")}
-            onCardDragStart={handleDragStart}
-            onCardDragEnd={handleDragEnd}
-            onCardClick={setSendDialogOrder}
-          />
           <Column
             columnKey="__SENT__"
             title="WhatsApp Sent"
             sentColumn
             orders={grouped.__SENT__ || []}
             isHover={hoverColumn === "__SENT__"}
-            onDragEnter={(e) => handleDragEnter(e, "__SENT__")}
+            selectedIds={selectedIds}
             onDragOver={(e) => handleDragOver(e, "__SENT__")}
+            onDragEnter={(e) => handleDragEnter(e, "__SENT__")}
             onDragLeave={() => handleDragLeave("__SENT__")}
             onDrop={(e) => handleDrop(e, "__SENT__")}
             onCardDragStart={handleDragStart}
             onCardDragEnd={handleDragEnd}
             onCardClick={setSendDialogOrder}
+            onToggleSelect={toggleSelect}
+          />
+          <Column
+            columnKey="__CALL_AGENT__"
+            title="Call Agent"
+            callAgentColumn
+            orders={grouped.__CALL_AGENT__ || []}
+            isHover={hoverColumn === "__CALL_AGENT__"}
+            selectedIds={selectedIds}
+            onDragOver={(e) => handleDragOver(e, "__CALL_AGENT__")}
+            onDragEnter={(e) => handleDragEnter(e, "__CALL_AGENT__")}
+            onDragLeave={() => handleDragLeave("__CALL_AGENT__")}
+            onDrop={(e) => handleDrop(e, "__CALL_AGENT__")}
+            onCardDragStart={handleDragStart}
+            onCardDragEnd={handleDragEnd}
+            onCardClick={setSendDialogOrder}
+            onToggleSelect={toggleSelect}
           />
         </div>
       </div>
@@ -372,9 +457,20 @@ export default function PipelinePage() {
         />
       )}
 
+      {showManualOrder && (
+        <ManualOrderModal
+          onClose={() => setShowManualOrder(false)}
+          onCreated={() => {
+            setShowManualOrder(false);
+            fetchOrders();
+            showToast("success", "Order created");
+          }}
+        />
+      )}
+
       {toast && (
         <div
-          className={`fixed bottom-6 right-6 px-4 py-3 rounded-md shadow-lg border text-sm flex items-start gap-2 max-w-md ${
+          className={`fixed bottom-6 right-6 px-4 py-3 rounded-md shadow-lg border text-sm flex items-start gap-2 max-w-md z-50 ${
             toast.kind === "success"
               ? "bg-green-50 text-green-800 border-green-200"
               : "bg-red-50 text-red-800 border-red-200"
@@ -405,13 +501,15 @@ function Column({
   sentColumn,
   callAgentColumn,
   isHover,
-  onDragEnter,
+  selectedIds,
   onDragOver,
+  onDragEnter,
   onDragLeave,
   onDrop,
   onCardDragStart,
   onCardDragEnd,
   onCardClick,
+  onToggleSelect,
 }: {
   title: string;
   columnKey: string;
@@ -420,34 +518,32 @@ function Column({
   sentColumn?: boolean;
   callAgentColumn?: boolean;
   isHover: boolean;
-  onDragEnter: (e: React.DragEvent) => void;
+  selectedIds: Set<string>;
   onDragOver: (e: React.DragEvent) => void;
+  onDragEnter?: (e: React.DragEvent) => void;
   onDragLeave: () => void;
   onDrop: (e: React.DragEvent) => void;
   onCardDragStart: (id: string) => void;
   onCardDragEnd: () => void;
   onCardClick: (o: PipelineOrder) => void;
+  onToggleSelect: (id: string) => void;
 }) {
   return (
     <div
-      onDragEnter={onDragEnter}
       onDragOver={onDragOver}
+      onDragEnter={onDragEnter}
       onDragLeave={onDragLeave}
-      onDrop={(e) => { e.preventDefault(); onDrop(e); }}
+      onDrop={(e) => onDrop(e)}
       className={`w-80 flex flex-col rounded-md border ${
-        sentColumn
-          ? "border-green-300 bg-green-50/30"
-          : callAgentColumn
-          ? "border-purple-300 bg-purple-50/30"
-          : "border-gray-200 bg-gray-50"
+        callAgentColumn ? "border-purple-300 bg-purple-50/30" : sentColumn ? "border-green-300 bg-green-50/30" : "border-gray-200 bg-gray-50"
       } ${isHover ? "ring-2 ring-blue-400" : ""}`}
     >
       <div
         className={`px-3 py-2 border-b rounded-t-md flex items-center justify-between ${
-          sentColumn
+          callAgentColumn
+            ? "bg-purple-100 border-purple-200"
+            : sentColumn
             ? "bg-green-100 border-green-200"
-            : callAgentColumn
-            ? "bg-purple-100 border-purple-200 text-purple-700"
             : `${colorClass || "bg-gray-100 border-gray-200"}`
         }`}
       >
@@ -459,8 +555,6 @@ function Column({
           <p className="text-xs text-gray-400 text-center py-6">
             {sentColumn
               ? "Drop a card here to send the WhatsApp message"
-              : callAgentColumn
-              ? "Drop a card here to trigger AI voice call"
               : "No orders"}
           </p>
         )}
@@ -469,10 +563,11 @@ function Column({
             key={o.id}
             order={o}
             sentColumn={sentColumn}
-            callAgentColumn={callAgentColumn}
+            isSelected={selectedIds.has(o.id)}
             onDragStart={() => onCardDragStart(o.id)}
             onDragEnd={onCardDragEnd}
             onClick={() => onCardClick(o)}
+            onToggleSelect={() => onToggleSelect(o.id)}
           />
         ))}
         <div className="h-12 shrink-0" />
@@ -484,17 +579,19 @@ function Column({
 function Card({
   order,
   sentColumn,
-  callAgentColumn,
+  isSelected,
   onDragStart,
   onDragEnd,
   onClick,
+  onToggleSelect,
 }: {
   order: PipelineOrder;
   sentColumn?: boolean;
-  callAgentColumn?: boolean;
+  isSelected: boolean;
   onDragStart: (e: React.DragEvent) => void;
   onDragEnd: () => void;
   onClick: () => void;
+  onToggleSelect: () => void;
 }) {
   const sentAt = order.whatsappSentAt
     ? new Date(order.whatsappSentAt).toLocaleString()
@@ -502,103 +599,141 @@ function Card({
   const createdAt = order.codCreatedAt
     ? new Date(order.codCreatedAt).toLocaleDateString()
     : null;
+
   return (
     <div
-      draggable
-      onDragStart={(e) => {
-        // setData is required by several browsers (Firefox, mobile WebKit)
-        // for the subsequent drop to fire. We use text/plain so the drop
-        // handler can read the order id back synchronously, sidestepping any
-        // stale React state.
-        e.dataTransfer.effectAllowed = "move";
-        e.dataTransfer.setData("text/plain", order.id);
-        onDragStart(e);
-      }}
-      onDragEnd={onDragEnd}
-      onClick={() => {
-        // Only trigger click if user wasn't selecting text
-        const sel = window.getSelection();
-        if (sel && sel.toString().length > 0) return;
-        onClick();
-      }}
-      className={`bg-white rounded-md border p-3 cursor-grab active:cursor-grabbing shadow-sm hover:shadow-md transition-shadow text-xs space-y-1 select-text ${
-        sentColumn ? "border-green-200" : callAgentColumn ? "border-purple-200" : "border-gray-200"
-      }`}
+      className={`bg-white rounded-md border p-0 shadow-sm hover:shadow-md transition-shadow text-xs ${
+        sentColumn ? "border-green-200" : "border-gray-200"
+      } ${isSelected ? "ring-2 ring-indigo-400 border-indigo-300" : ""}`}
     >
-      <div className="flex items-start justify-between gap-2">
-        <div className="font-medium text-gray-900 truncate">
-          {order.customerName || "Unknown"}
+      <div className="flex">
+        {/* Drag handle */}
+        <div
+          draggable
+          onDragStart={(e) => {
+            e.dataTransfer.effectAllowed = "move";
+            e.dataTransfer.setData("text/plain", order.id);
+            onDragStart(e);
+          }}
+          onDragEnd={onDragEnd}
+          className="flex items-center justify-center w-7 shrink-0 cursor-grab active:cursor-grabbing bg-gray-50 rounded-l-md border-r border-gray-100 hover:bg-gray-100 transition-colors"
+          title="Drag to move"
+        >
+          <GripVertical size={14} className="text-gray-400" />
         </div>
-        <span className="text-[10px] font-mono text-gray-400 shrink-0">
-          #{order.codNetworkOrderId.slice(-6)}
-        </span>
-      </div>
-      {(createdAt || order.codNetworkLeadId) && (
-        <div className="flex items-center gap-2 text-[10px] text-gray-500">
-          {createdAt && <span>{createdAt}</span>}
-          {order.codNetworkLeadId && (
-            <span className="font-mono" title={`Lead ID ${order.codNetworkLeadId}`}>
-              lead #{order.codNetworkLeadId.slice(-6)}
-            </span>
-          )}
-        </div>
-      )}
-      {order.productImages && order.productImages.length > 0 && (
-        <div className="flex gap-1 flex-wrap">
-          {order.productImages.map((img, i) => (
-            <div key={i} className="w-8 h-8 rounded overflow-hidden bg-gray-100 shrink-0">
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src={img} alt="Product" className="w-full h-full object-cover" />
+
+        {/* Card content - text selectable */}
+        <div className="flex-1 p-2.5 space-y-1 select-text cursor-default">
+          <div className="flex items-start justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onToggleSelect();
+                }}
+                className={`w-4 h-4 rounded border flex items-center justify-center shrink-0 transition-colors ${
+                  isSelected
+                    ? "bg-indigo-600 border-indigo-600 text-white"
+                    : "border-gray-300 hover:border-indigo-400"
+                }`}
+              >
+                {isSelected && <CheckSquare size={10} />}
+              </button>
+              <span className="font-medium text-gray-900 truncate">
+                {order.customerName || "Unknown"}
+              </span>
             </div>
-          ))}
-        </div>
-      )}
-      {order.productName && (
-        <div className="flex items-center gap-1.5 text-gray-700">
-          <PackageIcon size={11} className="shrink-0 text-gray-400" />
-          <span className="truncate">{order.productName}</span>
-        </div>
-      )}
-      {(order.productPrice || order.productQuantity) && (
-        <div className="flex items-center gap-3 text-gray-600">
-          {order.productPrice && (
-            <span>
-              <strong>{order.productPrice}</strong>
+            <span className="text-[10px] font-mono text-gray-400 shrink-0">
+              #{order.codNetworkOrderId.slice(-6)}
             </span>
+          </div>
+          {(createdAt || order.codNetworkLeadId) && (
+            <div className="flex items-center gap-2 text-[10px] text-gray-500">
+              {createdAt && <span>{createdAt}</span>}
+              {order.codNetworkLeadId && (
+                <span className="font-mono" title={`Lead ID ${order.codNetworkLeadId}`}>
+                  lead #{order.codNetworkLeadId.slice(-6)}
+                </span>
+              )}
+            </div>
           )}
-          {order.productQuantity && <span>×{order.productQuantity}</span>}
+          {order.productName && (
+            <div className="flex items-center gap-1.5 text-gray-700">
+              {order.productImageUrl ? (
+                <img
+                  src={order.productImageUrl}
+                  alt=""
+                  className="w-6 h-6 rounded object-cover shrink-0 border border-gray-200"
+                />
+              ) : (
+                <PackageIcon size={11} className="shrink-0 text-gray-400" />
+              )}
+              <span className="truncate">{order.productName}</span>
+            </div>
+          )}
+          {order.productImages && order.productImages.length > 1 && (
+            <div className="flex gap-1 flex-wrap">
+              {order.productImages.map((img, i) => (
+                <img
+                  key={i}
+                  src={img}
+                  alt={`Product ${i + 1}`}
+                  className="w-8 h-8 rounded object-cover border border-gray-200"
+                />
+              ))}
+            </div>
+          )}
+          {order.callAgentQueued && (
+            <div className="flex items-center gap-1.5 text-purple-700 text-[10px] font-medium">
+              <Phone size={10} className="shrink-0" />
+              Call Agent queued
+            </div>
+          )}
+          {(order.productPrice || order.productQuantity) && (
+            <div className="flex items-center gap-3 text-gray-600">
+              {order.productPrice && (
+                <span>
+                  <strong>{order.productPrice}</strong>
+                </span>
+              )}
+              {order.productQuantity && <span>&times;{order.productQuantity}</span>}
+            </div>
+          )}
+          {order.customerPhone && (
+            <div className="flex items-center gap-1.5 text-gray-600">
+              <Phone size={11} className="shrink-0 text-gray-400" />
+              <span className="truncate">{order.customerPhone}</span>
+            </div>
+          )}
+          {order.customerCity && (
+            <div className="flex items-center gap-1.5 text-gray-600">
+              <MapPin size={11} className="shrink-0 text-gray-400" />
+              <span className="truncate">{order.customerCity}</span>
+            </div>
+          )}
+          {order.trackingNumber && (
+            <div className="flex items-center gap-1.5 text-gray-600">
+              <Hash size={11} className="shrink-0 text-gray-400" />
+              <span className="truncate font-mono">{order.trackingNumber}</span>
+            </div>
+          )}
+          {sentAt && (
+            <div className="flex items-center gap-1.5 text-green-700 pt-1 border-t border-green-100">
+              <CheckCircle2 size={11} className="shrink-0" />
+              <span className="truncate">Sent {sentAt}</span>
+            </div>
+          )}
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onClick();
+            }}
+            className="mt-1 text-[10px] text-blue-600 hover:text-blue-800 hover:underline"
+          >
+            Send WhatsApp
+          </button>
         </div>
-      )}
-      {order.customerPhone && (
-        <div className="flex items-center gap-1.5 text-gray-600">
-          <Phone size={11} className="shrink-0 text-gray-400" />
-          <span className="truncate">{order.customerPhone}</span>
-        </div>
-      )}
-      {order.customerCity && (
-        <div className="flex items-center gap-1.5 text-gray-600">
-          <MapPin size={11} className="shrink-0 text-gray-400" />
-          <span className="truncate">{order.customerCity}</span>
-        </div>
-      )}
-      {order.trackingNumber && (
-        <div className="flex items-center gap-1.5 text-gray-600">
-          <Hash size={11} className="shrink-0 text-gray-400" />
-          <span className="truncate font-mono">{order.trackingNumber}</span>
-        </div>
-      )}
-      {sentAt && (
-        <div className="flex items-center gap-1.5 text-green-700 pt-1 border-t border-green-100">
-          <CheckCircle2 size={11} className="shrink-0" />
-          <span className="truncate">Sent {sentAt}</span>
-        </div>
-      )}
-      {order.callAgentQueued && (
-        <div className="flex items-center gap-1.5 text-purple-700 pt-1 border-t border-purple-100">
-          <PhoneCall size={11} className="shrink-0" />
-          <span className="truncate">Call Agent queued</span>
-        </div>
-      )}
+      </div>
     </div>
   );
 }
@@ -628,40 +763,13 @@ function SendDialog({
   const [templateError, setTemplateError] = useState<string | null>(null);
   const variableInputRef = useRef<HTMLInputElement>(null);
 
-  // Auto-load template metadata using configured Settings template (or override)
   useEffect(() => {
     const run = async () => {
       setDetecting(true);
       setTemplateError(null);
       try {
-        const params = new URLSearchParams();
-        if (templateName.trim()) params.set("name", templateName.trim());
-        if (templateLanguage.trim()) params.set("language", templateLanguage.trim());
-        // If neither override is set, also pass nothing — the endpoint will
-        // need a name; fall back silently. We let the user click "Detect"
-        // explicitly when they don't have it saved in Settings either.
-        const settingsLookup = await fetch("/api/settings");
-        if (!settingsLookup.ok) {
-          setDetecting(false);
-          return;
-        }
-        const sd = (await settingsLookup.json()) as {
-          settings: Record<string, string | null>;
-        };
-        const fallbackName = sd.settings?.whatsapp_template_name;
-        const fallbackLang = sd.settings?.whatsapp_template_language;
-        if (!params.get("name") && fallbackName) {
-          params.set("name", fallbackName);
-        }
-        if (!params.get("language") && fallbackLang) {
-          params.set("language", fallbackLang);
-        }
-        if (!params.get("name")) {
-          setDetecting(false);
-          return;
-        }
         const data = await api.get<{ template: TemplateInfo }>(
-          `/whatsapp/templates?${params.toString()}`
+          "/whatsapp/templates/detect"
         );
         setTemplateInfo(data.template);
       } catch (err) {

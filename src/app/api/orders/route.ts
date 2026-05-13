@@ -70,9 +70,31 @@ export async function GET(request: NextRequest) {
     prisma.order.count({ where }),
   ]);
 
+  // Enrich orders with product image URLs from the products catalog
+  const productNames = [
+    ...new Set(
+      orders
+        .map((o) => o.productName)
+        .filter((n): n is string => !!n)
+    ),
+  ];
+  const productImageMap = new Map<string, string>();
+  if (productNames.length > 0) {
+    const products = await prisma.product.findMany({
+      where: { name: { in: productNames } },
+      select: { name: true, imageUrl: true },
+    });
+    for (const p of products) {
+      if (p.imageUrl) productImageMap.set(p.name, p.imageUrl);
+    }
+  }
+
   const enrichedOrders = orders.map((o) => ({
     ...o,
     productImages: extractProductImages(o.rawOrderJson),
+    productImageUrl: o.productName
+      ? productImageMap.get(o.productName) ?? null
+      : null,
   }));
 
   return NextResponse.json({

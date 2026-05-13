@@ -67,6 +67,12 @@ export const SETTING_KEYS = {
   VOICE_AGENT_PROMPT: "voice_agent_prompt",
   VOICE_AGENT_CALLER_ID: "voice_agent_caller_id",
   VOICE_AGENT_LANGUAGE: "voice_agent_language",
+  AI_AGENT_ENABLED: "ai_agent_enabled",
+  OPENAI_API_KEY: "openai_api_key",
+  AI_AGENT_MODEL: "ai_agent_model",
+  AI_AGENT_SYSTEM_PROMPT: "ai_agent_system_prompt",
+  AI_AGENT_MAX_TOKENS: "ai_agent_max_tokens",
+  AI_AGENT_PRODUCT_TYPES: "ai_agent_product_types",
 } as const;
 
 export const SENSITIVE_SETTING_KEYS: readonly string[] = [
@@ -77,6 +83,7 @@ export const SENSITIVE_SETTING_KEYS: readonly string[] = [
   SETTING_KEYS.WHATSAPP_APP_SECRET,
   SETTING_KEYS.WHATSAPP_WEBHOOK_VERIFY_TOKEN,
   SETTING_KEYS.VOICE_AGENT_API_KEY,
+  SETTING_KEYS.OPENAI_API_KEY,
 ];
 
 /**
