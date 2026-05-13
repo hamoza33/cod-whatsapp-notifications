@@ -349,7 +349,7 @@ export default function TrackingPage() {
   const handleSaveRefreshInterval = async (val: string) => {
     setRefreshInterval(val);
     try {
-      await api.patch("/settings", {
+      await api.put("/settings", {
         settings: { tracking_refresh_interval_minutes: val },
       });
       showToast("success", `Refresh interval set to ${REFRESH_OPTIONS.find((o) => o.value === val)?.label}`);
