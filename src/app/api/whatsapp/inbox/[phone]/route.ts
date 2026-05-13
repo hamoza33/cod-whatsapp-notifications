@@ -255,3 +255,47 @@ export async function POST(
     );
   }
 }
+
+/**
+ * Simulate an inbound message for testing. Auth-protected — only logged-in
+ * users can call this. Useful when the Meta webhook isn't configured yet.
+ */
+export async function PUT(
+  request: NextRequest,
+  { params }: { params: Promise<{ phone: string }> }
+) {
+  const user = getAuthUser(request);
+  if (!user) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+  const { phone } = await params;
+  const decodedPhone = decodeURIComponent(phone);
+  let body: { text?: unknown; contactName?: unknown };
+  try {
+    body = (await request.json()) as { text?: unknown; contactName?: unknown };
+  } catch {
+    return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+  }
+  if (typeof body.text !== "string" || !body.text.trim()) {
+    return NextResponse.json(
+      { error: "text is required and must be a non-empty string" },
+      { status: 400 }
+    );
+  }
+
+  const digits = decodedPhone.replace(/[^\d]/g, "");
+  const normalizedPhone = `+${digits}`;
+
+  const msg = await prisma.inboundMessage.create({
+    data: {
+      providerMessageId: `simulated-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      fromPhoneNumber: normalizedPhone,
+      contactName: typeof body.contactName === "string" ? body.contactName : null,
+      type: "text",
+      text: body.text.trim(),
+      rawPayload: { simulated: true, by: user.email },
+    },
+  });
+
+  return NextResponse.json({ success: true, id: msg.id });
+}
