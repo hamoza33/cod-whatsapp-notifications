@@ -77,6 +77,8 @@ model Order {
   // Pipeline UI to short-circuit accidental re-sends and to render the
   // "WhatsApp Sent" virtual column.
   whatsappSentAt      DateTime?   @map("whatsapp_sent_at")
+  // Whether this order has been queued for the AI voice agent to call.
+  callAgentQueued     Boolean     @default(false) @map("call_agent_queued")
   // Free-form notes the operator can attach to an order from the Pipeline
   // (e.g. "called customer, no answer"). Not synced from COD Network.
   pipelineNote        String?     @map("pipeline_note")
@@ -268,6 +270,8 @@ model Product {
   productStatus      String?  @map("product_status")
   // Whether this is a COD Drop product (vs seller's own product).
   isDropProduct      Boolean  @default(false) @map("is_drop_product")
+  // Whether the AI agent is enabled for this product specifically.
+  aiAgentEnabled     Boolean  @default(false) @map("ai_agent_enabled")
   // Direct link to the seller's landing page for the product (from COD).
   storeUrl           String?  @map("store_url")
   rawProductJson    Json?    @map("raw_product_json")
@@ -278,4 +282,18 @@ model Product {
   @@index([name])
   @@index([sku])
   @@map("products")
+}
+
+/// Multiple WhatsApp Business numbers can be managed via the Settings UI.
+/// The operator picks which number to use in the Inbox dropdown.
+model WhatsappNumber {
+  id              String   @id @default(cuid())
+  label           String
+  phoneNumberId   String   @map("phone_number_id")
+  displayPhone    String   @map("display_phone")
+  isDefault       Boolean  @default(false) @map("is_default")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  @@map("whatsapp_numbers")
 }

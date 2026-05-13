@@ -474,6 +474,50 @@ export class CodNetworkClient {
     }
     return all;
   }
+
+  async getDropProducts(
+    page = 1,
+    perPage = 50
+  ): Promise<CodNetworkListResponse> {
+    const search = new URLSearchParams({
+      page: String(page),
+      limit: String(perPage),
+      per_page: String(perPage),
+    });
+    return this.request<CodNetworkListResponse>(
+      `/seller/drop-products?${search.toString()}`
+    );
+  }
+
+  async getAllDropProducts(opts: { maxPages?: number } = {}): Promise<
+    CodNetworkProduct[]
+  > {
+    const { maxPages = 50 } = opts;
+    const all: CodNetworkProduct[] = [];
+    let page = 1;
+    let hasMore = true;
+    while (hasMore) {
+      try {
+        const response = await this.getDropProducts(page, 50);
+        const items = (response.data as unknown as CodNetworkProduct[]) ?? [];
+        all.push(...items);
+        const pagination = response.meta?.pagination;
+        if (
+          pagination?.current_page !== undefined &&
+          pagination?.total_pages !== undefined
+        ) {
+          hasMore = pagination.current_page < pagination.total_pages;
+        } else {
+          hasMore = items.length === 50;
+        }
+      } catch {
+        break;
+      }
+      page++;
+      if (page > maxPages) break;
+    }
+    return all;
+  }
 }
 
 export interface CodNetworkProduct {

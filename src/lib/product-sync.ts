@@ -18,21 +18,36 @@ export async function syncProductsFromCodNetwork(): Promise<{
   updated: number;
 }> {
   const client = await CodNetworkClient.fromSettings();
-  const products = await client.getAllProducts();
 
   let created = 0;
   let updated = 0;
-  for (const p of products) {
-    const result = await upsertProduct(p);
+
+  const sellerProducts = await client.getAllProducts();
+  for (const p of sellerProducts) {
+    const result = await upsertProduct(p, false);
     if (result === "created") created++;
     else if (result === "updated") updated++;
   }
 
-  return { fetched: products.length, created, updated };
+  let dropProducts: typeof sellerProducts = [];
+  try {
+    dropProducts = await client.getAllDropProducts();
+    for (const p of dropProducts) {
+      const result = await upsertProduct(p, true);
+      if (result === "created") created++;
+      else if (result === "updated") updated++;
+    }
+  } catch {
+    // drop-products endpoint may not be available for all accounts
+  }
+
+  const fetched = sellerProducts.length + dropProducts.length;
+  return { fetched, created, updated };
 }
 
 async function upsertProduct(
-  p: CodNetworkProduct
+  p: CodNetworkProduct,
+  forceDropProduct?: boolean
 ): Promise<"created" | "updated" | "skipped"> {
   const codId = String(p.id ?? "").trim();
   if (!codId) return "skipped";
@@ -41,7 +56,7 @@ async function upsertProduct(
   if (!name) return "skipped";
 
   const productType = extractLabel(p.type);
-  const isDropProduct = detectDropProduct(p, productType);
+  const isDropProduct = forceDropProduct ?? detectDropProduct(p, productType);
 
   const data = {
     sku: p.sku ?? null,

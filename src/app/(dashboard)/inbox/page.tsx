@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback, useRef } from "react";
+import { useEffect, useState, useCallback, useRef, useMemo } from "react";
 import { api } from "@/lib/api-client";
 import {
   RefreshCw,
@@ -85,6 +85,18 @@ function formatMessageTime(dateStr: string) {
   });
 }
 
+function hasArabic(text: string): boolean {
+  return /[\u0600-\u06FF]/.test(text);
+}
+
+interface WhatsappNumberOption {
+  id: string;
+  label: string;
+  phoneNumberId: string;
+  displayPhone: string;
+  isDefault: boolean;
+}
+
 export default function InboxPage() {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [selectedPhone, setSelectedPhone] = useState<string | null>(null);
@@ -96,6 +108,8 @@ export default function InboxPage() {
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<{ kind: "error" | "success"; text: string } | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
+  const [whatsappNumbers, setWhatsappNumbers] = useState<WhatsappNumberOption[]>([]);
+  const [selectedNumberId, setSelectedNumberId] = useState<string | null>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const threadEndRef = useRef<HTMLDivElement>(null);
 
@@ -138,6 +152,20 @@ export default function InboxPage() {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     fetchConversations();
   }, [fetchConversations]);
+
+  useEffect(() => {
+    async function loadNumbers() {
+      try {
+        const data = await api.get<{ numbers: WhatsappNumberOption[] }>("/whatsapp/numbers");
+        setWhatsappNumbers(data.numbers);
+        const def = data.numbers.find((n) => n.isDefault);
+        if (def) setSelectedNumberId(def.id);
+      } catch {
+        // ignore
+      }
+    }
+    loadNumbers();
+  }, []);
 
   useEffect(() => {
     const interval = setInterval(() => {
@@ -353,6 +381,19 @@ export default function InboxPage() {
                   {selectedPhone}
                 </div>
               </div>
+              {whatsappNumbers.length > 1 && (
+                <select
+                  value={selectedNumberId || ""}
+                  onChange={(e) => setSelectedNumberId(e.target.value)}
+                  className="bg-white/20 text-white text-xs border border-white/30 rounded-md px-2 py-1 outline-none"
+                >
+                  {whatsappNumbers.map((n) => (
+                    <option key={n.id} value={n.id} className="text-gray-900">
+                      {n.label} ({n.displayPhone})
+                    </option>
+                  ))}
+                </select>
+              )}
               {thread && (
                 <span
                   className={`text-xs px-3 py-1 rounded-full font-medium ${
@@ -485,7 +526,10 @@ function InboundBubble({
           </div>
         )}
         {msg.text ? (
-          <p className="text-sm text-[#111B21] whitespace-pre-wrap break-words leading-[19px]">{msg.text}</p>
+          <p
+            className="text-sm text-[#111B21] whitespace-pre-wrap break-words leading-[19px]"
+            dir={hasArabic(msg.text) ? "rtl" : "ltr"}
+          >{msg.text}</p>
         ) : (
           <p className="text-sm text-[#8696A0] italic">
             ({msg.type} attachment)
@@ -546,7 +590,10 @@ function OutboundBubble({
           )}
         </div>
         {displayText ? (
-          <p className="text-sm text-[#111B21] whitespace-pre-wrap break-words leading-[19px]">
+          <p
+            className="text-sm text-[#111B21] whitespace-pre-wrap break-words leading-[19px]"
+            dir={hasArabic(displayText) ? "rtl" : "ltr"}
+          >
             {displayText}
           </p>
         ) : !isText ? (

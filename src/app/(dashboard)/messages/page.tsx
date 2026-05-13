@@ -13,11 +13,16 @@ interface MessageLog {
   sentBy: string;
   sentAt: string | null;
   createdAt: string;
+  renderedText: string | null;
   order: {
     codNetworkOrderId: string;
     customerName: string | null;
     status: string;
   };
+}
+
+function hasArabic(text: string): boolean {
+  return /[\u0600-\u06FF]/.test(text);
 }
 
 const STATUS_OPTIONS = ["ALL", "PENDING", "SENT", "DELIVERED", "READ", "FAILED"];
@@ -114,6 +119,9 @@ export default function MessagesPage() {
                   Template
                 </th>
                 <th className="text-left px-4 py-3 font-medium text-gray-600">
+                  Content
+                </th>
+                <th className="text-left px-4 py-3 font-medium text-gray-600">
                   Status
                 </th>
                 <th className="text-left px-4 py-3 font-medium text-gray-600">
@@ -130,7 +138,7 @@ export default function MessagesPage() {
             <tbody>
               {loading ? (
                 <tr>
-                  <td colSpan={8} className="text-center py-8">
+                  <td colSpan={9} className="text-center py-8">
                     <RefreshCw
                       className="animate-spin text-gray-400 mx-auto"
                       size={20}
@@ -140,7 +148,7 @@ export default function MessagesPage() {
               ) : messages.length === 0 ? (
                 <tr>
                   <td
-                    colSpan={8}
+                    colSpan={9}
                     className="text-center py-8 text-gray-500"
                   >
                     No messages found.
@@ -162,6 +170,18 @@ export default function MessagesPage() {
                       {msg.phoneNumber}
                     </td>
                     <td className="px-4 py-3">{msg.templateName}</td>
+                    <td className="px-4 py-3 max-w-[300px]">
+                      {msg.renderedText ? (
+                        <p
+                          className="text-xs whitespace-pre-wrap break-words text-gray-700"
+                          dir={hasArabic(msg.renderedText) ? "rtl" : "ltr"}
+                        >
+                          {msg.renderedText}
+                        </p>
+                      ) : (
+                        <span className="text-gray-400 text-xs">—</span>
+                      )}
+                    </td>
                     <td className="px-4 py-3">
                       {getStatusBadge(msg.status)}
                     </td>

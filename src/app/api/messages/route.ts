@@ -38,8 +38,42 @@ export async function GET(request: NextRequest) {
     prisma.whatsappMessage.count({ where }),
   ]);
 
+  const templateNames = [...new Set(messages.map((m) => m.templateName).filter((n) => n !== "<text>"))];
+  const templateBodies = new Map<string, string>();
+  if (templateNames.length > 0) {
+    const templates = await prisma.whatsappTemplate.findMany({
+      where: { name: { in: templateNames } },
+      select: { name: true, bodyText: true },
+    });
+    for (const t of templates) {
+      if (t.bodyText) templateBodies.set(t.name, t.bodyText);
+    }
+  }
+
+  const enrichedMessages = messages.map((m) => {
+    let renderedText: string | null = null;
+    if (m.templateName === "<text>") {
+      const vars = m.templateVariablesJson;
+      if (vars && typeof vars === "object" && "text" in vars) {
+        renderedText = (vars as { text: string }).text;
+      }
+    } else {
+      const body = templateBodies.get(m.templateName);
+      if (body) {
+        const vars = Array.isArray(m.templateVariablesJson)
+          ? (m.templateVariablesJson as string[])
+          : [];
+        renderedText = body.replace(/\{\{(\d+)\}\}/g, (_, idx) => {
+          const i = parseInt(idx, 10) - 1;
+          return vars[i] ?? `{{${idx}}}`;
+        });
+      }
+    }
+    return { ...m, renderedText };
+  });
+
   return NextResponse.json({
-    messages,
+    messages: enrichedMessages,
     pagination: {
       page,
       pageSize,

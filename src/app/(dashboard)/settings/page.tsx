@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api-client";
-import { Save, RefreshCw, AlertTriangle } from "lucide-react";
+import { Save, RefreshCw, AlertTriangle, Trash2, Star, Plus } from "lucide-react";
 import { looksLikePhoneNumber } from "@/lib/whatsapp-validation";
 
 interface SettingsData {
@@ -13,10 +13,20 @@ const TABS = [
   { id: "cod", label: "COD Network" },
   { id: "webhooks", label: "Webhooks" },
   { id: "whatsapp", label: "WhatsApp" },
+  { id: "wa_numbers", label: "WA Numbers" },
   { id: "sync", label: "Order Sync" },
   { id: "automation", label: "Automation" },
   { id: "ai", label: "AI Agent" },
+  { id: "voice", label: "Voice Agent" },
 ] as const;
+
+interface WhatsappNumberRecord {
+  id: string;
+  label: string;
+  phoneNumberId: string;
+  displayPhone: string;
+  isDefault: boolean;
+}
 
 type TabId = (typeof TABS)[number]["id"];
 
@@ -608,6 +618,375 @@ export default function SettingsPage() {
             </p>
           </div>
         </SettingsSection>
+      )}
+
+      {activeTab === "voice" && (
+        <SettingsSection
+          title="Voice Agent (Call Agent)"
+          description="Configure the AI voice agent that automatically calls customers when orders are dropped into the Call Agent column. Supports ElevenLabs Conversational AI or a custom provider."
+          onSave={() =>
+            handleSave("Voice Agent", [
+              "voice_agent_enabled",
+              "voice_agent_provider",
+              "voice_agent_api_key",
+              "voice_agent_voice_id",
+              "voice_agent_model",
+              "voice_agent_system_prompt",
+              "voice_agent_caller_id",
+              "voice_agent_language",
+              "voice_agent_llm_provider",
+              "voice_agent_llm_api_key",
+              "voice_agent_llm_model",
+              "voice_agent_webhook_url",
+            ])
+          }
+          saving={saving}
+        >
+          <div className="flex items-center gap-3 mb-4">
+            <label className="text-sm font-medium text-gray-700">
+              Enable Voice Agent
+            </label>
+            <button
+              onClick={() =>
+                updateSetting(
+                  "voice_agent_enabled",
+                  settings.voice_agent_enabled === "true" ? "false" : "true"
+                )
+              }
+              className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                settings.voice_agent_enabled === "true"
+                  ? "bg-purple-600"
+                  : "bg-gray-300"
+              }`}
+            >
+              <span
+                className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                  settings.voice_agent_enabled === "true"
+                    ? "translate-x-6"
+                    : "translate-x-1"
+                }`}
+              />
+            </button>
+          </div>
+          <div className="mb-4">
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Provider
+            </label>
+            <select
+              value={settings.voice_agent_provider || "elevenlabs"}
+              onChange={(e) => updateSetting("voice_agent_provider", e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm bg-white focus:outline-none focus:ring-2 focus:ring-purple-500"
+            >
+              <option value="elevenlabs">ElevenLabs Conversational AI</option>
+              <option value="bland">Bland AI</option>
+            </select>
+            <p className="mt-1 text-xs text-gray-500">
+              Select the voice AI platform that will handle phone calls.
+            </p>
+          </div>
+          <SettingsField
+            label="Voice API Key"
+            value={settings.voice_agent_api_key || ""}
+            onChange={(v) => updateSetting("voice_agent_api_key", v)}
+            type="password"
+            configuredPreview={sensitivePreviews.voice_agent_api_key}
+            placeholder={
+              configuredSecrets.has("voice_agent_api_key")
+                ? "Currently configured — enter a new value to replace"
+                : "Your ElevenLabs or provider API key"
+            }
+            help="API key from your voice agent provider (e.g. xi-api-key for ElevenLabs, or Bearer token for Bland AI)."
+          />
+          <SettingsField
+            label="Voice ID"
+            value={settings.voice_agent_voice_id || ""}
+            onChange={(v) => updateSetting("voice_agent_voice_id", v)}
+            placeholder="21m00Tcm4TlvDq8ikWAM"
+            help="The voice to use for calls (ElevenLabs voice ID). Leave empty for the default voice."
+          />
+          <SettingsField
+            label="Caller ID / From Number"
+            value={settings.voice_agent_caller_id || ""}
+            onChange={(v) => updateSetting("voice_agent_caller_id", v)}
+            placeholder="+1234567890"
+            help="The phone number that will appear as the caller ID. Must be a verified number with your provider."
+          />
+          <div className="mb-4">
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Language
+            </label>
+            <select
+              value={settings.voice_agent_language || "ar"}
+              onChange={(e) => updateSetting("voice_agent_language", e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm bg-white focus:outline-none focus:ring-2 focus:ring-purple-500"
+            >
+              <option value="ar">Arabic</option>
+              <option value="en">English</option>
+              <option value="fr">French</option>
+              <option value="es">Spanish</option>
+              <option value="de">German</option>
+              <option value="tr">Turkish</option>
+            </select>
+          </div>
+          <div className="mb-4">
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Call Script / System Prompt
+            </label>
+            <textarea
+              value={settings.voice_agent_system_prompt || ""}
+              onChange={(e) => updateSetting("voice_agent_system_prompt", e.target.value)}
+              rows={6}
+              placeholder={`You are a professional customer service agent for a delivery company.\nYou are calling the customer to confirm their order.\n- Greet them by name: {customer_name}\n- Confirm their order: {product}\n- Current status: {order_status}\n- Be polite and professional\n- Speak in Arabic by default`}
+              className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-purple-500"
+            />
+            <p className="mt-1 text-xs text-gray-500">
+              Instructions for the voice agent. Use {"{customer_name}"}, {"{product}"}, {"{order_status}"}, {"{tracking}"} as placeholders.
+            </p>
+          </div>
+          <SettingsField
+            label="Webhook URL (optional)"
+            value={settings.voice_agent_webhook_url || ""}
+            onChange={(v) => updateSetting("voice_agent_webhook_url", v)}
+            placeholder="https://your-app.com/api/voice-agent/webhook"
+            help="URL to receive call status updates and transcripts."
+          />
+          <div className="border-t border-gray-200 pt-4 mt-4">
+            <h3 className="text-sm font-semibold text-gray-800 mb-3">LLM Configuration (for conversation logic)</h3>
+            <SettingsField
+              label="LLM API Key"
+              value={settings.voice_agent_llm_api_key || ""}
+              onChange={(v) => updateSetting("voice_agent_llm_api_key", v)}
+              type="password"
+              configuredPreview={sensitivePreviews.voice_agent_llm_api_key}
+              placeholder={
+                configuredSecrets.has("voice_agent_llm_api_key")
+                  ? "Currently configured — enter a new value to replace"
+                  : "OpenAI or other LLM API key"
+              }
+              help="API key for the LLM that drives the voice agent's conversation logic. Often not needed if using ElevenLabs' built-in agent."
+            />
+            <SettingsField
+              label="LLM Model"
+              value={settings.voice_agent_llm_model || ""}
+              onChange={(v) => updateSetting("voice_agent_llm_model", v)}
+              placeholder="gpt-4o-mini"
+              help="The LLM model to use for conversation (e.g. gpt-4o-mini, gpt-4o). Only needed if provider requires a separate LLM."
+            />
+          </div>
+        </SettingsSection>
+      )}
+
+      {activeTab === "wa_numbers" && <WhatsappNumbersManager />}
+    </div>
+  );
+}
+
+function WhatsappNumbersManager() {
+  const [numbers, setNumbers] = useState<WhatsappNumberRecord[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [adding, setAdding] = useState(false);
+  const [newLabel, setNewLabel] = useState("");
+  const [newPhoneNumberId, setNewPhoneNumberId] = useState("");
+  const [newDisplayPhone, setNewDisplayPhone] = useState("");
+  const [notification, setNotification] = useState<{
+    type: "success" | "error";
+    message: string;
+  } | null>(null);
+
+  const fetchNumbers = async () => {
+    try {
+      const data = await api.get<{ numbers: WhatsappNumberRecord[] }>("/whatsapp/numbers");
+      setNumbers(data.numbers);
+    } catch {
+      // ignore
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchNumbers();
+  }, []);
+
+  const handleAdd = async () => {
+    if (!newLabel.trim() || !newPhoneNumberId.trim() || !newDisplayPhone.trim()) {
+      setNotification({ type: "error", message: "All fields are required." });
+      return;
+    }
+    try {
+      await api.post("/whatsapp/numbers", {
+        label: newLabel.trim(),
+        phoneNumberId: newPhoneNumberId.trim(),
+        displayPhone: newDisplayPhone.trim(),
+      });
+      setNewLabel("");
+      setNewPhoneNumberId("");
+      setNewDisplayPhone("");
+      setAdding(false);
+      setNotification({ type: "success", message: "WhatsApp number added." });
+      fetchNumbers();
+    } catch (err) {
+      setNotification({
+        type: "error",
+        message: err instanceof Error ? err.message : "Failed to add number",
+      });
+    }
+  };
+
+  const handleDelete = async (id: string) => {
+    try {
+      await fetch(`/api/whatsapp/numbers/${id}`, { method: "DELETE" });
+      setNotification({ type: "success", message: "Number deleted." });
+      fetchNumbers();
+    } catch {
+      setNotification({ type: "error", message: "Delete failed." });
+    }
+  };
+
+  const handleSetDefault = async (id: string) => {
+    try {
+      await fetch(`/api/whatsapp/numbers/${id}/default`, { method: "PUT" });
+      setNotification({ type: "success", message: "Default number updated." });
+      fetchNumbers();
+    } catch {
+      setNotification({ type: "error", message: "Failed to set default." });
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center h-32">
+        <RefreshCw className="animate-spin text-gray-400" size={20} />
+      </div>
+    );
+  }
+
+  return (
+    <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6 mb-6">
+      <div className="flex items-center justify-between mb-4">
+        <div>
+          <h2 className="text-lg font-semibold text-gray-900">WhatsApp Numbers</h2>
+          <p className="text-sm text-gray-500">
+            Manage your WhatsApp Business numbers. The default number is used for sending messages.
+          </p>
+        </div>
+        <button
+          onClick={() => setAdding(true)}
+          className="flex items-center gap-2 px-3 py-1.5 bg-blue-600 text-white rounded-md text-sm font-medium hover:bg-blue-700"
+        >
+          <Plus size={14} />
+          Add Number
+        </button>
+      </div>
+
+      {notification && (
+        <div
+          className={`mb-4 p-3 rounded-md text-sm border ${
+            notification.type === "success"
+              ? "bg-green-50 text-green-700 border-green-200"
+              : "bg-red-50 text-red-700 border-red-200"
+          }`}
+        >
+          {notification.message}
+        </div>
+      )}
+
+      {adding && (
+        <div className="mb-4 p-4 border border-blue-200 rounded-lg bg-blue-50/50 space-y-3">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Label</label>
+            <input
+              type="text"
+              value={newLabel}
+              onChange={(e) => setNewLabel(e.target.value)}
+              placeholder="e.g. Main Business, Support"
+              className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm"
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Phone Number ID (from Meta)</label>
+            <input
+              type="text"
+              value={newPhoneNumberId}
+              onChange={(e) => setNewPhoneNumberId(e.target.value)}
+              placeholder="e.g. 123456789012345"
+              className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm"
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Display Phone Number</label>
+            <input
+              type="text"
+              value={newDisplayPhone}
+              onChange={(e) => setNewDisplayPhone(e.target.value)}
+              placeholder="e.g. +212600000000"
+              className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm"
+            />
+          </div>
+          <div className="flex gap-2">
+            <button
+              onClick={handleAdd}
+              className="px-4 py-2 bg-blue-600 text-white rounded-md text-sm font-medium hover:bg-blue-700"
+            >
+              Save
+            </button>
+            <button
+              onClick={() => setAdding(false)}
+              className="px-4 py-2 text-gray-600 text-sm"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+
+      {numbers.length === 0 ? (
+        <p className="text-gray-500 text-sm py-4">
+          No WhatsApp numbers configured. Add one to start sending messages.
+        </p>
+      ) : (
+        <div className="space-y-2">
+          {numbers.map((n) => (
+            <div
+              key={n.id}
+              className={`flex items-center justify-between p-3 rounded-lg border ${
+                n.isDefault ? "border-blue-300 bg-blue-50/50" : "border-gray-200"
+              }`}
+            >
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="font-medium text-gray-900">{n.label}</span>
+                  {n.isDefault && (
+                    <span className="px-2 py-0.5 text-[10px] font-medium bg-blue-100 text-blue-700 rounded-full">
+                      Default
+                    </span>
+                  )}
+                </div>
+                <div className="text-xs text-gray-500 font-mono mt-0.5">
+                  {n.displayPhone} · ID: {n.phoneNumberId}
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                {!n.isDefault && (
+                  <button
+                    onClick={() => handleSetDefault(n.id)}
+                    className="p-1.5 text-gray-400 hover:text-yellow-600 transition-colors"
+                    title="Set as default"
+                  >
+                    <Star size={16} />
+                  </button>
+                )}
+                <button
+                  onClick={() => handleDelete(n.id)}
+                  className="p-1.5 text-gray-400 hover:text-red-600 transition-colors"
+                  title="Delete"
+                >
+                  <Trash2 size={16} />
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
       )}
     </div>
   );
