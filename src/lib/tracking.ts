@@ -9,9 +9,12 @@ import { TrackingCarrier, TrackingStatus } from "@prisma/client";
 export function detectCarrier(
   trackingNumber: string
 ): TrackingCarrier | null {
-  if (trackingNumber.startsWith("60")) return TrackingCarrier.IMILE;
-  if (trackingNumber.toUpperCase().startsWith("INJAZ."))
+  const tn = trackingNumber.toUpperCase();
+  if (tn.startsWith("60")) return TrackingCarrier.IMILE;
+  if (tn.startsWith("INJAZ.") || tn.startsWith("INJAZ"))
     return TrackingCarrier.INJAZ;
+  if (tn.startsWith("JTE")) return TrackingCarrier.JTE;
+  if (tn.startsWith("JDW")) return TrackingCarrier.JDW;
   return null;
 }
 
@@ -162,40 +165,175 @@ function parseInjazHtml(
 }
 
 // ---------------------------------------------------------------------------
+// JT Express tracking (scrape public tracking page)
+// ---------------------------------------------------------------------------
+
+export async function fetchJteTracking(
+  trackingNumber: string
+): Promise<{ events: ParsedEvent[]; rawStatus: string | null }> {
+  try {
+    const resp = await fetch(
+      `https://www.jtexpress-sa.com/api/tracking/query?waybillNo=${encodeURIComponent(trackingNumber)}`,
+      {
+        headers: {
+          Accept: "application/json",
+          "User-Agent": "Mozilla/5.0",
+        },
+      }
+    );
+    if (!resp.ok) return { events: [], rawStatus: null };
+    const data = (await resp.json()) as {
+      data?: {
+        trackInfos?: Array<{
+          content?: string;
+          status?: string;
+          time?: string;
+          location?: string;
+        }>;
+        status?: string;
+      };
+    };
+    if (!data.data?.trackInfos?.length) return { events: [], rawStatus: null };
+    const events: ParsedEvent[] = data.data.trackInfos.map((info) => ({
+      status: info.status ?? "Unknown",
+      description: info.content ?? info.status ?? "Update",
+      location: info.location,
+      occurredAt: new Date(info.time ?? Date.now()),
+      rawData: info,
+    }));
+    return { events, rawStatus: data.data.status ?? events[0]?.status ?? null };
+  } catch {
+    return { events: [], rawStatus: null };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// JD Logistics tracking (scrape public tracking page)
+// ---------------------------------------------------------------------------
+
+export async function fetchJdwTracking(
+  trackingNumber: string
+): Promise<{ events: ParsedEvent[]; rawStatus: string | null }> {
+  try {
+    const resp = await fetch(
+      `https://www.jingdonglogistics.com/api/tracking/query?waybillNo=${encodeURIComponent(trackingNumber)}`,
+      {
+        headers: {
+          Accept: "application/json",
+          "User-Agent": "Mozilla/5.0",
+        },
+      }
+    );
+    if (!resp.ok) return { events: [], rawStatus: null };
+    const data = (await resp.json()) as {
+      data?: {
+        trackInfos?: Array<{
+          content?: string;
+          status?: string;
+          time?: string;
+          location?: string;
+        }>;
+        status?: string;
+      };
+    };
+    if (!data.data?.trackInfos?.length) return { events: [], rawStatus: null };
+    const events: ParsedEvent[] = data.data.trackInfos.map((info) => ({
+      status: info.status ?? "Unknown",
+      description: info.content ?? info.status ?? "Update",
+      location: info.location,
+      occurredAt: new Date(info.time ?? Date.now()),
+      rawData: info,
+    }));
+    return { events, rawStatus: data.data.status ?? events[0]?.status ?? null };
+  } catch {
+    return { events: [], rawStatus: null };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Fetch tracking by carrier (dispatcher)
+// ---------------------------------------------------------------------------
+
+async function fetchTrackingByCarrier(
+  carrier: TrackingCarrier,
+  trackingNumber: string
+): Promise<{ events: ParsedEvent[]; rawStatus: string | null }> {
+  switch (carrier) {
+    case TrackingCarrier.IMILE:
+      return fetchImileTracking(trackingNumber);
+    case TrackingCarrier.INJAZ:
+      return fetchInjazTracking(trackingNumber);
+    case TrackingCarrier.JTE:
+      return fetchJteTracking(trackingNumber);
+    case TrackingCarrier.JDW:
+      return fetchJdwTracking(trackingNumber);
+    default:
+      return { events: [], rawStatus: null };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Carrier display name helper
+// ---------------------------------------------------------------------------
+
+export function carrierDisplayName(
+  carrier: TrackingCarrier,
+  deliveryCompany?: string | null
+): string {
+  switch (carrier) {
+    case TrackingCarrier.IMILE:
+      return "iMile";
+    case TrackingCarrier.INJAZ:
+      return "Injaz Express";
+    case TrackingCarrier.JTE:
+      return "JT Express";
+    case TrackingCarrier.JDW:
+      return "JD Logistics";
+    default:
+      return deliveryCompany || "Other";
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Unified tracking status mapper
 // ---------------------------------------------------------------------------
 
 function mapToTrackingStatus(
-  carrier: TrackingCarrier,
+  _carrier: TrackingCarrier,
   rawStatus: string | null
 ): TrackingStatus {
   if (!rawStatus) return TrackingStatus.UNKNOWN;
 
   const s = rawStatus.toLowerCase();
 
-  if (carrier === TrackingCarrier.IMILE) {
-    if (s.includes("delivered")) return TrackingStatus.DELIVERED;
-    if (s.includes("out for delivery"))
-      return TrackingStatus.OUT_FOR_DELIVERY;
-    if (s.includes("transit") || s.includes("in transit"))
-      return TrackingStatus.IN_TRANSIT;
-    if (s.includes("pick up") || s.includes("pickup"))
-      return TrackingStatus.IN_TRANSIT;
-    if (s.includes("order creation"))
-      return TrackingStatus.PENDING;
-    if (s.includes("return")) return TrackingStatus.RETURNED;
-    if (s.includes("exception")) return TrackingStatus.EXCEPTION;
-  }
-
-  if (carrier === TrackingCarrier.INJAZ) {
-    if (s.includes("deliver")) return TrackingStatus.DELIVERED;
-    if (s.includes("out for")) return TrackingStatus.OUT_FOR_DELIVERY;
-    if (s.includes("transit") || s.includes("send to"))
-      return TrackingStatus.IN_TRANSIT;
-    if (s.includes("pick")) return TrackingStatus.IN_TRANSIT;
-    if (s.includes("return")) return TrackingStatus.RETURNED;
-    if (s.includes("receive")) return TrackingStatus.PENDING;
-  }
+  if (s.includes("delivered") || s.includes("signed"))
+    return TrackingStatus.DELIVERED;
+  if (s.includes("out for delivery") || s.includes("dispatched"))
+    return TrackingStatus.OUT_FOR_DELIVERY;
+  if (
+    s.includes("transit") ||
+    s.includes("in transit") ||
+    s.includes("pick up") ||
+    s.includes("pickup") ||
+    s.includes("send to") ||
+    s.includes("departed") ||
+    s.includes("arrived") ||
+    s.includes("shipping") ||
+    s.includes("on the way") ||
+    s.includes("in warehouse")
+  )
+    return TrackingStatus.IN_TRANSIT;
+  if (
+    s.includes("order creation") ||
+    s.includes("receive") ||
+    s.includes("pending") ||
+    s.includes("created") ||
+    s.includes("accepted")
+  )
+    return TrackingStatus.PENDING;
+  if (s.includes("return")) return TrackingStatus.RETURNED;
+  if (s.includes("exception") || s.includes("failed") || s.includes("problem"))
+    return TrackingStatus.EXCEPTION;
 
   return TrackingStatus.IN_TRANSIT;
 }
@@ -210,10 +348,18 @@ export async function refreshTracking(trackingOrderId: string) {
   });
   if (!order) throw new Error("Tracking order not found");
 
-  const { events, rawStatus } =
-    order.carrier === TrackingCarrier.IMILE
-      ? await fetchImileTracking(order.trackingNumber)
-      : await fetchInjazTracking(order.trackingNumber);
+  if (order.carrier === TrackingCarrier.OTHER) {
+    await prisma.trackingOrder.update({
+      where: { id: order.id },
+      data: { lastCheckedAt: new Date() },
+    });
+    return { status: order.status, eventsCount: 0 };
+  }
+
+  const { events, rawStatus } = await fetchTrackingByCarrier(
+    order.carrier,
+    order.trackingNumber
+  );
 
   const status = mapToTrackingStatus(order.carrier, rawStatus);
 
@@ -294,12 +440,7 @@ export async function syncTrackingFromOrders() {
     }
 
     const carrier = detectCarrier(tn) ?? TrackingCarrier.OTHER;
-    const carrierName =
-      carrier === TrackingCarrier.IMILE
-        ? "iMile"
-        : carrier === TrackingCarrier.INJAZ
-          ? "Injaz Express"
-          : order.deliveryCompany || "Other";
+    const carrierName = carrierDisplayName(carrier, order.deliveryCompany);
 
     await prisma.trackingOrder.create({
       data: {

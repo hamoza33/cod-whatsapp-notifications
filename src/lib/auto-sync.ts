@@ -29,7 +29,7 @@ const TEMPLATE_IMPORT_INTERVAL_MINUTES = 6 * 60;
 // Products change occasionally — once an hour keeps the automation editor
 // product picker fresh without hammering COD Network.
 const PRODUCT_SYNC_INTERVAL_MINUTES = 60;
-const TRACKING_REFRESH_INTERVAL_MINUTES = 30;
+const TRACKING_REFRESH_INTERVAL_MINUTES = 60;
 
 let lastRunStartedAt: Date | null = null;
 let lastRunFinishedAt: Date | null = null;
@@ -210,7 +210,7 @@ async function tickTrackingRefresh(): Promise<void> {
 
 function startTrackingRefreshCron(): void {
   if (globalThis.__codWhatsappTrackingRefreshTimer__) return;
-  // First run 2 minutes after boot, then every 30 minutes.
+  // First run 2 minutes after boot, then every 60 minutes.
   setTimeout(() => {
     tickTrackingRefresh().catch(() => undefined);
   }, 120_000);

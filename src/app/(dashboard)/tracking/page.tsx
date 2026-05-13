@@ -16,7 +16,7 @@ import {
   Database,
 } from "lucide-react";
 
-type TrackingCarrier = "IMILE" | "INJAZ" | "OTHER";
+type TrackingCarrier = "IMILE" | "INJAZ" | "JTE" | "JDW" | "OTHER";
 type TrackingStatus =
   | "PENDING"
   | "IN_TRANSIT"
@@ -81,6 +81,8 @@ function carrierLabel(order: TrackingOrder): string {
   if (order.carrierName) return order.carrierName;
   if (order.carrier === "IMILE") return "iMile";
   if (order.carrier === "INJAZ") return "Injaz Express";
+  if (order.carrier === "JTE") return "JT Express";
+  if (order.carrier === "JDW") return "JD Logistics";
   return "Other";
 }
 
@@ -94,12 +96,21 @@ function trackingUrl(
   if (carrier === "INJAZ") {
     return "https://injaz-express.com/track_order.php";
   }
-  return null;
+  if (carrier === "JTE") {
+    return `https://www.jtexpress-sa.com/`;
+  }
+  if (carrier === "JDW") {
+    return `https://www.jingdonglogistics.com/Tracking`;
+  }
+  // For OTHER carriers, link to 4tracking.net
+  return `https://www.4tracking.net/en/track?nums=${trackingNumber}`;
 }
 
 function carrierIcon(carrier: TrackingCarrier): string {
   if (carrier === "IMILE") return "bg-blue-100 text-blue-600";
   if (carrier === "INJAZ") return "bg-orange-100 text-orange-600";
+  if (carrier === "JTE") return "bg-red-100 text-red-600";
+  if (carrier === "JDW") return "bg-purple-100 text-purple-600";
   return "bg-gray-100 text-gray-600";
 }
 
@@ -272,8 +283,8 @@ export default function TrackingPage() {
             Package Tracking
           </h1>
           <p className="text-sm text-gray-600 mt-1">
-            Automatically tracks all orders with tracking numbers. iMile and
-            Injaz Express get live status updates every 30 minutes.
+            Automatically tracks all orders with tracking numbers. iMile,
+            Injaz Express, JT Express, and JD Logistics get live status updates every hour.
           </p>
         </div>
         <div className="flex gap-2">
@@ -381,6 +392,8 @@ export default function TrackingPage() {
           <option value="">All Carriers</option>
           <option value="IMILE">iMile</option>
           <option value="INJAZ">Injaz Express</option>
+          <option value="JTE">JT Express</option>
+          <option value="JDW">JD Logistics</option>
           <option value="OTHER">Other</option>
         </select>
         <select
@@ -517,6 +530,7 @@ function TrackingCard({
   const [refreshing, setRefreshing] = useState(false);
   const url = trackingUrl(order.carrier, order.trackingNumber);
   const canRefresh = order.carrier !== "OTHER";
+  const hasUrl = url !== null;
 
   const handleRefresh = async () => {
     setRefreshing(true);
@@ -588,9 +602,9 @@ function TrackingCard({
           className="flex items-center gap-1"
           onClick={(e) => e.stopPropagation()}
         >
-          {url && (
+          {hasUrl && (
             <a
-              href={url}
+              href={url!}
               target="_blank"
               rel="noopener noreferrer"
               className="p-1.5 rounded hover:bg-gray-100 text-gray-400 hover:text-blue-600"
