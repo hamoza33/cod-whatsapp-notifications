@@ -216,6 +216,21 @@ export default function ProductsPage() {
   );
 }
 
+function stripHtml(html: string): string {
+  return html
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/p>/gi, "\n")
+    .replace(/<[^>]+>/g, "")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&nbsp;/g, " ")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
 function ProductCard({
   product,
   onUpdate,
@@ -367,7 +382,7 @@ function ProductCard({
               ) : (
                 <div>
                   <p className="text-xs text-gray-600 whitespace-pre-wrap">
-                    {product.description || "No description available."}
+                    {product.description ? stripHtml(product.description) : "No description available."}
                   </p>
                   <button
                     onClick={() => setEditing(true)}

@@ -112,6 +112,7 @@ model WhatsappMessage {
   templateName          String        @map("template_name")
   templateLanguage      String        @default("en") @map("template_language")
   templateVariablesJson Json?         @map("template_variables_json")
+  headerImageUrl        String?       @map("header_image_url")
   providerMessageId     String?       @map("provider_message_id")
   status                MessageStatus @default(PENDING)
   errorMessage          String?       @map("error_message")

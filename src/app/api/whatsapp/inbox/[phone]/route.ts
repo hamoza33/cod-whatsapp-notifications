@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getAuthUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { WhatsAppClient, WhatsAppApiError } from "@/lib/whatsapp";
+import { getSetting, SETTING_KEYS } from "@/lib/settings";
 import { rateLimit } from "@/lib/rate-limit";
 
 /**
@@ -38,6 +39,7 @@ export async function GET(
         templateName: true,
         templateLanguage: true,
         templateVariablesJson: true,
+        headerImageUrl: true,
         providerMessageId: true,
         status: true,
         errorMessage: true,
@@ -66,24 +68,31 @@ export async function GET(
         templateName: string;
         templateVariables: unknown;
         renderedText: string | null;
+        headerImageUrl: string | null;
         sentBy: string | null;
         status: string;
         providerMessageId: string | null;
         errorMessage: string | null;
       };
 
-  // Pre-fetch template bodies for rendering outbound messages
+  // Pre-fetch template bodies and header types for rendering outbound messages
   const templateNames = [...new Set(outbound.map((m) => m.templateName).filter((n) => n !== "<text>"))];
   const templateBodies = new Map<string, string>();
+  const templateHeaderTypes = new Map<string, string | null>();
   if (templateNames.length > 0) {
     const templates = await prisma.whatsappTemplate.findMany({
       where: { name: { in: templateNames } },
-      select: { name: true, bodyText: true },
+      select: { name: true, bodyText: true, headerType: true },
     });
     for (const t of templates) {
       if (t.bodyText) templateBodies.set(t.name, t.bodyText);
+      templateHeaderTypes.set(t.name, t.headerType);
     }
   }
+
+  const defaultHeaderImage = await getSetting(
+    SETTING_KEYS.WHATSAPP_DEFAULT_TEMPLATE_HEADER_IMAGE_URL
+  );
 
   const thread: ThreadEntry[] = [];
   for (const m of inbound) {
@@ -117,6 +126,13 @@ export async function GET(
         });
       }
     }
+    // Resolve header image: stored per-message first, then fall back to
+    // the default header image if the template has an IMAGE header.
+    let headerImageUrl: string | null = m.headerImageUrl ?? null;
+    if (!headerImageUrl && templateHeaderTypes.get(m.templateName) === "IMAGE" && defaultHeaderImage) {
+      headerImageUrl = defaultHeaderImage;
+    }
+
     thread.push({
       kind: "outbound",
       id: m.id,
@@ -124,6 +140,7 @@ export async function GET(
       templateName: m.templateName,
       templateVariables: m.templateVariablesJson,
       renderedText,
+      headerImageUrl,
       sentBy: m.sentBy,
       status: m.status,
       providerMessageId: m.providerMessageId,

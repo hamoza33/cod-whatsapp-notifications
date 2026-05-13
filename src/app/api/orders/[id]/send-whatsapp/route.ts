@@ -181,6 +181,11 @@ export async function POST(
       header
     );
 
+    const headerImageUrl =
+      header?.type === "image" && header.imageKind === "url"
+        ? header.value
+        : null;
+
     const message = await prisma.whatsappMessage.create({
       data: {
         orderId: order.id,
@@ -188,6 +193,7 @@ export async function POST(
         templateName,
         templateLanguage,
         templateVariablesJson: variables,
+        headerImageUrl,
         providerMessageId: result.messages?.[0]?.id ?? null,
         status: "SENT",
         sentBy: user.email,
@@ -210,6 +216,10 @@ export async function POST(
       err instanceof Error ? err.message : "Failed to send WhatsApp message";
     const isApiError = err instanceof WhatsAppApiError;
     try {
+      const headerImageUrl =
+        header?.type === "image" && header.imageKind === "url"
+          ? header.value
+          : null;
       await prisma.whatsappMessage.create({
         data: {
           orderId: order.id,
@@ -217,6 +227,7 @@ export async function POST(
           templateName,
           templateLanguage,
           templateVariablesJson: variables,
+          headerImageUrl,
           status: "FAILED",
           errorMessage: errorMsg,
           sentBy: user.email,

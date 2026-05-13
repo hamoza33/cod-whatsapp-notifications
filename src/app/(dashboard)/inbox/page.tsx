@@ -50,6 +50,7 @@ type ThreadEntry =
       templateName: string;
       templateVariables: unknown;
       renderedText: string | null;
+      headerImageUrl: string | null;
       sentBy: string | null;
       status: string;
       providerMessageId: string | null;
@@ -112,6 +113,9 @@ export default function InboxPage() {
   const [selectedNumberId, setSelectedNumberId] = useState<string | null>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const threadEndRef = useRef<HTMLDivElement>(null);
+  const messagesContainerRef = useRef<HTMLDivElement>(null);
+  const userScrolledUp = useRef(false);
+  const prevThreadLength = useRef(0);
 
   const showToast = useCallback((kind: "error" | "success", text: string) => {
     setToast({ kind, text });
@@ -139,10 +143,16 @@ export default function InboxPage() {
       const data = await api.get<ThreadResponse>(
         `/whatsapp/inbox/${encodeURIComponent(phone)}`
       );
+      const isNewConversation = prevThreadLength.current === 0;
+      const hasNewMessages = data.thread.length > prevThreadLength.current;
       setThread(data);
-      setTimeout(() => {
-        threadEndRef.current?.scrollIntoView({ behavior: "smooth" });
-      }, 100);
+      prevThreadLength.current = data.thread.length;
+
+      if (isNewConversation || (hasNewMessages && !userScrolledUp.current)) {
+        setTimeout(() => {
+          threadEndRef.current?.scrollIntoView({ behavior: "smooth" });
+        }, 100);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load thread");
     }
@@ -177,10 +187,13 @@ export default function InboxPage() {
 
   useEffect(() => {
     if (selectedPhone) {
+      prevThreadLength.current = 0;
+      userScrolledUp.current = false;
       // eslint-disable-next-line react-hooks/set-state-in-effect
       fetchThread(selectedPhone);
     } else {
       setThread(null);
+      prevThreadLength.current = 0;
     }
   }, [selectedPhone, fetchThread]);
 
@@ -411,6 +424,13 @@ export default function InboxPage() {
 
             {/* Messages area */}
             <div
+              ref={messagesContainerRef}
+              onScroll={() => {
+                const el = messagesContainerRef.current;
+                if (!el) return;
+                const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+                userScrolledUp.current = distanceFromBottom > 100;
+              }}
               className="flex-1 overflow-y-auto px-16 py-4 space-y-1"
               style={{
                 backgroundColor: "#EFEAE2",
@@ -589,6 +609,16 @@ function OutboundBubble({
             <span>Template: {msg.templateName}</span>
           )}
         </div>
+        {msg.headerImageUrl && (
+          <div className="mb-1.5 -mx-1 rounded overflow-hidden">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={msg.headerImageUrl}
+              alt="Template header"
+              className="w-full max-h-48 object-cover rounded"
+            />
+          </div>
+        )}
         {displayText ? (
           <p
             className="text-sm text-[#111B21] whitespace-pre-wrap break-words leading-[19px]"
