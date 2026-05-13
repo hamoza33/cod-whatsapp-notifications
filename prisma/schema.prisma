@@ -88,6 +88,7 @@ model Order {
   whatsappMessages WhatsappMessage[]
   inboundMessages  InboundMessage[]
   automationRuns   AutomationRun[]
+  trackingOrders   TrackingOrder[]
 
   @@index([status])
   @@index([codNetworkOrderId])
@@ -297,4 +298,65 @@ model WhatsappNumber {
   updatedAt       DateTime @updatedAt @map("updated_at")
 
   @@map("whatsapp_numbers")
+}
+
+enum TrackingCarrier {
+  IMILE
+  INJAZ
+}
+
+enum TrackingStatus {
+  PENDING
+  IN_TRANSIT
+  OUT_FOR_DELIVERY
+  DELIVERED
+  RETURNED
+  EXCEPTION
+  UNKNOWN
+}
+
+/// A package being tracked via iMile or Injaz Express. Tracking numbers
+/// starting with "60" are routed to iMile; those starting with "INJAZ."
+/// are routed to Injaz Express. The cron job refreshes all active
+/// (non-delivered, non-returned) packages every 30 minutes.
+model TrackingOrder {
+  id              String          @id @default(cuid())
+  trackingNumber  String          @unique @map("tracking_number")
+  carrier         TrackingCarrier
+  status          TrackingStatus  @default(PENDING)
+  latestEvent     String?         @map("latest_event")
+  latestEventAt   DateTime?       @map("latest_event_at")
+  customerName    String?         @map("customer_name")
+  customerPhone   String?         @map("customer_phone")
+  orderId         String?         @map("order_id")
+  order           Order?          @relation(fields: [orderId], references: [id])
+  lastCheckedAt   DateTime?       @map("last_checked_at")
+  createdAt       DateTime        @default(now()) @map("created_at")
+  updatedAt       DateTime        @updatedAt @map("updated_at")
+
+  events TrackingEvent[]
+
+  @@index([carrier])
+  @@index([status])
+  @@index([orderId])
+  @@map("tracking_orders")
+}
+
+/// Individual status update for a tracked package. Each refresh appends
+/// new events that haven't been seen yet (de-duped by content + timestamp).
+model TrackingEvent {
+  id              String        @id @default(cuid())
+  trackingOrderId String        @map("tracking_order_id")
+  trackingOrder   TrackingOrder @relation(fields: [trackingOrderId], references: [id], onDelete: Cascade)
+  status          String
+  description     String
+  location        String?
+  occurredAt      DateTime      @map("occurred_at")
+  rawData         Json?         @map("raw_data")
+  createdAt       DateTime      @default(now()) @map("created_at")
+
+  @@unique([trackingOrderId, description, occurredAt])
+  @@index([trackingOrderId])
+  @@index([occurredAt])
+  @@map("tracking_events")
 }

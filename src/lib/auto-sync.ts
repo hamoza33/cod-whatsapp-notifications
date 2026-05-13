@@ -2,6 +2,7 @@ import { syncOrders, isSyncInProgress } from "./sync";
 import { getSetting, setSetting, SETTING_KEYS } from "./settings";
 import { importTemplatesFromMeta } from "./template-import";
 import { syncProductsFromCodNetwork } from "./product-sync";
+import { refreshAllTracking } from "./tracking";
 
 /**
  * Lightweight in-process scheduler that runs `syncOrders()` on a recurring
@@ -17,6 +18,7 @@ declare global {
   var __codWhatsappAutoSyncTimer__: NodeJS.Timeout | undefined;
   var __codWhatsappTemplateImportTimer__: NodeJS.Timeout | undefined;
   var __codWhatsappProductSyncTimer__: NodeJS.Timeout | undefined;
+  var __codWhatsappTrackingRefreshTimer__: NodeJS.Timeout | undefined;
 }
 
 const DEFAULT_INTERVAL_MINUTES = 5;
@@ -27,6 +29,7 @@ const TEMPLATE_IMPORT_INTERVAL_MINUTES = 6 * 60;
 // Products change occasionally — once an hour keeps the automation editor
 // product picker fresh without hammering COD Network.
 const PRODUCT_SYNC_INTERVAL_MINUTES = 60;
+const TRACKING_REFRESH_INTERVAL_MINUTES = 30;
 
 let lastRunStartedAt: Date | null = null;
 let lastRunFinishedAt: Date | null = null;
@@ -106,6 +109,7 @@ export async function startAutoSync(): Promise<void> {
   // runs much less frequently (every 6 hours) so it won't slow boot time.
   startTemplateImportCron();
   startProductSyncCron();
+  startTrackingRefreshCron();
 }
 
 async function tickTemplateImport(): Promise<void> {
@@ -178,6 +182,38 @@ function startProductSyncCron(): void {
   );
   if (typeof timer.unref === "function") timer.unref();
   globalThis.__codWhatsappProductSyncTimer__ = timer;
+}
+
+async function tickTrackingRefresh(): Promise<void> {
+  try {
+    const results = await refreshAllTracking();
+    const updated = results.filter((r) => r.eventsCount > 0).length;
+    const errors = results.filter((r) => r.error).length;
+    console.log(
+      `[tracking-refresh] cron refreshed ${results.length} orders (${updated} updated, ${errors} errors)`
+    );
+  } catch (err) {
+    console.warn(
+      "[tracking-refresh] cron tick failed",
+      err instanceof Error ? err.message : err
+    );
+  }
+}
+
+function startTrackingRefreshCron(): void {
+  if (globalThis.__codWhatsappTrackingRefreshTimer__) return;
+  // First run 2 minutes after boot, then every 30 minutes.
+  setTimeout(() => {
+    tickTrackingRefresh().catch(() => undefined);
+  }, 120_000);
+  const timer = setInterval(
+    () => {
+      tickTrackingRefresh().catch(() => undefined);
+    },
+    TRACKING_REFRESH_INTERVAL_MINUTES * 60 * 1000
+  );
+  if (typeof timer.unref === "function") timer.unref();
+  globalThis.__codWhatsappTrackingRefreshTimer__ = timer;
 }
 
 export function getAutoSyncStatus(): AutoSyncStatus {
