@@ -67,12 +67,16 @@ export async function GET(request: NextRequest) {
     FROM whatsapp_messages wm
     WHERE NOT EXISTS (
       SELECT 1 FROM inbound_messages im
-      WHERE im.from_phone_number = wm.phone_number
+      WHERE REGEXP_REPLACE(im.from_phone_number, '\\D', '', 'g')
+          = REGEXP_REPLACE(wm.phone_number, '\\D', '', 'g')
     )
     ORDER BY wm.phone_number, COALESCE(wm.sent_at, wm.created_at) DESC
   `;
 
-  const inboundPhones = new Set(inboundRows.map((r) => r.from_phone_number));
+  // Normalize to digits-only for comparison (webhook stores +prefix, outbound may not)
+  const inboundDigits = new Set(
+    inboundRows.map((r) => r.from_phone_number.replace(/\D/g, ""))
+  );
 
   const conversations = await Promise.all([
     ...inboundRows.map(async (row) => {
@@ -100,7 +104,7 @@ export async function GET(request: NextRequest) {
       };
     }),
     ...outboundRows
-      .filter((r) => !inboundPhones.has(r.phone_number))
+      .filter((r) => !inboundDigits.has(r.phone_number.replace(/\D/g, "")))
       .map(async (row) => {
         const order = row.order_id
           ? await prisma.order.findUnique({

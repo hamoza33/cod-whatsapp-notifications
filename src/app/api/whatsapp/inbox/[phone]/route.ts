@@ -20,13 +20,18 @@ export async function GET(
   const { phone } = await params;
   const decodedPhone = decodeURIComponent(phone);
 
+  // Webhook stores inbound phones with "+" prefix, outbound may omit it.
+  // Query both variants so messages always match regardless of format.
+  const digits = decodedPhone.replace(/[^\d]/g, "");
+  const phoneVariants = [...new Set([decodedPhone, digits, `+${digits}`])];
+
   const [inbound, outbound] = await Promise.all([
     prisma.inboundMessage.findMany({
-      where: { fromPhoneNumber: decodedPhone },
+      where: { fromPhoneNumber: { in: phoneVariants } },
       orderBy: { receivedAt: "asc" },
     }),
     prisma.whatsappMessage.findMany({
-      where: { phoneNumber: decodedPhone },
+      where: { phoneNumber: { in: phoneVariants } },
       orderBy: { createdAt: "asc" },
       select: {
         id: true,
@@ -180,8 +185,10 @@ export async function POST(
     );
   }
 
+  const postDigits = decodedPhone.replace(/[^\d]/g, "");
+  const postPhoneVariants = [...new Set([decodedPhone, postDigits, `+${postDigits}`])];
   const lastInbound = await prisma.inboundMessage.findFirst({
-    where: { fromPhoneNumber: decodedPhone },
+    where: { fromPhoneNumber: { in: postPhoneVariants } },
     orderBy: { receivedAt: "desc" },
     select: { receivedAt: true, orderId: true },
   });
