@@ -8,9 +8,10 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const results = await refreshAllTracking();
+  const { results, totalProcessed, batches } = await refreshAllTracking();
   return NextResponse.json({
-    refreshed: results.length,
+    refreshed: totalProcessed,
+    batches,
     results,
     nextRunIn: "30 minutes",
   });
