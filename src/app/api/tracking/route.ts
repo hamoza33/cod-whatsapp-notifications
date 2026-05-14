@@ -84,7 +84,7 @@ export async function GET(request: NextRequest) {
         },
       },
     },
-    orderBy: { updatedAt: "desc" },
+    orderBy: [{ carrier: "asc" }, { updatedAt: "desc" }],
     skip,
     take: pageSize,
   });

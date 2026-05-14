@@ -300,10 +300,16 @@ export default function TrackingPage() {
   const handleRefreshAll = async () => {
     setRefreshing(true);
     try {
-      await api.post("/tracking/refresh");
+      const result = await api.post<{
+        totalProcessed: number;
+        batches: number;
+      }>("/tracking/refresh");
       await fetchOrders();
       await fetchCounts();
-      showToast("success", "All tracking data refreshed");
+      showToast(
+        "success",
+        `Refreshed ${result.totalProcessed} orders in ${result.batches} batch${result.batches !== 1 ? "es" : ""} of 10`
+      );
     } catch (err) {
       showToast(
         "error",
