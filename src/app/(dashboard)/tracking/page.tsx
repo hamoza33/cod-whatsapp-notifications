@@ -299,17 +299,29 @@ export default function TrackingPage() {
 
   const handleRefreshAll = async () => {
     setRefreshing(true);
+    let totalDone = 0;
     try {
-      const result = await api.post<{
-        totalProcessed: number;
-        batches: number;
-      }>("/tracking/refresh");
+      let hasMore = true;
+      while (hasMore) {
+        const result = await api.post<{
+          totalProcessed: number;
+          batches: number;
+          remaining: number;
+          totalActive: number;
+          reclassified: number;
+        }>("/tracking/refresh");
+        totalDone += result.totalProcessed;
+        if (result.reclassified > 0) {
+          showToast("success", `Reclassified ${result.reclassified} carriers`);
+        }
+        hasMore = result.remaining > 0;
+        if (hasMore) {
+          showToast("success", `Processed ${totalDone}/${totalDone + result.remaining} orders...`);
+        }
+      }
       await fetchOrders();
       await fetchCounts();
-      showToast(
-        "success",
-        `Refreshed ${result.totalProcessed} orders in ${result.batches} batch${result.batches !== 1 ? "es" : ""} of 10`
-      );
+      showToast("success", `Refreshed ${totalDone} orders (batches of 10)`);
     } catch (err) {
       showToast(
         "error",
@@ -327,13 +339,15 @@ export default function TrackingPage() {
         ordersFound: number;
         ordersCreated: number;
         trackingImported: number;
+        trackingUpdated: number;
+        reclassified: number;
       }>("/tracking/sync");
       await fetchOrders();
       await fetchCounts();
-      showToast(
-        "success",
-        `Synced ${result.ordersFound} orders, ${result.trackingImported} new tracking entries`
-      );
+      const parts = [`Synced ${result.ordersFound} orders`];
+      if (result.trackingImported > 0) parts.push(`${result.trackingImported} new tracking`);
+      if (result.reclassified > 0) parts.push(`${result.reclassified} carriers fixed`);
+      showToast("success", parts.join(", "));
     } catch (err) {
       showToast(
         "error",

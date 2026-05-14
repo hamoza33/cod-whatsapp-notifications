@@ -10,9 +10,8 @@ export function detectCarrier(
   trackingNumber: string
 ): TrackingCarrier | null {
   const tn = trackingNumber.toUpperCase();
-  if (tn.startsWith("60")) return TrackingCarrier.IMILE;
-  if (tn.startsWith("INJAZ.") || tn.startsWith("INJAZ"))
-    return TrackingCarrier.INJAZ;
+  if (/^6[01]\d{11}$/.test(tn)) return TrackingCarrier.IMILE;
+  if (tn.startsWith("INJAZ")) return TrackingCarrier.INJAZ;
   if (tn.startsWith("JTE")) return TrackingCarrier.JTE;
   if (tn.startsWith("JDW")) return TrackingCarrier.JDW;
   return null;
@@ -440,8 +439,10 @@ export async function syncTrackingFromOrders() {
       where: { trackingNumber: tn },
     });
     if (existing) {
-      // Update metadata that may have changed (customer info, product, etc.)
+      // Re-detect carrier for orders stuck as OTHER
+      const carrierChanged = existing.carrier === TrackingCarrier.OTHER && carrier !== TrackingCarrier.OTHER;
       const needsUpdate =
+        carrierChanged ||
         existing.customerName !== order.customerName ||
         existing.customerPhone !== order.customerPhone ||
         existing.productName !== order.productName ||
@@ -450,6 +451,7 @@ export async function syncTrackingFromOrders() {
         await prisma.trackingOrder.update({
           where: { id: existing.id },
           data: {
+            ...(carrierChanged ? { carrier, carrierName } : {}),
             customerName: order.customerName,
             customerPhone: order.customerPhone,
             productName: order.productName,
@@ -483,12 +485,56 @@ export async function syncTrackingFromOrders() {
 }
 
 // ---------------------------------------------------------------------------
-// Refresh all active tracking orders (batches of 10)
+// Re-classify OTHER tracking orders using improved carrier detection
+// ---------------------------------------------------------------------------
+
+export async function reclassifyOtherOrders() {
+  const otherOrders = await prisma.trackingOrder.findMany({
+    where: { carrier: TrackingCarrier.OTHER },
+  });
+
+  let reclassified = 0;
+  for (const order of otherOrders) {
+    const newCarrier = detectCarrier(order.trackingNumber);
+    if (newCarrier && newCarrier !== TrackingCarrier.OTHER) {
+      const newCarrierName = carrierDisplayName(newCarrier, null);
+      await prisma.trackingOrder.update({
+        where: { id: order.id },
+        data: { carrier: newCarrier, carrierName: newCarrierName },
+      });
+      reclassified++;
+    }
+  }
+
+  return { reclassified, totalScanned: otherOrders.length };
+}
+
+// ---------------------------------------------------------------------------
+// Refresh active tracking orders in batches of 10
 // ---------------------------------------------------------------------------
 
 const BATCH_SIZE = 10;
+const MAX_PER_REQUEST = 50; // Process at most 50 orders per HTTP request to avoid timeout
 
-export async function refreshAllTracking() {
+export async function refreshAllTracking(limit?: number) {
+  const take = limit ?? MAX_PER_REQUEST;
+
+  // Count total remaining active orders
+  const totalRemaining = await prisma.trackingOrder.count({
+    where: {
+      status: {
+        in: [
+          TrackingStatus.PENDING,
+          TrackingStatus.IN_TRANSIT,
+          TrackingStatus.OUT_FOR_DELIVERY,
+          TrackingStatus.EXCEPTION,
+          TrackingStatus.UNKNOWN,
+        ],
+      },
+      carrier: { not: TrackingCarrier.OTHER },
+    },
+  });
+
   const activeOrders = await prisma.trackingOrder.findMany({
     where: {
       status: {
@@ -500,8 +546,10 @@ export async function refreshAllTracking() {
           TrackingStatus.UNKNOWN,
         ],
       },
+      carrier: { not: TrackingCarrier.OTHER },
     },
     orderBy: { lastCheckedAt: "asc" },
+    take,
   });
 
   const results: Array<{
@@ -543,9 +591,16 @@ export async function refreshAllTracking() {
 
     // Brief pause between batches to avoid rate limiting
     if (i + BATCH_SIZE < activeOrders.length) {
-      await new Promise((resolve) => setTimeout(resolve, 1000));
+      await new Promise((resolve) => setTimeout(resolve, 500));
     }
   }
 
-  return { results, totalProcessed: activeOrders.length, batches: Math.ceil(activeOrders.length / BATCH_SIZE) };
+  const remaining = totalRemaining - activeOrders.length;
+  return {
+    results,
+    totalProcessed: activeOrders.length,
+    batches: Math.ceil(activeOrders.length / BATCH_SIZE),
+    remaining,
+    totalActive: totalRemaining,
+  };
 }
