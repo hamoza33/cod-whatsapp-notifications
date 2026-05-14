@@ -184,89 +184,19 @@ export default function DashboardPage() {
     <div>
       <div className="flex items-center justify-between mb-6">
         <h1 className="text-2xl font-bold text-gray-900">Dashboard</h1>
-        <div className="flex gap-2">
-          <button
-            onClick={handleTrackingSync}
-            disabled={trackingStarting || !!isTrackingActive}
-            className="flex items-center gap-2 px-4 py-2 bg-purple-600 text-white rounded-md text-sm font-medium hover:bg-purple-700 disabled:opacity-50 transition-colors"
-          >
-            <Search size={16} className={isTrackingActive ? "animate-spin" : ""} />
-            {isTrackingActive ? "Tracking..." : "Sync All Tracking"}
-          </button>
-          <button
-            onClick={handleSync}
-            disabled={syncing}
-            className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-md text-sm font-medium hover:bg-blue-700 disabled:opacity-50 transition-colors"
-          >
-            <RefreshCw size={16} className={syncing ? "animate-spin" : ""} />
-            {syncing ? "Syncing..." : "Sync Orders"}
-          </button>
-        </div>
+        <button
+          onClick={handleSync}
+          disabled={syncing}
+          className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-md text-sm font-medium hover:bg-blue-700 disabled:opacity-50 transition-colors"
+        >
+          <RefreshCw size={16} className={syncing ? "animate-spin" : ""} />
+          {syncing ? "Syncing..." : "Sync Orders"}
+        </button>
       </div>
 
       {syncResult && (
         <div className="mb-4 p-3 bg-blue-50 text-blue-700 rounded-md text-sm border border-blue-200">
           {syncResult}
-        </div>
-      )}
-
-      {trackingError && (
-        <div className="mb-4 p-3 bg-red-50 text-red-700 rounded-md text-sm border border-red-200">
-          {trackingError}
-        </div>
-      )}
-
-      {/* Tracking Progress Bar */}
-      {trackingProgress && (
-        <div className="mb-6 bg-white rounded-xl shadow-sm p-4 border border-gray-100">
-          <div className="flex items-center justify-between mb-2">
-            <h3 className="text-sm font-semibold text-gray-700">
-              Package Tracking {trackingProgress.status === "COMPLETED" ? "Complete" : trackingProgress.status === "FAILED" ? "Failed" : "In Progress"}
-            </h3>
-            <span className="text-xs text-gray-500">
-              {trackingProgress.processedOrders} / {trackingProgress.totalOrders} orders
-            </span>
-          </div>
-
-          <div className="w-full bg-gray-200 rounded-full h-3 mb-2">
-            <div
-              className={`h-3 rounded-full transition-all duration-500 ${
-                trackingProgress.status === "COMPLETED" ? "bg-green-500" :
-                trackingProgress.status === "FAILED" ? "bg-red-500" :
-                "bg-purple-500"
-              }`}
-              style={{ width: `${trackingProgress.percentage}%` }}
-            />
-          </div>
-
-          <div className="flex gap-4 text-xs text-gray-600">
-            <span>{trackingProgress.percentage}%</span>
-            {trackingProgress.currentCarrier && (
-              <span>Carrier: {trackingProgress.currentCarrier}</span>
-            )}
-            <span className="text-green-600">{trackingProgress.successCount} success</span>
-            {trackingProgress.failedCount > 0 && (
-              <span className="text-red-600">{trackingProgress.failedCount} failed</span>
-            )}
-            {trackingProgress.skippedCount > 0 && (
-              <span className="text-yellow-600">{trackingProgress.skippedCount} skipped</span>
-            )}
-          </div>
-
-          {trackingProgress.recentErrors.length > 0 && (
-            <details className="mt-2">
-              <summary className="text-xs text-red-500 cursor-pointer">
-                Recent errors ({trackingProgress.recentErrors.length})
-              </summary>
-              <ul className="mt-1 text-xs text-red-600 space-y-1">
-                {trackingProgress.recentErrors.map((e, i) => (
-                  <li key={i} className="truncate">
-                    {e.carrier} / {e.trackingNumber}: {e.lastError}
-                  </li>
-                ))}
-              </ul>
-            </details>
-          )}
         </div>
       )}
 
@@ -350,6 +280,83 @@ export default function DashboardPage() {
           icon={AlertCircle}
           color="red"
         />
+      </div>
+
+      {/* Tracking Packages */}
+      <h2 className="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-3">Tracking Packages</h2>
+      <div className="bg-white rounded-xl shadow-sm p-4 border border-gray-100 mb-6">
+        <div className="flex items-center justify-between mb-3">
+          <p className="text-sm text-gray-600">
+            Refresh tracking status for all eligible orders (pending, shipped, in transit).
+          </p>
+          <button
+            onClick={handleTrackingSync}
+            disabled={trackingStarting || !!isTrackingActive}
+            className="flex items-center gap-2 px-4 py-2 bg-purple-600 text-white rounded-md text-sm font-medium hover:bg-purple-700 disabled:opacity-50 transition-colors"
+          >
+            <Search size={16} className={isTrackingActive ? "animate-spin" : ""} />
+            {isTrackingActive ? "Tracking..." : "Sync All Tracking"}
+          </button>
+        </div>
+
+        {trackingError && (
+          <div className="mb-3 p-3 bg-red-50 text-red-700 rounded-md text-sm border border-red-200">
+            {trackingError}
+          </div>
+        )}
+
+        {trackingProgress && (
+          <div>
+            <div className="flex items-center justify-between mb-2">
+              <h3 className="text-sm font-semibold text-gray-700">
+                {trackingProgress.status === "COMPLETED" ? "Tracking Complete" : trackingProgress.status === "FAILED" ? "Tracking Failed" : "Tracking In Progress"}
+              </h3>
+              <span className="text-xs text-gray-500">
+                {trackingProgress.processedOrders} / {trackingProgress.totalOrders} orders
+              </span>
+            </div>
+
+            <div className="w-full bg-gray-200 rounded-full h-3 mb-2">
+              <div
+                className={`h-3 rounded-full transition-all duration-500 ${
+                  trackingProgress.status === "COMPLETED" ? "bg-green-500" :
+                  trackingProgress.status === "FAILED" ? "bg-red-500" :
+                  "bg-purple-500"
+                }`}
+                style={{ width: `${trackingProgress.percentage}%` }}
+              />
+            </div>
+
+            <div className="flex gap-4 text-xs text-gray-600">
+              <span>{trackingProgress.percentage}%</span>
+              {trackingProgress.currentCarrier && (
+                <span>Carrier: {trackingProgress.currentCarrier}</span>
+              )}
+              <span className="text-green-600">{trackingProgress.successCount} success</span>
+              {trackingProgress.failedCount > 0 && (
+                <span className="text-red-600">{trackingProgress.failedCount} failed</span>
+              )}
+              {trackingProgress.skippedCount > 0 && (
+                <span className="text-yellow-600">{trackingProgress.skippedCount} skipped</span>
+              )}
+            </div>
+
+            {trackingProgress.recentErrors.length > 0 && (
+              <details className="mt-2">
+                <summary className="text-xs text-red-500 cursor-pointer">
+                  Recent errors ({trackingProgress.recentErrors.length})
+                </summary>
+                <ul className="mt-1 text-xs text-red-600 space-y-1">
+                  {trackingProgress.recentErrors.map((e, i) => (
+                    <li key={i} className="truncate">
+                      {e.carrier} / {e.trackingNumber}: {e.lastError}
+                    </li>
+                  ))}
+                </ul>
+              </details>
+            )}
+          </div>
+        )}
       </div>
 
       {stats?.lastSyncAt && (
