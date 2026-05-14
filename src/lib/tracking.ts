@@ -426,21 +426,43 @@ export async function syncTrackingFromOrders() {
   let imported = 0;
   let skipped = 0;
 
+  let updated = 0;
+
   for (const order of orders) {
     if (!order.trackingNumber) continue;
     const tn = order.trackingNumber.trim();
     if (!tn) { skipped++; continue; }
 
+    const carrier = detectCarrier(tn) ?? TrackingCarrier.OTHER;
+    const carrierName = carrierDisplayName(carrier, order.deliveryCompany);
+
     const existing = await prisma.trackingOrder.findUnique({
       where: { trackingNumber: tn },
     });
     if (existing) {
-      skipped++;
+      // Update metadata that may have changed (customer info, product, etc.)
+      const needsUpdate =
+        existing.customerName !== order.customerName ||
+        existing.customerPhone !== order.customerPhone ||
+        existing.productName !== order.productName ||
+        existing.orderId !== order.id;
+      if (needsUpdate) {
+        await prisma.trackingOrder.update({
+          where: { id: existing.id },
+          data: {
+            customerName: order.customerName,
+            customerPhone: order.customerPhone,
+            productName: order.productName,
+            codCreatedAt: order.codCreatedAt,
+            orderId: order.id,
+          },
+        });
+        updated++;
+      } else {
+        skipped++;
+      }
       continue;
     }
-
-    const carrier = detectCarrier(tn) ?? TrackingCarrier.OTHER;
-    const carrierName = carrierDisplayName(carrier, order.deliveryCompany);
 
     await prisma.trackingOrder.create({
       data: {
@@ -457,7 +479,7 @@ export async function syncTrackingFromOrders() {
     imported++;
   }
 
-  return { imported, skipped, totalScanned: orders.length };
+  return { imported, skipped, updated, totalScanned: orders.length };
 }
 
 // ---------------------------------------------------------------------------

@@ -22,7 +22,7 @@ export async function GET(request: NextRequest) {
   const where: Record<string, unknown> = {};
   if (carrier) where.carrier = carrier;
   if (status) where.status = status;
-  if (product) where.productName = { contains: product, mode: "insensitive" };
+  if (product) where.productName = { startsWith: product, mode: "insensitive" };
   if (search) {
     where.OR = [
       { trackingNumber: { contains: search, mode: "insensitive" } },
@@ -43,29 +43,29 @@ export async function GET(request: NextRequest) {
   const total = await prisma.trackingOrder.count({ where });
 
   if (countsOnly) {
-    const statusCounts = await prisma.trackingOrder.groupBy({
-      by: ["status"],
-      _count: true,
-      where: Object.keys(where).length > 0 ? undefined : undefined,
-    });
     const allStatusCounts = await prisma.trackingOrder.groupBy({
       by: ["status"],
       _count: true,
     });
-    const productNames = await prisma.trackingOrder.findMany({
+    const productNamesRaw = await prisma.trackingOrder.findMany({
       where: { productName: { not: null } },
       distinct: ["productName"],
       select: { productName: true },
     });
+    // Extract primary product names (before comma) to exclude cross-sells
+    const primaryProducts = new Set<string>();
+    for (const p of productNamesRaw) {
+      if (p.productName) {
+        const primary = p.productName.split(",")[0].trim();
+        if (primary) primaryProducts.add(primary);
+      }
+    }
     return NextResponse.json({
       total,
       statusCounts: Object.fromEntries(
         allStatusCounts.map((s) => [s.status, s._count])
       ),
-      productNames: productNames
-        .map((p) => p.productName)
-        .filter(Boolean)
-        .sort(),
+      productNames: Array.from(primaryProducts).sort(),
     });
   }
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback, useRef } from "react";
+import { useEffect, useState, useCallback, useRef, useMemo } from "react";
 import { api } from "@/lib/api-client";
 import {
   RefreshCw,
@@ -138,6 +138,9 @@ export default function TrackingPage() {
   const [filterProduct, setFilterProduct] = useState<string>("");
   const [draftProduct, setDraftProduct] = useState<string>("");
   const [productNames, setProductNames] = useState<string[]>([]);
+  const [productSearch, setProductSearch] = useState("");
+  const [showProductDropdown, setShowProductDropdown] = useState(false);
+  const productDropdownRef = useRef<HTMLDivElement>(null);
   const [dateFrom, setDateFrom] = useState<string>("");
   const [draftDateFrom, setDraftDateFrom] = useState<string>("");
   const [dateTo, setDateTo] = useState<string>("");
@@ -154,6 +157,34 @@ export default function TrackingPage() {
     text: string;
   } | null>(null);
   const initialLoad = useRef(true);
+
+  // Primary product names (first product before comma)
+  const primaryProductNames = useMemo(() => {
+    const primaries = new Set<string>();
+    for (const name of productNames) {
+      const primary = name.split(",")[0].trim();
+      if (primary) primaries.add(primary);
+    }
+    return Array.from(primaries).sort();
+  }, [productNames]);
+
+  const filteredProducts = primaryProductNames.filter((p) =>
+    p.toLowerCase().includes(productSearch.toLowerCase())
+  );
+
+  // Close product dropdown on outside click
+  useEffect(() => {
+    function handleClick(e: MouseEvent) {
+      if (
+        productDropdownRef.current &&
+        !productDropdownRef.current.contains(e.target as Node)
+      ) {
+        setShowProductDropdown(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, []);
 
   const showToast = useCallback(
     (kind: "success" | "error", text: string) => {
@@ -523,18 +554,71 @@ export default function TrackingPage() {
             <option value="JDW">JD Logistics</option>
             <option value="OTHER">Other</option>
           </select>
-          <select
-            value={draftProduct}
-            onChange={(e) => setDraftProduct(e.target.value)}
-            className="px-3 py-2 border border-gray-300 rounded-md text-sm bg-white max-w-[200px]"
-          >
-            <option value="">All Products</option>
-            {productNames.map((name) => (
-              <option key={name} value={name}>
-                {name}
-              </option>
-            ))}
-          </select>
+          <div className="relative" ref={productDropdownRef}>
+            <button
+              onClick={() => setShowProductDropdown(!showProductDropdown)}
+              className="flex items-center gap-2 px-3 py-2 border border-gray-300 rounded-md text-sm bg-white min-w-[160px] max-w-[220px]"
+            >
+              <span className="truncate">
+                {draftProduct || "All Products"}
+              </span>
+              <ChevronDown size={14} className="text-gray-400 flex-shrink-0" />
+            </button>
+            {showProductDropdown && (
+              <div className="absolute top-full left-0 mt-1 w-72 bg-white border border-gray-200 rounded-md shadow-lg z-50 max-h-64 overflow-hidden flex flex-col">
+                <div className="p-2 border-b border-gray-100">
+                  <div className="relative">
+                    <Search
+                      size={14}
+                      className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-400"
+                    />
+                    <input
+                      type="text"
+                      placeholder="Search products..."
+                      value={productSearch}
+                      onChange={(e) => setProductSearch(e.target.value)}
+                      className="w-full pl-7 pr-2 py-1.5 border border-gray-200 rounded text-xs"
+                      autoFocus
+                    />
+                  </div>
+                </div>
+                <div className="overflow-y-auto max-h-48">
+                  <button
+                    onClick={() => {
+                      setDraftProduct("");
+                      setShowProductDropdown(false);
+                      setProductSearch("");
+                    }}
+                    className={`w-full text-left px-3 py-2 text-sm hover:bg-gray-50 ${
+                      !draftProduct ? "bg-blue-50 text-blue-700" : ""
+                    }`}
+                  >
+                    All Products
+                  </button>
+                  {filteredProducts.map((p) => (
+                    <button
+                      key={p}
+                      onClick={() => {
+                        setDraftProduct(p);
+                        setShowProductDropdown(false);
+                        setProductSearch("");
+                      }}
+                      className={`w-full text-left px-3 py-2 text-sm hover:bg-gray-50 truncate ${
+                        draftProduct === p ? "bg-blue-50 text-blue-700" : ""
+                      }`}
+                    >
+                      {p}
+                    </button>
+                  ))}
+                  {filteredProducts.length === 0 && (
+                    <div className="px-3 py-2 text-xs text-gray-400">
+                      No products found
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
           <div className="flex items-center gap-2">
             <label className="text-xs text-gray-500">From:</label>
             <input
