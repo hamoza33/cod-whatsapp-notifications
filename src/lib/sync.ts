@@ -12,6 +12,7 @@ import { normalizePhoneNumber } from "./phone";
 import { OrderStatus } from "@prisma/client";
 import { deriveOrderStatus } from "./order-status";
 import { runAutomationsForOrder } from "./automations";
+import { normalizeCarrier } from "./carrier-normalization";
 
 function extractLeadId(codOrder: CodNetworkOrder): string | null {
   // COD Network exposes the lead-id under various keys depending on which
@@ -188,6 +189,18 @@ async function upsertOrder(
   const codCreatedAt = parseDate(codOrder.created_at);
   const codUpdatedAt = parseDate(codOrder.updated_at);
 
+  // Normalize carrier name for tracking routing
+  const carrierResult = normalizeCarrier(codOrder.delivery_company, trackingNumber);
+  const normalizedCarrierCode = carrierResult.carrier;
+  if (!normalizedCarrierCode && (codOrder.delivery_company || trackingNumber)) {
+    console.warn(
+      `[sync] Order ${codOrderId} classified as UNKNOWN carrier — ` +
+      `deliveryCompany="${codOrder.delivery_company}", ` +
+      `trackingNumber="${trackingNumber}", ` +
+      `reason: ${carrierResult.reason}`
+    );
+  }
+
   let normalizedPhone: string | null = null;
   if (codOrder.customer_phone) {
     try {
@@ -234,6 +247,7 @@ async function upsertOrder(
         productQuantity: productQuantity ?? existing.productQuantity,
         trackingNumber: trackingNumber ?? existing.trackingNumber,
         deliveryCompany: codOrder.delivery_company ?? existing.deliveryCompany,
+        normalizedCarrier: normalizedCarrierCode ?? existing.normalizedCarrier,
         status,
         ...(statusChanged ? { statusChangedAt: new Date() } : {}),
         codDeliveryStatus: rawStatusLabel ?? existing.codDeliveryStatus,
@@ -268,6 +282,7 @@ async function upsertOrder(
         productQuantity,
         trackingNumber,
         deliveryCompany: codOrder.delivery_company ?? null,
+        normalizedCarrier: normalizedCarrierCode,
         status,
         statusChangedAt: new Date(),
         codDeliveryStatus: rawStatusLabel,

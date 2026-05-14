@@ -83,15 +83,21 @@ model Order {
   createdAt           DateTime    @default(now()) @map("created_at")
   updatedAt           DateTime    @updatedAt @map("updated_at")
 
-  whatsappMessages WhatsappMessage[]
-  inboundMessages  InboundMessage[]
-  automationRuns   AutomationRun[]
+  // Normalized carrier code derived from deliveryCompany. One of:
+  // JTE, JDW, INJAZ, IMILE, or null (UNKNOWN / not yet classified).
+  normalizedCarrier String?     @map("normalized_carrier")
+
+  whatsappMessages  WhatsappMessage[]
+  inboundMessages   InboundMessage[]
+  automationRuns    AutomationRun[]
+  trackingJobItems  TrackingJobItem[]
 
   @@index([status])
   @@index([codNetworkOrderId])
   @@index([codNetworkLeadId])
   @@index([codCreatedAt])
   @@index([whatsappSentAt])
+  @@index([normalizedCarrier])
   @@map("orders")
 }
 
@@ -278,4 +284,66 @@ model Product {
   @@index([name])
   @@index([sku])
   @@map("products")
+}
+
+// ---------------------------------------------------------------------------
+// Package tracking job system
+// ---------------------------------------------------------------------------
+
+enum TrackingJobStatus {
+  QUEUED
+  RUNNING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+enum TrackingItemStatus {
+  PENDING
+  RUNNING
+  SUCCESS
+  FAILED
+  SKIPPED
+}
+
+model TrackingJob {
+  id              String            @id @default(cuid())
+  status          TrackingJobStatus @default(QUEUED)
+  totalOrders     Int               @default(0) @map("total_orders")
+  processedOrders Int               @default(0) @map("processed_orders")
+  successCount    Int               @default(0) @map("success_count")
+  failedCount     Int               @default(0) @map("failed_count")
+  skippedCount    Int               @default(0) @map("skipped_count")
+  currentCarrier  String?           @map("current_carrier")
+  errorMessage    String?           @map("error_message")
+  startedAt       DateTime?         @map("started_at")
+  finishedAt      DateTime?         @map("finished_at")
+  createdAt       DateTime          @default(now()) @map("created_at")
+
+  items TrackingJobItem[]
+
+  @@index([status])
+  @@map("tracking_jobs")
+}
+
+model TrackingJobItem {
+  id             String             @id @default(cuid())
+  jobId          String             @map("job_id")
+  orderId        String             @map("order_id")
+  trackingNumber String             @map("tracking_number")
+  carrier        String
+  status         TrackingItemStatus @default(PENDING)
+  attempts       Int                @default(0)
+  lastError      String?            @map("last_error")
+  trackingResult String?            @map("tracking_result")
+  startedAt      DateTime?          @map("started_at")
+  finishedAt     DateTime?          @map("finished_at")
+
+  job   TrackingJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  order Order      @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([jobId, status])
+  @@index([orderId])
+  @@index([carrier])
+  @@map("tracking_job_items")
 }

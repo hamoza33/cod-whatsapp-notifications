@@ -3,6 +3,14 @@
 # After provisioning Postgres + setting secrets, the release_command will
 # run `prisma migrate deploy` on every release so schema changes apply
 # automatically.
+#
+# The tracking worker runs in-process inside the Next.js server via
+# instrumentation.ts. No separate worker process is needed unless you
+# want to scale them independently. To split later:
+#   [processes]
+#     web = "node server.js"
+#     worker = "node tracking-worker.js"
+# and set TRACKING_WORKER_DISABLED=true in [env].
 
 app = "cod-whatsapp-notifications"
 primary_region = "cdg"

@@ -66,6 +66,7 @@ export const SETTING_KEYS = {
   AI_AGENT_SYSTEM_PROMPT: "ai_agent_system_prompt",
   AI_AGENT_MAX_TOKENS: "ai_agent_max_tokens",
   AI_AGENT_PRODUCT_TYPES: "ai_agent_product_types",
+  CAPTCHA_API_KEY: "captcha_api_key",
 } as const;
 
 export const SENSITIVE_SETTING_KEYS: readonly string[] = [
@@ -76,6 +77,7 @@ export const SENSITIVE_SETTING_KEYS: readonly string[] = [
   SETTING_KEYS.WHATSAPP_APP_SECRET,
   SETTING_KEYS.WHATSAPP_WEBHOOK_VERIFY_TOKEN,
   SETTING_KEYS.OPENAI_API_KEY,
+  SETTING_KEYS.CAPTCHA_API_KEY,
 ];
 
 /**
