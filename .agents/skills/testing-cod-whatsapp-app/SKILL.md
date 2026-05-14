@@ -1,6 +1,6 @@
 ---
 name: testing-cod-whatsapp-app
-description: Reference knowledge for testing the COD WhatsApp Notifications app — local accounts, webhook HMAC signing pattern, known WABA-vs-PNI gotcha, and Devin-tunnel basic-auth limitation. Use when verifying changes to /api/cod-network/webhook/*, /api/whatsapp/*, or the Settings/Pipeline/Automations/Templates pages.
+description: Reference knowledge for testing the COD WhatsApp Notifications app — local accounts, webhook HMAC signing pattern, known WABA-vs-PNI gotcha, Devin-tunnel basic-auth limitation, and tracking architecture test procedures. Use when verifying changes to /api/cod-network/webhook/*, /api/whatsapp/*, /api/tracking/*, or the Settings/Pipeline/Automations/Templates/Dashboard pages.
 ---
 
 # Testing the COD WhatsApp Notifications app
@@ -20,6 +20,73 @@ description: Reference knowledge for testing the COD WhatsApp Notifications app 
 - `COD_NETWORK_WEBHOOK_SECRET` — shared secret for HMAC-SHA256 verification of webhooks.
 
 All of these are saved as permanent secrets in Devin's settings; they are surfaced as env vars in the shell and the app reads them via the Settings page (where they get persisted to the DB).
+
+## Testing the Tracking Architecture (PR #18+)
+
+### Setup: Seed test orders with various carrier names
+
+To test carrier normalization and the tracking job flow, insert test orders with different `delivery_company` values:
+
+```sql
+INSERT INTO orders (id, cod_network_order_id, customer_name, customer_phone, tracking_number, delivery_company, status, created_at, updated_at)
+VALUES
+  ('test-jte-1', 'COD-JTE-001', 'Test JTE', '+212600000001', 'JT1234567890', 'J&T Express', 'SHIPPED', NOW(), NOW()),
+  ('test-jte-2', 'COD-JTE-002', 'Test JTE 2', '+212600000002', 'JT9876543210', 'JTE', 'PENDING', NOW(), NOW()),
+  ('test-jdw-1', 'COD-JDW-001', 'Test JDW', '+212600000004', 'JD2222222222', 'JD Logistics', 'SHIPPED', NOW(), NOW()),
+  ('test-jdw-2', 'COD-JDW-002', 'Test JD', '+212600000005', 'JD3333333333', 'Jingdong', 'PROCESSING', NOW(), NOW()),
+  ('test-injaz-1', 'COD-INJAZ-001', 'Test Injaz', '+212600000006', 'INJ444444444', 'Injaz Express', 'SHIPPED', NOW(), NOW()),
+  ('test-imile-1', 'COD-IMILE-001', 'Test iMile', '+212600000008', 'IM666666666', 'iMile', 'SHIPPED', NOW(), NOW()),
+  ('test-unknown-1', 'COD-UNK-001', 'Test Unknown', '+212600000010', 'XYZ888888888', 'SomeRandomCarrier', 'SHIPPED', NOW(), NOW());
+```
+
+### Test: Carrier reclassify endpoint
+
+```bash
+curl -s -b /tmp/cookies.txt -X POST http://localhost:3000/api/tracking/reclassify | python3 -m json.tool
+```
+
+Expected: `reclassified` count matches known carriers; `stillUnknown` count = 1 (SomeRandomCarrier); each reclassification shows `from: null → to: JTE/JDW/INJAZ/IMILE`.
+
+### Test: Sync All Tracking (job creation + worker processing)
+
+1. Reset carrier data: `UPDATE orders SET normalized_carrier = NULL;`
+2. Clear previous jobs: `DELETE FROM tracking_job_items; DELETE FROM tracking_jobs;`
+3. Call sync-all:
+   ```bash
+   curl -s -b /tmp/cookies.txt -X POST http://localhost:3000/api/tracking/sync-all | python3 -m json.tool
+   ```
+4. Expected response: `{ "jobId": "...", "totalOrders": N }` where N = number of eligible orders (status not DELIVERED/RETURNED/CANCELLED, has tracking_number).
+5. Poll progress:
+   ```bash
+   curl -s -b /tmp/cookies.txt http://localhost:3000/api/tracking/jobs/<jobId> | python3 -m json.tool
+   ```
+6. Wait ~60s for the worker to finish (retries add ~2-8s backoff per batch).
+7. Verify: `processedOrders == totalOrders`, no PENDING items remain.
+
+### Known behaviors during local testing
+
+- **Tracking providers return HTTP 404 for fake tracking numbers** — this is expected. All items will be FAILED after 3 retry attempts. The key test is that ALL items are processed, not just 1/5/20.
+- **Worker retry timing**: Each failed batch retries with exponential backoff (2s, 4s, 8s). A job with 10 items across 4 carriers takes ~50-60s to fully complete locally.
+- **UNKNOWN carrier items are SKIPPED** (not FAILED) with message "No tracking provider for unknown carrier".
+- **Job status = FAILED when successCount=0** — this is correct behavior when all tracking providers return errors. On Fly.io with real tracking numbers, some should succeed.
+- **Duplicate prevention**: Calling `POST /api/tracking/sync-all` while a job is QUEUED/RUNNING returns HTTP 409.
+- **Worker starts automatically** via `instrumentation.ts` on server boot. Check dev server logs for `[tracking-worker] Worker loop started`.
+
+### UI verification (Dashboard page)
+
+- Purple "Sync All Tracking" button appears next to blue "Sync Orders" button.
+- Clicking it shows a progress bar with: percentage, current carrier name, success/failed/skipped counts.
+- Progress bar turns green on completion, red on failure.
+- Expandable "Recent errors" section shows per-item error details.
+- Button changes to "Tracking..." (disabled) during processing, re-enables after completion.
+
+### Cleanup after tracking tests
+
+```sql
+DELETE FROM tracking_job_items;
+DELETE FROM tracking_jobs;
+DELETE FROM orders WHERE id LIKE 'test-%';
+```
 
 ## Webhook HMAC-SHA256 signing pattern (synthetic test)
 
@@ -73,14 +140,4 @@ The real WABA ID lives in **Meta Business Manager → WhatsApp Manager → API S
 
 ## Sending a template message to the real test recipient
 
-Use the Test Message page (`/test-message`) with the user's recipient `+212690415194` for end-to-end verification. Default template `kuwait_ezihear_no_reply` (en) requires 2 body parameters + 1 IMAGE header parameter. Example body parameters: `Hamza, ORDER-12345`. For the image header, any public HTTPS image URL works (e.g. `https://upload.wikimedia.org/wikipedia/commons/thumb/4/47/PNG_transparency_demonstration_1.png/600px-PNG_transparency_demonstration_1.png`).
-
-Success is indicated by a green banner on the Test Message page: *"Test message sent using template '...' (en). Check the recipient's WhatsApp."*
-
-## Drag-and-drop on /pipeline
-
-The computer-use `left_click_drag` is unreliable on `react-dnd` cards in this app — drags often snap back. Prefer one of:
-- The keyboard-accessible status change in `/orders` (status dropdown) — same `PATCH /api/orders/[id]` path.
-- CDP-driven `dispatchEvent(new DragEvent(...))` sequence via `browser_console`. See the previous testing-cod-whatsapp-app skill / past PR comments for a working snippet.
-
-Both paths fire the same automations engine via `runAutomationsForOrder(orderId)`.
+See the Fly.io-specific skill file for the full procedure using `WHATSAPP_TEST_RECIPIENT` (+212690415194).
