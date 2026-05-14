@@ -15,6 +15,7 @@ import {
   Zap,
   FileText,
   ShoppingBag,
+  Truck,
 } from "lucide-react";
 import { api } from "@/lib/api-client";
 import { useRouter } from "next/navigation";
@@ -25,6 +26,7 @@ const navItems = [
   { href: "/pipeline", label: "Pipeline", icon: Columns3 },
   { href: "/products", label: "Products", icon: ShoppingBag },
   { href: "/inbox", label: "WhatsApp Inbox", icon: Inbox },
+  { href: "/package-tracking", label: "Package Tracking", icon: Truck },
   { href: "/automations", label: "Automations", icon: Zap },
   { href: "/templates", label: "Templates", icon: FileText },
   { href: "/messages", label: "Message Logs", icon: MessageSquare },

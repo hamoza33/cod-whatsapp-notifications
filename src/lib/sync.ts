@@ -204,6 +204,34 @@ async function upsertOrder(
     where: { codNetworkOrderId: codOrderId },
   });
 
+  // Skip re-tracking orders already in a terminal state (DELIVERED,
+  // RETURNED, CANCELLED) unless the incoming data explicitly moves them
+  // to a *different* terminal state (e.g. DELIVERED → RETURNED).
+  const TERMINAL_STATUSES: OrderStatus[] = [
+    OrderStatus.DELIVERED,
+    OrderStatus.RETURNED,
+    OrderStatus.CANCELLED,
+  ];
+  if (existing && TERMINAL_STATUSES.includes(existing.status)) {
+    const incomingMappedStatus = mapCodStatus(
+      codOrder.status,
+      trackingStatus
+    ) as OrderStatus;
+    const incomingDerived = deriveOrderStatus({
+      rawStatusLabel,
+      trackingStatus,
+      trackingNumber,
+      mappedFromCode: incomingMappedStatus,
+      previousStatus: existing.status,
+    });
+    if (incomingDerived === existing.status) {
+      return;
+    }
+    if (!TERMINAL_STATUSES.includes(incomingDerived)) {
+      return;
+    }
+  }
+
   // Apply the auto-status logic: tracking number → OUT_FOR_DELIVERY,
   // explicit delivered/returned signals → final state, etc. Falls back to
   // the previously-computed `mapCodStatus` result.
