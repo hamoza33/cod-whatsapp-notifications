@@ -299,6 +299,29 @@ export default function TrackingPage() {
 
   const handleRefreshAll = async () => {
     setRefreshing(true);
+    type CarrierStats = { processed: number; eventsAdded: number; errors: number };
+    const totals: Record<"imile" | "jte" | "jdw" | "injaz", CarrierStats> = {
+      imile: { processed: 0, eventsAdded: 0, errors: 0 },
+      jte: { processed: 0, eventsAdded: 0, errors: 0 },
+      jdw: { processed: 0, eventsAdded: 0, errors: 0 },
+      injaz: { processed: 0, eventsAdded: 0, errors: 0 },
+    };
+    const formatBreakdown = (remaining: number) => {
+      const parts: string[] = [];
+      const labels: Record<keyof typeof totals, string> = {
+        imile: "iMile",
+        jte: "JTE",
+        jdw: "JDW",
+        injaz: "Injaz",
+      };
+      for (const k of Object.keys(totals) as (keyof typeof totals)[]) {
+        const s = totals[k];
+        if (s.processed === 0) continue;
+        parts.push(`${labels[k]}: ${s.processed} processed (${s.eventsAdded} updated)`);
+      }
+      const head = parts.length > 0 ? parts.join(", ") : "No active orders";
+      return remaining > 0 ? `${head}. ${remaining} remaining.` : head;
+    };
     let totalDone = 0;
     try {
       let hasMore = true;
@@ -309,19 +332,29 @@ export default function TrackingPage() {
           remaining: number;
           totalActive: number;
           reclassified: number;
+          byCarrier?: Record<keyof typeof totals, CarrierStats>;
         }>("/tracking/refresh");
         totalDone += result.totalProcessed;
+        if (result.byCarrier) {
+          for (const k of Object.keys(totals) as (keyof typeof totals)[]) {
+            const inc = result.byCarrier[k];
+            if (!inc) continue;
+            totals[k].processed += inc.processed;
+            totals[k].eventsAdded += inc.eventsAdded;
+            totals[k].errors += inc.errors;
+          }
+        }
         if (result.reclassified > 0) {
           showToast("success", `Reclassified ${result.reclassified} carriers`);
         }
         hasMore = result.remaining > 0;
         if (hasMore) {
-          showToast("success", `Processed ${totalDone}/${totalDone + result.remaining} orders...`);
+          showToast("success", formatBreakdown(result.remaining));
         }
       }
       await fetchOrders();
       await fetchCounts();
-      showToast("success", `Refreshed ${totalDone} orders (batches of 10)`);
+      showToast("success", `Refreshed ${totalDone} orders. ${formatBreakdown(0)}`);
     } catch (err) {
       showToast(
         "error",

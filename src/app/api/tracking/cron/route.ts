@@ -9,11 +9,12 @@ export async function GET(request: NextRequest) {
   }
 
   await reclassifyOtherOrders();
-  const { results, totalProcessed, batches } = await refreshAllTracking();
+  const { results, totalProcessed, batches, byCarrier } = await refreshAllTracking();
   return NextResponse.json({
     refreshed: totalProcessed,
     batches,
     results,
+    byCarrier,
     nextRunIn: "30 minutes",
   });
 }

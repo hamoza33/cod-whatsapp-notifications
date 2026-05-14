@@ -11,7 +11,14 @@ export async function POST(request: NextRequest) {
   // Re-classify OTHER orders first so they can be tracked by carrier APIs
   const reclassify = await reclassifyOtherOrders();
 
-  const { results, totalProcessed, batches, remaining, totalActive } = await refreshAllTracking();
+  const {
+    results,
+    totalProcessed,
+    batches,
+    remaining,
+    totalActive,
+    byCarrier,
+  } = await refreshAllTracking();
   return NextResponse.json({
     results,
     totalProcessed,
@@ -19,5 +26,6 @@ export async function POST(request: NextRequest) {
     remaining,
     totalActive,
     reclassified: reclassify.reclassified,
+    byCarrier,
   });
 }
