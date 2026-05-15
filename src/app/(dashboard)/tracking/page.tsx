@@ -46,6 +46,7 @@ interface TrackingOrder {
   status: TrackingStatus;
   latestEvent: string | null;
   latestEventAt: string | null;
+  latestError: string | null;
   customerName: string | null;
   customerPhone: string | null;
   productName: string | null;
@@ -81,6 +82,56 @@ const STATUS_LABELS: Record<TrackingStatus, string> = {
   UNKNOWN: "Unknown",
 };
 
+function errorPill(
+  latestError: string | null
+): { label: string; bg: string; text: string } | null {
+  if (!latestError) return null;
+  switch (latestError) {
+    case "not_found_on_injaz":
+      return {
+        label: "Not in Injaz system",
+        bg: "bg-gray-100",
+        text: "text-gray-600",
+      };
+    case "not_found_on_jdw":
+      return {
+        label: "Not in JD Logistics system",
+        bg: "bg-gray-100",
+        text: "text-gray-600",
+      };
+    case "jte_manual_only":
+      return {
+        label: "Track on JT website",
+        bg: "bg-amber-50",
+        text: "text-amber-700",
+      };
+    case "imile_rate_limited":
+      return {
+        label: "iMile throttling",
+        bg: "bg-orange-100",
+        text: "text-orange-700",
+      };
+    case "captcha_required":
+      return {
+        label: "Captcha key required",
+        bg: "bg-red-100",
+        text: "text-red-700",
+      };
+    case "fourtracking_blocked":
+      return {
+        label: "Legacy 4tracking error",
+        bg: "bg-red-100",
+        text: "text-red-700",
+      };
+    default:
+      return {
+        label: `Error: ${latestError}`,
+        bg: "bg-red-100",
+        text: "text-red-700",
+      };
+  }
+}
+
 function carrierLabel(order: TrackingOrder): string {
   if (order.carrierName) return order.carrierName;
   if (order.carrier === "IMILE") return "iMile";
@@ -101,7 +152,7 @@ function trackingUrl(
     return "https://injaz-express.com/track_order.php";
   }
   if (carrier === "JTE") {
-    return `https://www.jtexpress-sa.com/`;
+    return `https://www.jtexpress.me/KSA?orderNo=${encodeURIComponent(trackingNumber)}`;
   }
   if (carrier === "JDW") {
     return `https://www.jingdonglogistics.com/Tracking`;
@@ -130,6 +181,7 @@ export default function TrackingPage() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [syncing, setSyncing] = useState(false);
+  const [reclassifying, setReclassifying] = useState(false);
   const [search, setSearch] = useState("");
   const [draftSearch, setDraftSearch] = useState("");
   const [filterCarrier, setFilterCarrier] = useState<string>("");
@@ -391,6 +443,26 @@ export default function TrackingPage() {
     }
   };
 
+  const handleReclassify = async () => {
+    setReclassifying(true);
+    try {
+      const result = await api.post<{
+        reclassified: number;
+        totalScanned: number;
+      }>("/tracking/reclassify");
+      await fetchCounts();
+      await fetchOrders();
+      showToast("success", `Reclassified ${result.reclassified} orders`);
+    } catch (err) {
+      showToast(
+        "error",
+        err instanceof Error ? err.message : "Reclassify failed"
+      );
+    } finally {
+      setReclassifying(false);
+    }
+  };
+
   const handleRefreshOne = async (id: string) => {
     try {
       await api.post(`/tracking/${id}/refresh`);
@@ -487,6 +559,18 @@ export default function TrackingPage() {
               className={syncing ? "animate-pulse" : ""}
             />
             {syncing ? "Syncing..." : "Sync All"}
+          </button>
+          <button
+            onClick={handleReclassify}
+            disabled={reclassifying}
+            className="flex items-center gap-2 px-3 py-2 bg-gray-100 text-gray-700 rounded-md text-sm font-medium hover:bg-gray-200 disabled:opacity-50"
+            title="Re-detect carriers for OTHER-bucket orders"
+          >
+            <Filter
+              size={16}
+              className={reclassifying ? "animate-pulse" : ""}
+            />
+            {reclassifying ? "Reclassifying..." : "Reclassify"}
           </button>
           <button
             onClick={handleRefreshAll}
@@ -867,9 +951,13 @@ function TrackingCard({
   onDelete: () => void;
 }) {
   const c = STATUS_COLORS[order.status];
+  const errorInfo = errorPill(order.latestError);
   const [refreshing, setRefreshing] = useState(false);
   const url = trackingUrl(order.carrier, order.trackingNumber);
-  const canRefresh = order.carrier !== "OTHER";
+  const isJteManual =
+    order.carrier === "JTE" || order.latestError === "jte_manual_only";
+  const jteUrl = `https://www.jtexpress.me/KSA?orderNo=${encodeURIComponent(order.trackingNumber)}`;
+  const canRefresh = order.carrier !== "OTHER" && !isJteManual;
   const hasUrl = url !== null;
 
   const handleRefresh = async () => {
@@ -903,6 +991,24 @@ function TrackingCard({
             >
               {STATUS_LABELS[order.status]}
             </span>
+            {errorInfo &&
+              (order.latestError === "captcha_required" ? (
+                <a
+                  href="/settings#tracking"
+                  title={order.latestError ?? undefined}
+                  onClick={(e) => e.stopPropagation()}
+                  className={`px-2 py-0.5 rounded-full text-xs font-medium ${errorInfo.bg} ${errorInfo.text} hover:underline`}
+                >
+                  {errorInfo.label}
+                </a>
+              ) : (
+                <span
+                  title={order.latestError ?? undefined}
+                  className={`px-2 py-0.5 rounded-full text-xs font-medium ${errorInfo.bg} ${errorInfo.text}`}
+                >
+                  {errorInfo.label}
+                </span>
+              ))}
             <span className="text-xs text-gray-400">
               {carrierLabel(order)}
             </span>
@@ -953,18 +1059,31 @@ function TrackingCard({
               <ExternalLink size={15} />
             </a>
           )}
-          {canRefresh && (
-            <button
-              onClick={handleRefresh}
-              disabled={refreshing}
-              className="p-1.5 rounded hover:bg-gray-100 text-gray-400 hover:text-blue-600 disabled:opacity-50"
-              title="Refresh tracking"
+          {isJteManual ? (
+            <a
+              href={jteUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-1 px-2 py-1 rounded text-xs font-medium text-amber-700 hover:bg-amber-50"
+              title="Open in JT website"
             >
-              <RefreshCw
-                size={15}
-                className={refreshing ? "animate-spin" : ""}
-              />
-            </button>
+              <ExternalLink size={13} />
+              Open in JT website
+            </a>
+          ) : (
+            canRefresh && (
+              <button
+                onClick={handleRefresh}
+                disabled={refreshing}
+                className="p-1.5 rounded hover:bg-gray-100 text-gray-400 hover:text-blue-600 disabled:opacity-50"
+                title="Refresh tracking"
+              >
+                <RefreshCw
+                  size={15}
+                  className={refreshing ? "animate-spin" : ""}
+                />
+              </button>
+            )
           )}
           <button
             onClick={onDelete}
