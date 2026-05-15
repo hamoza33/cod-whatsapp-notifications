@@ -88,7 +88,14 @@ export function detectCarrier(
     // "Future Logistics FJT" or "JT2 Cargo" don't get misclassified as JTE
     // (which is the manual-only no-fetch path — a misclassification would
     // permanently park the row at `jte_manual_only`).
-    if (/\bj&?t(?:\s+express)?\b/i.test(dc)) return TrackingCarrier.JTE;
+    // Normalize underscores / dots / slashes to spaces before testing so
+    // operator labels like "JT_Express", "JT.Express" or "JT/Express"
+    // aren't masked by the fact that `_` is a JS-regex word character
+    // (so `\b` would not fire between `T` and `_`). After normalization
+    // `\b` correctly fires while `FJT` / `JT2` / `Aramex JTX` still don't.
+    const dcNormalized = dc.replace(/[_./]/g, " ");
+    if (/\bj&?t(?:\s+express)?\b/i.test(dcNormalized))
+      return TrackingCarrier.JTE;
     if (
       dc.includes("jdw") ||
       dc.includes("jingdong") ||
@@ -386,7 +393,7 @@ export async function syncTrackingFromOrders() {
 // Re-classify OTHER tracking orders using improved carrier detection
 // ---------------------------------------------------------------------------
 
-export async function reclassifyOtherOrders() {
+export async function reclassifyOtherOrders(deadlineMs?: number) {
   const otherOrders = await prisma.trackingOrder.findMany({
     where: { carrier: TrackingCarrier.OTHER },
     include: {
@@ -394,10 +401,18 @@ export async function reclassifyOtherOrders() {
         select: { deliveryCompany: true },
       },
     },
+    take: RECLASSIFY_TAKE,
   });
 
   let reclassified = 0;
-  for (const order of otherOrders) {
+  // Drive the per-row UPDATE through drainQueue with chunk-size 1 so 5
+  // Postgres writes overlap (matching the carrier-pool topology) and so
+  // each worker honours the same wall-clock deadline used by the carrier
+  // pools downstream. Without this, a 1,200-row OTHER bucket can blow
+  // the entire 45 s budget before any pool starts.
+  const queue: typeof otherOrders = [...otherOrders];
+  const effectiveDeadline = deadlineMs ?? Number.POSITIVE_INFINITY;
+  await drainQueue(queue, RECLASSIFY_CONCURRENCY, effectiveDeadline, async (order) => {
     const deliveryCompany = order.order?.deliveryCompany ?? null;
     const newCarrier = detectCarrier(order.trackingNumber, deliveryCompany);
     if (newCarrier && newCarrier !== TrackingCarrier.OTHER) {
@@ -408,9 +423,14 @@ export async function reclassifyOtherOrders() {
       });
       reclassified++;
     }
-  }
+  });
 
-  return { reclassified, totalScanned: otherOrders.length };
+  const cappedAt = otherOrders.length === RECLASSIFY_TAKE ? RECLASSIFY_TAKE : null;
+  return {
+    reclassified,
+    totalScanned: otherOrders.length,
+    ...(cappedAt !== null ? { cappedAt } : {}),
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -444,6 +464,8 @@ const INJAZ_CONCURRENCY = 5;
 const JTE_CONCURRENCY = 5;
 const JDW_CHUNK_SIZE = 10;
 const JDW_CONCURRENCY = 5;
+const RECLASSIFY_CONCURRENCY = 5;
+const RECLASSIFY_TAKE = 250;
 const DEFAULT_WALL_CLOCK_MS = 45_000;
 
 interface ActiveOrderRow {
@@ -499,8 +521,10 @@ export async function refreshAllTracking(
   // the same wall-clock deadline. This prevents a large OTHER bucket
   // (e.g. ~1,200 stuck rows) from pushing the /api/tracking/refresh route
   // past Fly's request timeout before the deadline even begins counting.
-  // If reclassify itself is slow we still cap the total wall-clock at 45s.
-  const reclassifyResult = await reclassifyOtherOrders();
+  // reclassifyOtherOrders honours the deadline internally via drainQueue
+  // and is also row-capped via RECLASSIFY_TAKE so a single tick can never
+  // burn the entire budget on reclassification.
+  const reclassifyResult = await reclassifyOtherOrders(deadline);
 
   // Read captcha settings once. If the user hasn't set them we default the
   // provider to '2captcha' and leave the key null — the JDW provider gives a
