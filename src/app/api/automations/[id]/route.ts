@@ -53,6 +53,12 @@ interface UpdateAutomationBody {
   whenStatusEquals?: string | null;
   andProductContains?: string | null;
   andProductDoesNotContain?: string | null;
+  andPhoneStartsWith?: string | null;
+  andTrackingCondition?: string | null;
+  andCityContains?: string | null;
+  andCustomerNameContains?: string | null;
+  andMinPrice?: string | null;
+  andMaxPrice?: string | null;
   thenMoveToStatus?: string | null;
   thenSendTemplateName?: string | null;
   thenSendTemplateLanguage?: string | null;
@@ -100,6 +106,18 @@ export async function PATCH(request: NextRequest, context: RouteContext) {
   if (body.thenSendHeaderImageUrl !== undefined)
     data.thenSendHeaderImageUrl = body.thenSendHeaderImageUrl?.trim() || null;
   if (body.thenSendOnce !== undefined) data.thenSendOnce = body.thenSendOnce;
+  if (body.andPhoneStartsWith !== undefined)
+    data.andPhoneStartsWith = body.andPhoneStartsWith?.trim() || null;
+  if (body.andTrackingCondition !== undefined)
+    data.andTrackingCondition = body.andTrackingCondition?.trim() || null;
+  if (body.andCityContains !== undefined)
+    data.andCityContains = body.andCityContains?.trim() || null;
+  if (body.andCustomerNameContains !== undefined)
+    data.andCustomerNameContains = body.andCustomerNameContains?.trim() || null;
+  if (body.andMinPrice !== undefined)
+    data.andMinPrice = body.andMinPrice?.trim() || null;
+  if (body.andMaxPrice !== undefined)
+    data.andMaxPrice = body.andMaxPrice?.trim() || null;
 
   try {
     const automation = await prisma.automation.update({
@@ -176,12 +194,14 @@ export async function POST(request: NextRequest, context: RouteContext) {
         codNetworkOrderId: true,
         customerName: true,
         productName: true,
+        customerPhone: true,
+        trackingNumber: true,
+        customerCity: true,
+        productPrice: true,
         status: true,
       },
     });
-    const matching = orders.filter((o) =>
-      matchesAutomation(checkAutomation, { status: o.status, productName: o.productName })
-    );
+    const matching = orders.filter((o) => matchesAutomation(checkAutomation, o));
     return NextResponse.json({
       candidateOrdersScanned: orders.length,
       matchingCount: matching.length,
@@ -202,9 +222,7 @@ export async function POST(request: NextRequest, context: RouteContext) {
       take: 1000,
       orderBy: { codCreatedAt: "desc" },
     });
-    const matching = orders.filter((o) =>
-      matchesAutomation(checkAutomation, { status: o.status, productName: o.productName })
-    );
+    const matching = orders.filter((o) => matchesAutomation(checkAutomation, o));
     let applied = 0;
     let failed = 0;
     for (const order of matching) {

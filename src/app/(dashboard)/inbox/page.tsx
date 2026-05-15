@@ -13,6 +13,8 @@ import {
   X,
   Search,
   Phone,
+  Sparkles,
+  Loader2,
 } from "lucide-react";
 
 interface Conversation {
@@ -111,6 +113,8 @@ export default function InboxPage() {
   const [searchQuery, setSearchQuery] = useState("");
   const [whatsappNumbers, setWhatsappNumbers] = useState<WhatsappNumberOption[]>([]);
   const [selectedNumberId, setSelectedNumberId] = useState<string | null>(null);
+  const [aiSuggestions, setAiSuggestions] = useState<string[]>([]);
+  const [aiSuggestionsLoading, setAiSuggestionsLoading] = useState(false);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const threadEndRef = useRef<HTMLDivElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
@@ -221,6 +225,31 @@ export default function InboxPage() {
     }
   };
 
+  const fetchAiSuggestions = async () => {
+    if (!selectedPhone) return;
+    setAiSuggestionsLoading(true);
+    setAiSuggestions([]);
+    try {
+      const response = await fetch(
+        `/api/whatsapp/inbox/${encodeURIComponent(selectedPhone)}/suggestions`,
+        { method: "POST" }
+      );
+      const data = (await response.json()) as {
+        suggestions?: string[];
+        error?: string;
+      };
+      if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+      setAiSuggestions(data.suggestions || []);
+    } catch (err) {
+      showToast(
+        "error",
+        err instanceof Error ? err.message : "Failed to get AI suggestions"
+      );
+    } finally {
+      setAiSuggestionsLoading(false);
+    }
+  };
+
   const refresh = () => {
     setRefreshing(true);
     fetchConversations();
@@ -310,7 +339,10 @@ export default function InboxPage() {
             return (
               <button
                 key={c.phoneNumber}
-                onClick={() => setSelectedPhone(c.phoneNumber)}
+                onClick={() => {
+                  setSelectedPhone(c.phoneNumber);
+                  setAiSuggestions([]);
+                }}
                 className={`w-full text-left px-3 py-3 flex items-center gap-3 hover:bg-[#F0F2F5] transition-colors border-b border-[#E9EDEF] ${
                   active ? "bg-[#F0F2F5]" : ""
                 }`}
@@ -465,7 +497,36 @@ export default function InboxPage() {
                   </span>
                 </p>
               )}
+              {/* AI Suggestions */}
+              {aiSuggestions.length > 0 && (
+                <div className="flex flex-wrap gap-1.5 mb-2">
+                  {aiSuggestions.map((suggestion, i) => (
+                    <button
+                      key={i}
+                      onClick={() => {
+                        setReplyText(suggestion);
+                        setAiSuggestions([]);
+                      }}
+                      className="px-3 py-1.5 bg-white rounded-lg text-sm text-[#111B21] border border-[#25D366]/30 hover:bg-[#25D366]/10 hover:border-[#25D366] transition-colors text-left max-w-full"
+                    >
+                      <span className="line-clamp-2">{suggestion}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
               <div className="flex items-center gap-2">
+                <button
+                  onClick={fetchAiSuggestions}
+                  disabled={aiSuggestionsLoading}
+                  className="w-10 h-10 rounded-full bg-purple-100 text-purple-600 flex items-center justify-center hover:bg-purple-200 disabled:opacity-40 transition-colors shrink-0"
+                  title="Get AI reply suggestions"
+                >
+                  {aiSuggestionsLoading ? (
+                    <Loader2 size={18} className="animate-spin" />
+                  ) : (
+                    <Sparkles size={18} />
+                  )}
+                </button>
                 <input
                   type="text"
                   value={replyText}

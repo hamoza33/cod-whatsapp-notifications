@@ -81,6 +81,10 @@ export const SETTING_KEYS = {
   TRACKING_REFRESH_INTERVAL_MINUTES: "tracking_refresh_interval_minutes",
   CAPTCHA_PROVIDER: "captcha_provider",
   CAPTCHA_API_KEY: "captcha_api_key",
+  // AI Suggestion feature — generates reply suggestions in the inbox chat
+  AI_SUGGESTIONS_ENABLED: "ai_suggestions_enabled",
+  AI_SUGGESTIONS_COUNT: "ai_suggestions_count",
+  AI_SUGGESTIONS_SYSTEM_PROMPT: "ai_suggestions_system_prompt",
 } as const;
 
 export const SENSITIVE_SETTING_KEYS: readonly string[] = [

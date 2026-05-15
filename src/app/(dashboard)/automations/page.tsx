@@ -22,17 +22,29 @@ type OrderStatus =
   | "DELIVERED"
   | "RETURNED"
   | "CANCELLED"
-  | "UNKNOWN";
+  | "UNKNOWN"
+  | "NEW"
+  | "NO_REPLY"
+  | "WRONG"
+  | "EXPIRED"
+  | "CALL_LATER"
+  | "CANCELLED_PRICE";
 
 const STATUSES: OrderStatus[] = [
+  "NEW",
   "PENDING",
   "CONFIRMED",
   "PROCESSING",
+  "CALL_LATER",
+  "NO_REPLY",
   "SHIPPED",
   "OUT_FOR_DELIVERY",
   "DELIVERED",
   "RETURNED",
   "CANCELLED",
+  "CANCELLED_PRICE",
+  "WRONG",
+  "EXPIRED",
   "UNKNOWN",
 ];
 
@@ -60,6 +72,12 @@ interface Automation {
   whenStatusEquals: OrderStatus | null;
   andProductContains: string | null;
   andProductDoesNotContain: string | null;
+  andPhoneStartsWith: string | null;
+  andTrackingCondition: string | null;
+  andCityContains: string | null;
+  andCustomerNameContains: string | null;
+  andMinPrice: string | null;
+  andMaxPrice: string | null;
   thenMoveToStatus: OrderStatus | null;
   thenSendTemplateName: string | null;
   thenSendTemplateLanguage: string | null;
@@ -233,6 +251,12 @@ interface FormState {
   whenStatus: string;
   andProduct: string;
   andNotProduct: string;
+  andPhoneStartsWith: string;
+  andTrackingCondition: string;
+  andCityContains: string;
+  andCustomerNameContains: string;
+  andMinPrice: string;
+  andMaxPrice: string;
   thenMoveTo: string;
   thenSendTemplate: string;
   thenSendTemplateLanguage: string;
@@ -247,6 +271,12 @@ function buildInitialState(automation?: Automation): FormState {
     whenStatus: automation?.whenStatusEquals ?? "",
     andProduct: automation?.andProductContains ?? "",
     andNotProduct: automation?.andProductDoesNotContain ?? "",
+    andPhoneStartsWith: automation?.andPhoneStartsWith ?? "",
+    andTrackingCondition: automation?.andTrackingCondition ?? "",
+    andCityContains: automation?.andCityContains ?? "",
+    andCustomerNameContains: automation?.andCustomerNameContains ?? "",
+    andMinPrice: automation?.andMinPrice ?? "",
+    andMaxPrice: automation?.andMaxPrice ?? "",
     thenMoveTo: automation?.thenMoveToStatus ?? "",
     thenSendTemplate: automation?.thenSendTemplateName ?? "",
     thenSendTemplateLanguage: automation?.thenSendTemplateLanguage ?? "",
@@ -333,6 +363,12 @@ function AutomationForm({
         thenSendTemplateVariables: state.templateVariables.slice(0, paramCount),
         thenSendHeaderImageUrl: state.headerImageUrl.trim() || null,
         thenSendOnce: state.thenSendOnce,
+        andPhoneStartsWith: state.andPhoneStartsWith.trim() || null,
+        andTrackingCondition: state.andTrackingCondition || null,
+        andCityContains: state.andCityContains.trim() || null,
+        andCustomerNameContains: state.andCustomerNameContains.trim() || null,
+        andMinPrice: state.andMinPrice.trim() || null,
+        andMaxPrice: state.andMaxPrice.trim() || null,
         ...(mode === "create" ? { isEnabled: false } : {}),
       };
       if (mode === "create") {
@@ -398,6 +434,105 @@ function AutomationForm({
             className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm"
           />
         </Field>
+      </div>
+
+      {/* Advanced Conditions */}
+      <details className="mt-4 border-t border-gray-200 pt-4">
+        <summary className="cursor-pointer text-sm font-medium text-gray-700 hover:text-gray-900 flex items-center gap-1.5">
+          <span>Advanced Conditions</span>
+          <span className="text-xs text-gray-400 font-normal">(phone pattern, tracking, city, price)</span>
+        </summary>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-3">
+          <Field
+            label="...and phone starts with"
+            help="Match orders where customer phone starts with this prefix (e.g. +212, 06, 07)"
+          >
+            <input
+              type="text"
+              value={state.andPhoneStartsWith}
+              onChange={(e) =>
+                setState((s) => ({ ...s, andPhoneStartsWith: e.target.value }))
+              }
+              placeholder="e.g. +212, 06"
+              className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm"
+            />
+          </Field>
+          <Field
+            label="...and tracking number"
+            help="Trigger based on tracking number presence"
+          >
+            <select
+              value={state.andTrackingCondition}
+              onChange={(e) =>
+                setState((s) => ({ ...s, andTrackingCondition: e.target.value }))
+              }
+              className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm"
+            >
+              <option value="">— any (ignore tracking) —</option>
+              <option value="exists">Has tracking number</option>
+              <option value="not_exists">No tracking number</option>
+            </select>
+          </Field>
+          <Field
+            label="...and city contains"
+            help="Match orders where customer city contains this text"
+          >
+            <input
+              type="text"
+              value={state.andCityContains}
+              onChange={(e) =>
+                setState((s) => ({ ...s, andCityContains: e.target.value }))
+              }
+              placeholder="e.g. Casablanca"
+              className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm"
+            />
+          </Field>
+          <Field
+            label="...and customer name contains"
+            help="Match orders where customer name contains this text"
+          >
+            <input
+              type="text"
+              value={state.andCustomerNameContains}
+              onChange={(e) =>
+                setState((s) => ({ ...s, andCustomerNameContains: e.target.value }))
+              }
+              placeholder="optional"
+              className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm"
+            />
+          </Field>
+          <Field
+            label="...and min price"
+            help="Only match orders with price >= this value"
+          >
+            <input
+              type="text"
+              value={state.andMinPrice}
+              onChange={(e) =>
+                setState((s) => ({ ...s, andMinPrice: e.target.value }))
+              }
+              placeholder="e.g. 100"
+              className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm"
+            />
+          </Field>
+          <Field
+            label="...and max price"
+            help="Only match orders with price <= this value"
+          >
+            <input
+              type="text"
+              value={state.andMaxPrice}
+              onChange={(e) =>
+                setState((s) => ({ ...s, andMaxPrice: e.target.value }))
+              }
+              placeholder="e.g. 500"
+              className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm"
+            />
+          </Field>
+        </div>
+      </details>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
         <Field label="Then move order to status">
           <select
             value={state.thenMoveTo}

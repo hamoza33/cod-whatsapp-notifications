@@ -18,6 +18,8 @@ import {
   Plus,
   CheckSquare,
   ArrowRightLeft,
+  Search,
+  GripHorizontal,
 } from "lucide-react";
 
 type OrderStatus =
@@ -29,43 +31,114 @@ type OrderStatus =
   | "DELIVERED"
   | "RETURNED"
   | "CANCELLED"
-  | "UNKNOWN";
+  | "UNKNOWN"
+  | "NEW"
+  | "NO_REPLY"
+  | "WRONG"
+  | "EXPIRED"
+  | "CALL_LATER"
+  | "CANCELLED_PRICE";
 
-const REAL_STATUSES: OrderStatus[] = [
+const DEFAULT_COLUMN_ORDER: string[] = [
+  "NEW",
   "PENDING",
   "CONFIRMED",
   "PROCESSING",
+  "CALL_LATER",
+  "NO_REPLY",
   "SHIPPED",
   "OUT_FOR_DELIVERY",
   "DELIVERED",
   "RETURNED",
   "CANCELLED",
+  "CANCELLED_PRICE",
+  "WRONG",
+  "EXPIRED",
+  "UNKNOWN",
+  "__SENT__",
+  "__CALL_AGENT__",
+];
+
+const REAL_STATUSES: OrderStatus[] = [
+  "NEW",
+  "PENDING",
+  "CONFIRMED",
+  "PROCESSING",
+  "CALL_LATER",
+  "NO_REPLY",
+  "SHIPPED",
+  "OUT_FOR_DELIVERY",
+  "DELIVERED",
+  "RETURNED",
+  "CANCELLED",
+  "CANCELLED_PRICE",
+  "WRONG",
+  "EXPIRED",
   "UNKNOWN",
 ];
 
-const STATUS_LABELS: Record<OrderStatus, string> = {
+const STATUS_LABELS: Record<OrderStatus | "__SENT__" | "__CALL_AGENT__", string> = {
+  NEW: "New Leads",
   PENDING: "Pending",
   CONFIRMED: "Confirmed",
   PROCESSING: "Processing",
+  CALL_LATER: "Call Later",
+  NO_REPLY: "No Reply",
   SHIPPED: "Shipped",
   OUT_FOR_DELIVERY: "Out for Delivery",
   DELIVERED: "Delivered",
   RETURNED: "Returned",
   CANCELLED: "Cancelled",
+  CANCELLED_PRICE: "Cancelled Price",
+  WRONG: "Wrong Leads",
+  EXPIRED: "Expired",
   UNKNOWN: "Unknown",
+  __SENT__: "WhatsApp Sent",
+  __CALL_AGENT__: "Call Agent",
 };
 
 const STATUS_COLORS: Record<OrderStatus, string> = {
+  NEW: "bg-emerald-100 text-emerald-700 border-emerald-300",
   PENDING: "bg-gray-100 text-gray-700 border-gray-300",
   CONFIRMED: "bg-blue-100 text-blue-700 border-blue-300",
   PROCESSING: "bg-indigo-100 text-indigo-700 border-indigo-300",
+  CALL_LATER: "bg-cyan-100 text-cyan-700 border-cyan-300",
+  NO_REPLY: "bg-yellow-100 text-yellow-700 border-yellow-300",
   SHIPPED: "bg-amber-100 text-amber-700 border-amber-300",
   OUT_FOR_DELIVERY: "bg-orange-100 text-orange-700 border-orange-300",
   DELIVERED: "bg-green-100 text-green-700 border-green-300",
   RETURNED: "bg-rose-100 text-rose-700 border-rose-300",
   CANCELLED: "bg-red-100 text-red-700 border-red-300",
+  CANCELLED_PRICE: "bg-pink-100 text-pink-700 border-pink-300",
+  WRONG: "bg-red-200 text-red-800 border-red-400",
+  EXPIRED: "bg-stone-100 text-stone-700 border-stone-300",
   UNKNOWN: "bg-slate-100 text-slate-700 border-slate-300",
 };
+
+function loadColumnOrder(): string[] {
+  if (typeof window === "undefined") return DEFAULT_COLUMN_ORDER;
+  try {
+    const stored = localStorage.getItem("pipeline_column_order");
+    if (stored) {
+      const parsed = JSON.parse(stored) as string[];
+      // Merge: ensure all statuses are present (new ones go at end)
+      const set = new Set(parsed);
+      const merged = [...parsed];
+      for (const s of DEFAULT_COLUMN_ORDER) {
+        if (!set.has(s)) merged.push(s);
+      }
+      return merged;
+    }
+  } catch { /* ignore */ }
+  return DEFAULT_COLUMN_ORDER;
+}
+
+function saveColumnOrder(order: string[]) {
+  if (typeof window === "undefined") return;
+  try {
+    localStorage.setItem("pipeline_column_order", JSON.stringify(order));
+  } catch { /* ignore */ }
+}
 
 interface PipelineOrder {
   id: string;
@@ -124,6 +197,9 @@ export default function PipelinePage() {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkMoveTarget, setBulkMoveTarget] = useState<string | null>(null);
   const [showManualOrder, setShowManualOrder] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [columnOrder, setColumnOrder] = useState<string[]>(loadColumnOrder);
+  const [dragColumnKey, setDragColumnKey] = useState<string | null>(null);
 
   const showToast = useCallback((kind: "success" | "error", text: string) => {
     setToast({ kind, text });
@@ -151,10 +227,24 @@ export default function PipelinePage() {
     fetchOrders();
   }, [fetchOrders]);
 
+  const filteredOrders = useMemo(() => {
+    if (!searchQuery.trim()) return orders;
+    const q = searchQuery.toLowerCase();
+    return orders.filter((o) =>
+      (o.customerName?.toLowerCase().includes(q)) ||
+      (o.customerPhone?.includes(q)) ||
+      (o.trackingNumber?.toLowerCase().includes(q)) ||
+      (o.codNetworkOrderId?.toLowerCase().includes(q)) ||
+      (o.codNetworkLeadId?.toLowerCase().includes(q)) ||
+      (o.productName?.toLowerCase().includes(q)) ||
+      (o.customerCity?.toLowerCase().includes(q))
+    );
+  }, [orders, searchQuery]);
+
   const grouped = useMemo(() => {
     const groups: Record<string, PipelineOrder[]> = { __SENT__: [], __CALL_AGENT__: [] };
     REAL_STATUSES.forEach((s) => (groups[s] = []));
-    for (const o of orders) {
+    for (const o of filteredOrders) {
       if (o.callAgentQueued) groups.__CALL_AGENT__.push(o);
       else if (o.whatsappSentAt) groups.__SENT__.push(o);
       else groups[o.status]?.push(o);
@@ -167,7 +257,7 @@ export default function PipelinePage() {
       });
     }
     return groups;
-  }, [orders]);
+  }, [filteredOrders]);
 
   const handleDragStart = (orderId: string) => {
     draggingIdRef.current = orderId;
@@ -329,6 +419,29 @@ export default function PipelinePage() {
     fetchOrders();
   };
 
+  const handleColumnDragStart = (key: string) => {
+    setDragColumnKey(key);
+  };
+
+  const handleColumnDragOver = (e: React.DragEvent, overKey: string) => {
+    e.preventDefault();
+    if (!dragColumnKey || dragColumnKey === overKey) return;
+    setColumnOrder((prev) => {
+      const from = prev.indexOf(dragColumnKey);
+      const to = prev.indexOf(overKey);
+      if (from === -1 || to === -1) return prev;
+      const next = [...prev];
+      next.splice(from, 1);
+      next.splice(to, 0, dragColumnKey);
+      return next;
+    });
+  };
+
+  const handleColumnDragEnd = () => {
+    setDragColumnKey(null);
+    saveColumnOrder(columnOrder);
+  };
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -347,6 +460,24 @@ export default function PipelinePage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          <div className="relative">
+            <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Search clients, tracking #, orders..."
+              className="pl-9 pr-3 py-1.5 border border-gray-300 rounded-md text-sm w-64 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+            />
+            {searchQuery && (
+              <button
+                onClick={() => setSearchQuery("")}
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+              >
+                <X size={14} />
+              </button>
+            )}
+          </div>
           {selectedIds.size > 0 && (
             <div className="relative">
               <button
@@ -405,57 +536,36 @@ export default function PipelinePage() {
 
       <div className="flex-1 overflow-x-auto pb-2">
         <div className="flex gap-3 h-full min-w-max">
-          {REAL_STATUSES.map((s) => (
-            <Column
-              key={s}
-              columnKey={s}
-              title={STATUS_LABELS[s]}
-              colorClass={STATUS_COLORS[s]}
-              orders={grouped[s] || []}
-              isHover={hoverColumn === s}
-              selectedIds={selectedIds}
-              onDragOver={(e) => handleDragOver(e, s)}
-              onDragEnter={(e) => handleDragEnter(e, s)}
-              onDragLeave={() => handleDragLeave(s)}
-              onDrop={(e) => handleDrop(e, s)}
-              onCardDragStart={handleDragStart}
-              onCardDragEnd={handleDragEnd}
-              onCardClick={setSendDialogOrder}
-              onToggleSelect={toggleSelect}
-            />
-          ))}
-          <Column
-            columnKey="__SENT__"
-            title="WhatsApp Sent"
-            sentColumn
-            orders={grouped.__SENT__ || []}
-            isHover={hoverColumn === "__SENT__"}
-            selectedIds={selectedIds}
-            onDragOver={(e) => handleDragOver(e, "__SENT__")}
-            onDragEnter={(e) => handleDragEnter(e, "__SENT__")}
-            onDragLeave={() => handleDragLeave("__SENT__")}
-            onDrop={(e) => handleDrop(e, "__SENT__")}
-            onCardDragStart={handleDragStart}
-            onCardDragEnd={handleDragEnd}
-            onCardClick={setSendDialogOrder}
-            onToggleSelect={toggleSelect}
-          />
-          <Column
-            columnKey="__CALL_AGENT__"
-            title="Call Agent"
-            callAgentColumn
-            orders={grouped.__CALL_AGENT__ || []}
-            isHover={hoverColumn === "__CALL_AGENT__"}
-            selectedIds={selectedIds}
-            onDragOver={(e) => handleDragOver(e, "__CALL_AGENT__")}
-            onDragEnter={(e) => handleDragEnter(e, "__CALL_AGENT__")}
-            onDragLeave={() => handleDragLeave("__CALL_AGENT__")}
-            onDrop={(e) => handleDrop(e, "__CALL_AGENT__")}
-            onCardDragStart={handleDragStart}
-            onCardDragEnd={handleDragEnd}
-            onCardClick={setSendDialogOrder}
-            onToggleSelect={toggleSelect}
-          />
+          {columnOrder.map((colKey) => {
+            const isSent = colKey === "__SENT__";
+            const isCallAgent = colKey === "__CALL_AGENT__";
+            const s = colKey as OrderStatus;
+            return (
+              <Column
+                key={colKey}
+                columnKey={colKey}
+                title={STATUS_LABELS[isSent ? "__SENT__" : isCallAgent ? "__CALL_AGENT__" : s] || colKey}
+                colorClass={isSent || isCallAgent ? undefined : STATUS_COLORS[s]}
+                sentColumn={isSent}
+                callAgentColumn={isCallAgent}
+                orders={grouped[colKey] || []}
+                isHover={hoverColumn === colKey}
+                selectedIds={selectedIds}
+                onDragOver={(e) => handleDragOver(e, colKey)}
+                onDragEnter={(e) => handleDragEnter(e, colKey)}
+                onDragLeave={() => handleDragLeave(colKey)}
+                onDrop={(e) => handleDrop(e, colKey)}
+                onCardDragStart={handleDragStart}
+                onCardDragEnd={handleDragEnd}
+                onCardClick={setSendDialogOrder}
+                onToggleSelect={toggleSelect}
+                isDragColumn={dragColumnKey === colKey}
+                onColumnDragStart={() => handleColumnDragStart(colKey)}
+                onColumnDragOver={(e) => handleColumnDragOver(e, colKey)}
+                onColumnDragEnd={handleColumnDragEnd}
+              />
+            );
+          })}
         </div>
       </div>
 
@@ -521,6 +631,10 @@ function Column({
   onCardDragEnd,
   onCardClick,
   onToggleSelect,
+  isDragColumn,
+  onColumnDragStart,
+  onColumnDragOver,
+  onColumnDragEnd,
 }: {
   title: string;
   columnKey: string;
@@ -530,6 +644,10 @@ function Column({
   callAgentColumn?: boolean;
   isHover: boolean;
   selectedIds: Set<string>;
+  isDragColumn?: boolean;
+  onColumnDragStart?: () => void;
+  onColumnDragOver?: (e: React.DragEvent) => void;
+  onColumnDragEnd?: () => void;
   onDragOver: (e: React.DragEvent) => void;
   onDragEnter: (e: React.DragEvent) => void;
   onDragLeave: () => void;
@@ -557,16 +675,34 @@ function Column({
 
   return (
     <div
-      onDragOver={onDragOver}
+      onDragOver={(e) => {
+        onDragOver(e);
+        onColumnDragOver?.(e);
+      }}
       onDragEnter={onDragEnter}
       onDragLeave={onDragLeave}
       onDrop={(e) => onDrop(e)}
-      className={`w-80 flex flex-col rounded-md border ${borderClass} ${isHover ? "ring-2 ring-blue-400" : ""}`}
+      className={`w-80 flex flex-col rounded-md border transition-opacity ${borderClass} ${isHover ? "ring-2 ring-blue-400" : ""} ${isDragColumn ? "opacity-50" : ""}`}
     >
       <div
         className={`px-3 py-2 border-b rounded-t-md flex items-center justify-between ${headerClass}`}
       >
-        <h2 className="text-xs font-semibold uppercase tracking-wide">{title}</h2>
+        <div className="flex items-center gap-1.5">
+          <div
+            draggable
+            onDragStart={(e) => {
+              e.dataTransfer.effectAllowed = "move";
+              e.dataTransfer.setData("text/x-column", "true");
+              onColumnDragStart?.();
+            }}
+            onDragEnd={onColumnDragEnd}
+            className="cursor-grab active:cursor-grabbing text-gray-400 hover:text-gray-600"
+            title="Drag to reorder column"
+          >
+            <GripHorizontal size={14} />
+          </div>
+          <h2 className="text-xs font-semibold uppercase tracking-wide">{title}</h2>
+        </div>
         <span className="text-xs font-medium opacity-70">{orders.length}</span>
       </div>
       <div className="flex-1 overflow-y-auto p-2 space-y-2">

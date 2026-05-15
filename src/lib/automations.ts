@@ -39,9 +39,24 @@ export function matchesAutomation(
     | "whenStatusEquals"
     | "andProductContains"
     | "andProductDoesNotContain"
+    | "andPhoneStartsWith"
+    | "andTrackingCondition"
+    | "andCityContains"
+    | "andCustomerNameContains"
+    | "andMinPrice"
+    | "andMaxPrice"
     | "isEnabled"
   >,
-  order: Pick<Order, "status" | "productName">
+  order: Pick<
+    Order,
+    | "status"
+    | "productName"
+    | "customerPhone"
+    | "trackingNumber"
+    | "customerCity"
+    | "customerName"
+    | "productPrice"
+  >
 ): boolean {
   if (!automation.isEnabled) return false;
 
@@ -64,6 +79,61 @@ export function matchesAutomation(
       return false;
     }
   }
+
+  // Advanced condition: phone starts with
+  if (automation.andPhoneStartsWith) {
+    const phone = (order.customerPhone ?? "").replace(/\s+/g, "");
+    const prefix = automation.andPhoneStartsWith.replace(/\s+/g, "");
+    if (!phone.startsWith(prefix) && !phone.replace(/^\+/, "").startsWith(prefix.replace(/^\+/, ""))) {
+      return false;
+    }
+  }
+
+  // Advanced condition: tracking number exists / not exists
+  if (automation.andTrackingCondition) {
+    const hasTracking = !!(order.trackingNumber && order.trackingNumber.trim());
+    if (automation.andTrackingCondition === "exists" && !hasTracking) {
+      return false;
+    }
+    if (automation.andTrackingCondition === "not_exists" && hasTracking) {
+      return false;
+    }
+  }
+
+  // Advanced condition: city contains
+  if (automation.andCityContains) {
+    const city = (order.customerCity ?? "").toLowerCase();
+    if (!city.includes(automation.andCityContains.toLowerCase())) {
+      return false;
+    }
+  }
+
+  // Advanced condition: customer name contains
+  if (automation.andCustomerNameContains) {
+    const name = (order.customerName ?? "").toLowerCase();
+    if (!name.includes(automation.andCustomerNameContains.toLowerCase())) {
+      return false;
+    }
+  }
+
+  // Advanced condition: min price
+  if (automation.andMinPrice) {
+    const price = parseFloat(order.productPrice ?? "0");
+    const min = parseFloat(automation.andMinPrice);
+    if (!isNaN(min) && (isNaN(price) || price < min)) {
+      return false;
+    }
+  }
+
+  // Advanced condition: max price
+  if (automation.andMaxPrice) {
+    const price = parseFloat(order.productPrice ?? "0");
+    const max = parseFloat(automation.andMaxPrice);
+    if (!isNaN(max) && (isNaN(price) || price > max)) {
+      return false;
+    }
+  }
+
   return true;
 }
 

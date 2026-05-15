@@ -37,6 +37,13 @@ enum OrderStatus {
   RETURNED
   CANCELLED
   UNKNOWN
+  // Additional lead statuses from COD Network dashboard
+  NEW
+  NO_REPLY
+  WRONG
+  EXPIRED
+  CALL_LATER
+  CANCELLED_PRICE
 }
 
 model Order {
@@ -218,6 +225,22 @@ model Automation {
   // If null, the per-Settings default header image URL is used.
   thenSendHeaderImageUrl   String?      @map("then_send_header_image_url")
   thenSendOnce             Boolean      @default(true) @map("then_send_once")
+  // --- Advanced conditions ---
+  // Phone number prefix / pattern match (e.g. "+212", "06", "07").
+  // If set, the automation only fires when the order's phone starts with this value.
+  andPhoneStartsWith       String?      @map("and_phone_starts_with")
+  // Tracking number condition — when set to "exists", the automation only fires
+  // when a tracking number is present on the order; "not_exists" fires only when
+  // the tracking number is absent.
+  andTrackingCondition     String?      @map("and_tracking_condition")
+  // City-based filter — if set, order's city must contain this substring.
+  andCityContains          String?      @map("and_city_contains")
+  // Customer name filter — if set, order's customer name must contain this substring.
+  andCustomerNameContains  String?      @map("and_customer_name_contains")
+  // Minimum order price filter (as a string to match COD Network's format).
+  andMinPrice              String?      @map("and_min_price")
+  // Maximum order price filter.
+  andMaxPrice              String?      @map("and_max_price")
   createdAt                DateTime     @default(now()) @map("created_at")
   updatedAt                DateTime     @updatedAt @map("updated_at")
 

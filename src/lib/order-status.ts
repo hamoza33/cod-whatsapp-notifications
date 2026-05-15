@@ -52,6 +52,41 @@ export function deriveOrderStatus(input: {
   if (label === "cancelled" || label === "canceled" || label === "cancel") {
     return OrderStatus.CANCELLED;
   }
+  if (
+    label === "cancelled price" ||
+    label === "cancelled_price" ||
+    label === "canceled price"
+  ) {
+    return OrderStatus.CANCELLED_PRICE;
+  }
+
+  // 1b. Lead-specific statuses from COD Network dashboard.
+  if (label === "new" || label === "new lead" || label === "new_lead") {
+    return OrderStatus.NEW;
+  }
+  if (
+    label === "no reply" ||
+    label === "no_reply" ||
+    label === "noreply" ||
+    label === "unanswered"
+  ) {
+    return OrderStatus.NO_REPLY;
+  }
+  if (label === "wrong" || label === "wrong lead" || label === "wrong number") {
+    return OrderStatus.WRONG;
+  }
+  if (label === "expired" || label === "expire") {
+    return OrderStatus.EXPIRED;
+  }
+  if (
+    label === "call later" ||
+    label === "call_later" ||
+    label === "callback" ||
+    label === "call later scheduled" ||
+    label === "scheduled"
+  ) {
+    return OrderStatus.CALL_LATER;
+  }
 
   // 2. Explicit out-for-delivery signal.
   if (
