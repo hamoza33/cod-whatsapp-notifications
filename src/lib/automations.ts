@@ -45,6 +45,7 @@ export function matchesAutomation(
     | "andCustomerNameContains"
     | "andMinPrice"
     | "andMaxPrice"
+    | "andTrackingStatusContains"
     | "isEnabled"
   >,
   order: Pick<
@@ -56,7 +57,8 @@ export function matchesAutomation(
     | "customerCity"
     | "customerName"
     | "productPrice"
-  >
+  >,
+  context?: { latestTrackingEvent?: string | null }
 ): boolean {
   if (!automation.isEnabled) return false;
 
@@ -134,6 +136,14 @@ export function matchesAutomation(
     }
   }
 
+  // Advanced condition: tracking status contains
+  if (automation.andTrackingStatusContains) {
+    const trackingEvent = (context?.latestTrackingEvent ?? "").toLowerCase();
+    if (!trackingEvent.includes(automation.andTrackingStatusContains.toLowerCase())) {
+      return false;
+    }
+  }
+
   return true;
 }
 
@@ -153,6 +163,7 @@ const ORDER_VARIABLE_TOKENS = [
   "{order_id}",
   "{lead_id}",
   "{delivery_company}",
+  "{tracking_status}",
 ] as const;
 
 export type AutomationVariableToken = (typeof ORDER_VARIABLE_TOKENS)[number];
@@ -160,7 +171,7 @@ export type AutomationVariableToken = (typeof ORDER_VARIABLE_TOKENS)[number];
 export const AVAILABLE_AUTOMATION_TOKENS: ReadonlyArray<AutomationVariableToken> =
   ORDER_VARIABLE_TOKENS;
 
-function resolveVariableToken(token: string, order: Order): string {
+function resolveVariableToken(token: string, order: Order, ctx?: { trackingStatus?: string }): string {
   switch (token) {
     case "{customer_name}":
       return order.customerName || "Customer";
@@ -182,6 +193,8 @@ function resolveVariableToken(token: string, order: Order): string {
       return order.codNetworkLeadId || "";
     case "{delivery_company}":
       return order.deliveryCompany || "";
+    case "{tracking_status}":
+      return ctx?.trackingStatus || "";
     default:
       return token;
   }
@@ -194,7 +207,7 @@ function resolveVariableToken(token: string, order: Order): string {
  * in the Pipeline → Send dialog so operators can match the order of values
  * to their template's body text.
  */
-function buildVariablesForOrder(automation: Automation, order: Order): string[] {
+function buildVariablesForOrder(automation: Automation, order: Order, ctx?: { trackingStatus?: string }): string[] {
   // If the operator configured explicit variable slots, resolve any
   // `{token}` placeholders against the order. Each non-token slot is passed
   // through verbatim (operators can mix literals + tokens, e.g.
@@ -211,7 +224,7 @@ function buildVariablesForOrder(automation: Automation, order: Order): string[] 
       let out = slot;
       for (const t of ORDER_VARIABLE_TOKENS) {
         if (out.includes(t)) {
-          out = out.split(t).join(resolveVariableToken(t, order));
+          out = out.split(t).join(resolveVariableToken(t, order, ctx));
         }
       }
       return out;
@@ -241,6 +254,18 @@ export async function runAutomationsForOrder(
   const order = await prisma.order.findUnique({ where: { id: orderId } });
   if (!order) return [];
 
+  // Fetch the latest tracking event for this order so tracking-status
+  // conditions and the {tracking_status} template variable work.
+  const latestTracking = await prisma.trackingOrder.findFirst({
+    where: { orderId },
+    orderBy: { updatedAt: "desc" },
+    select: { latestEvent: true },
+  });
+  const trackingCtx = {
+    latestTrackingEvent: latestTracking?.latestEvent ?? null,
+    trackingStatus: latestTracking?.latestEvent ?? undefined,
+  };
+
   const automations = await prisma.automation.findMany({
     where: {
       isEnabled: true,
@@ -253,7 +278,7 @@ export async function runAutomationsForOrder(
   const summaries: AutomationRunSummary[] = [];
 
   for (const automation of automations) {
-    if (!matchesAutomation(automation, order)) {
+    if (!matchesAutomation(automation, order, trackingCtx)) {
       summaries.push({
         automationId: automation.id,
         automationName: automation.name,
@@ -313,7 +338,7 @@ export async function runAutomationsForOrder(
 
       if (automation.thenSendTemplateName && order.customerPhone) {
         if (!options.dryRun) {
-          await sendAutomationTemplate(automation, order);
+          await sendAutomationTemplate(automation, order, trackingCtx);
         }
         sentMessage = true;
       }
@@ -395,7 +420,8 @@ export async function runAutomationsForOrder(
 
 async function sendAutomationTemplate(
   automation: Automation,
-  order: Order
+  order: Order,
+  ctx?: { trackingStatus?: string }
 ): Promise<void> {
   if (!automation.thenSendTemplateName) return;
   if (!order.customerPhone) {
@@ -410,7 +436,7 @@ async function sendAutomationTemplate(
     (await getSetting(SETTING_KEYS.DEFAULT_COUNTRY_CODE)) || "212";
 
   const client = await WhatsAppClient.fromSettings();
-  const variables = buildVariablesForOrder(automation, order);
+  const variables = buildVariablesForOrder(automation, order, ctx);
   let normalizedPhone: string;
   try {
     normalizedPhone = normalizePhoneNumber(order.customerPhone, defaultCountryCode);

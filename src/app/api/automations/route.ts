@@ -33,6 +33,7 @@ interface CreateAutomationBody {
   andCustomerNameContains?: string | null;
   andMinPrice?: string | null;
   andMaxPrice?: string | null;
+  andTrackingStatusContains?: string | null;
   thenMoveToStatus?: string | null;
   thenSendTemplateName?: string | null;
   thenSendTemplateLanguage?: string | null;
@@ -75,7 +76,8 @@ export async function POST(request: NextRequest) {
     body.andCityContains ||
     body.andCustomerNameContains ||
     body.andMinPrice ||
-    body.andMaxPrice;
+    body.andMaxPrice ||
+    body.andTrackingStatusContains;
   if (!hasTrigger) {
     return NextResponse.json(
       {
@@ -117,6 +119,7 @@ export async function POST(request: NextRequest) {
       andCustomerNameContains: body.andCustomerNameContains?.trim() || null,
       andMinPrice: body.andMinPrice?.trim() || null,
       andMaxPrice: body.andMaxPrice?.trim() || null,
+      andTrackingStatusContains: body.andTrackingStatusContains?.trim() || null,
     },
   });
 

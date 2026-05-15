@@ -4,6 +4,7 @@ import {
   SETTING_KEYS,
   getSettings,
 } from "./settings";
+import { runAutomationsForOrder } from "./automations";
 import { fetchImileTracking } from "./tracking-providers/imile";
 import { fetchInjazTracking } from "./tracking-providers/injaz";
 import { fetchJdwBulk } from "./tracking-providers/jdw";
@@ -256,16 +257,32 @@ async function applyTrackingResult(
 
   const latestEvent = events.length > 0 ? events[0] : null;
 
+  const newLatestEvent = latestEvent?.description ?? opts.currentLatestEvent;
+
   await prisma.trackingOrder.update({
     where: { id: opts.orderId },
     data: {
       status,
-      latestEvent: latestEvent?.description ?? opts.currentLatestEvent,
+      latestEvent: newLatestEvent,
       latestEventAt: latestEvent?.occurredAt ?? opts.currentLatestEventAt,
       latestError: error ?? null,
       lastCheckedAt: new Date(),
     },
   });
+
+  // If the latest event changed and this tracking order is linked to an
+  // Order, run automations so tracking-status-based rules can fire.
+  if (latestEvent && newLatestEvent !== opts.currentLatestEvent) {
+    const trackingRow = await prisma.trackingOrder.findUnique({
+      where: { id: opts.orderId },
+      select: { orderId: true },
+    });
+    if (trackingRow?.orderId) {
+      runAutomationsForOrder(trackingRow.orderId).catch((err) =>
+        console.error("[tracking] automation trigger failed", err)
+      );
+    }
+  }
 
   return { status, eventsCount: events.length };
 }

@@ -63,6 +63,7 @@ const VARIABLE_TOKENS = [
   { token: "{order_id}", label: "Order ID" },
   { token: "{lead_id}", label: "Lead ID" },
   { token: "{delivery_company}", label: "Carrier" },
+  { token: "{tracking_status}", label: "Tracking Status" },
 ] as const;
 
 interface Automation {
@@ -78,6 +79,7 @@ interface Automation {
   andCustomerNameContains: string | null;
   andMinPrice: string | null;
   andMaxPrice: string | null;
+  andTrackingStatusContains: string | null;
   thenMoveToStatus: OrderStatus | null;
   thenSendTemplateName: string | null;
   thenSendTemplateLanguage: string | null;
@@ -257,6 +259,7 @@ interface FormState {
   andCustomerNameContains: string;
   andMinPrice: string;
   andMaxPrice: string;
+  andTrackingStatusContains: string;
   thenMoveTo: string;
   thenSendTemplate: string;
   thenSendTemplateLanguage: string;
@@ -277,6 +280,7 @@ function buildInitialState(automation?: Automation): FormState {
     andCustomerNameContains: automation?.andCustomerNameContains ?? "",
     andMinPrice: automation?.andMinPrice ?? "",
     andMaxPrice: automation?.andMaxPrice ?? "",
+    andTrackingStatusContains: automation?.andTrackingStatusContains ?? "",
     thenMoveTo: automation?.thenMoveToStatus ?? "",
     thenSendTemplate: automation?.thenSendTemplateName ?? "",
     thenSendTemplateLanguage: automation?.thenSendTemplateLanguage ?? "",
@@ -369,6 +373,7 @@ function AutomationForm({
         andCustomerNameContains: state.andCustomerNameContains.trim() || null,
         andMinPrice: state.andMinPrice.trim() || null,
         andMaxPrice: state.andMaxPrice.trim() || null,
+        andTrackingStatusContains: state.andTrackingStatusContains.trim() || null,
         ...(mode === "create" ? { isEnabled: false } : {}),
       };
       if (mode === "create") {
@@ -526,6 +531,20 @@ function AutomationForm({
                 setState((s) => ({ ...s, andMaxPrice: e.target.value }))
               }
               placeholder="e.g. 500"
+              className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm"
+            />
+          </Field>
+          <Field
+            label="...and tracking status contains"
+            help="Match when latest tracking event contains this phrase (e.g. 'location changed', 'out for delivery')"
+          >
+            <input
+              type="text"
+              value={state.andTrackingStatusContains}
+              onChange={(e) =>
+                setState((s) => ({ ...s, andTrackingStatusContains: e.target.value }))
+              }
+              placeholder="e.g. location changed"
               className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm"
             />
           </Field>

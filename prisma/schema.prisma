@@ -218,7 +218,8 @@ model Automation {
   // Ordered list of variable mappings — one entry per body param in the
   // WhatsApp template. Each entry is either a literal string (e.g. "Hello")
   // or a token like `{customer_name}`, `{phone}`, `{product}`, `{price}`,
-  // `{quantity}`, `{tracking}`, `{order_id}`, `{lead_id}`, `{city}`. The
+  // `{quantity}`, `{tracking}`, `{order_id}`, `{lead_id}`, `{city}`,
+  // `{tracking_status}`. The
   // sender resolves the tokens against the order being processed.
   thenSendTemplateVariables Json?       @map("then_send_template_variables")
   // Optional header image URL — used when the template has an IMAGE header.
@@ -241,6 +242,10 @@ model Automation {
   andMinPrice              String?      @map("and_min_price")
   // Maximum order price filter.
   andMaxPrice              String?      @map("and_max_price")
+  // Tracking status filter — if set, the latest tracking event description
+  // must contain this substring for the automation to fire. Enables rules
+  // like "when tracking status contains 'location changed' → send template".
+  andTrackingStatusContains String?     @map("and_tracking_status_contains")
   createdAt                DateTime     @default(now()) @map("created_at")
   updatedAt                DateTime     @updatedAt @map("updated_at")
 

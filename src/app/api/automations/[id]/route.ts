@@ -59,6 +59,7 @@ interface UpdateAutomationBody {
   andCustomerNameContains?: string | null;
   andMinPrice?: string | null;
   andMaxPrice?: string | null;
+  andTrackingStatusContains?: string | null;
   thenMoveToStatus?: string | null;
   thenSendTemplateName?: string | null;
   thenSendTemplateLanguage?: string | null;
@@ -118,6 +119,8 @@ export async function PATCH(request: NextRequest, context: RouteContext) {
     data.andMinPrice = body.andMinPrice?.trim() || null;
   if (body.andMaxPrice !== undefined)
     data.andMaxPrice = body.andMaxPrice?.trim() || null;
+  if (body.andTrackingStatusContains !== undefined)
+    data.andTrackingStatusContains = body.andTrackingStatusContains?.trim() || null;
 
   try {
     const automation = await prisma.automation.update({
@@ -199,9 +202,14 @@ export async function POST(request: NextRequest, context: RouteContext) {
         customerCity: true,
         productPrice: true,
         status: true,
+        trackingOrders: { select: { latestEvent: true }, take: 1 },
       },
     });
-    const matching = orders.filter((o) => matchesAutomation(checkAutomation, o));
+    const matching = orders.filter((o) =>
+      matchesAutomation(checkAutomation, o, {
+        latestTrackingEvent: o.trackingOrders?.[0]?.latestEvent ?? null,
+      })
+    );
     return NextResponse.json({
       candidateOrdersScanned: orders.length,
       matchingCount: matching.length,
@@ -221,8 +229,13 @@ export async function POST(request: NextRequest, context: RouteContext) {
       where,
       take: 1000,
       orderBy: { codCreatedAt: "desc" },
+      include: { trackingOrders: { select: { latestEvent: true }, take: 1 } },
     });
-    const matching = orders.filter((o) => matchesAutomation(checkAutomation, o));
+    const matching = orders.filter((o) =>
+      matchesAutomation(checkAutomation, o, {
+        latestTrackingEvent: o.trackingOrders?.[0]?.latestEvent ?? null,
+      })
+    );
     let applied = 0;
     let failed = 0;
     for (const order of matching) {
