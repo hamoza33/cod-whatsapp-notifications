@@ -121,6 +121,7 @@ export default function AutomationsPage() {
   const [automations, setAutomations] = useState<Automation[]>([]);
   const [templates, setTemplates] = useState<TemplateInfo[]>([]);
   const [products, setProducts] = useState<ProductInfo[]>([]);
+  const [sampleValues, setSampleValues] = useState<Record<string, string | null>>({});
   const [loading, setLoading] = useState(true);
   const [showCreate, setShowCreate] = useState(false);
   const [toast, setToast] = useState<{ kind: "success" | "error"; text: string } | null>(null);
@@ -161,12 +162,24 @@ export default function AutomationsPage() {
     }
   }, []);
 
+  const fetchSampleValues = useCallback(async () => {
+    try {
+      const data = await api.get<{ examples: Record<string, string | null> }>(
+        "/automations/sample-values"
+      );
+      setSampleValues(data.examples);
+    } catch {
+      // Sample values are optional — chips still work without examples.
+    }
+  }, []);
+
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     fetchAutomations();
     fetchTemplates();
     fetchProducts();
-  }, [fetchAutomations, fetchTemplates, fetchProducts]);
+    fetchSampleValues();
+  }, [fetchAutomations, fetchTemplates, fetchProducts, fetchSampleValues]);
 
   return (
     <div className="max-w-5xl">
@@ -208,6 +221,7 @@ export default function AutomationsPage() {
           mode="create"
           templates={templates}
           products={products}
+          sampleValues={sampleValues}
           onCancel={() => setShowCreate(false)}
           onSaved={() => {
             setShowCreate(false);
@@ -238,6 +252,7 @@ export default function AutomationsPage() {
               automation={a}
               templates={templates}
               products={products}
+              sampleValues={sampleValues}
               onChange={fetchAutomations}
               onToast={showToast}
             />
@@ -297,6 +312,7 @@ function AutomationForm({
   automation,
   templates,
   products,
+  sampleValues,
   onCancel,
   onSaved,
   onError,
@@ -305,6 +321,7 @@ function AutomationForm({
   automation?: Automation;
   templates: TemplateInfo[];
   products: ProductInfo[];
+  sampleValues?: Record<string, string | null>;
   onCancel: () => void;
   onSaved: () => void;
   onError: (msg: string) => void;
@@ -598,6 +615,7 @@ function AutomationForm({
         <TemplatePreview
           template={selectedTemplate}
           variables={state.templateVariables}
+          sampleValues={sampleValues}
           onVariableChange={(idx, value) =>
             setState((s) => {
               const next = [...s.templateVariables];
@@ -716,12 +734,14 @@ function ProductPicker({
 function TemplatePreview({
   template,
   variables,
+  sampleValues,
   onVariableChange,
   headerImageUrl,
   onHeaderImageChange,
 }: {
   template: TemplateInfo;
   variables: string[];
+  sampleValues?: Record<string, string | null>;
   onVariableChange: (idx: number, v: string) => void;
   headerImageUrl: string;
   onHeaderImageChange: (v: string) => void;
@@ -776,6 +796,7 @@ function TemplatePreview({
               key={i}
               index={i + 1}
               value={variables[i] ?? ""}
+              sampleValues={sampleValues}
               onChange={(v) => onVariableChange(i, v)}
             />
           ))}
@@ -808,12 +829,17 @@ function TemplatePreview({
 function VariableSlotRow({
   index,
   value,
+  sampleValues,
   onChange,
 }: {
   index: number;
   value: string;
+  sampleValues?: Record<string, string | null>;
   onChange: (v: string) => void;
 }) {
+  const selectedExample =
+    sampleValues && value in sampleValues ? sampleValues[value] : null;
+
   return (
     <div className="flex items-start gap-2">
       <div className="font-mono text-xs text-gray-500 mt-2 w-12 shrink-0">
@@ -827,22 +853,33 @@ function VariableSlotRow({
           placeholder={`Pick a variable or type a literal value for {{${index}}}`}
           className="w-full px-3 py-1.5 border border-gray-300 rounded-md text-sm"
         />
+        {selectedExample && (
+          <div className="mt-0.5 text-[11px] text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded inline-block">
+            Example: &quot;{selectedExample}&quot;
+          </div>
+        )}
         <div className="mt-1 flex flex-wrap gap-1">
-          {VARIABLE_TOKENS.map((t) => (
-            <button
-              key={t.token}
-              type="button"
-              onClick={() => onChange(t.token)}
-              className={`text-[11px] px-1.5 py-0.5 rounded border ${
-                value === t.token
-                  ? "bg-blue-600 text-white border-blue-600"
-                  : "bg-white text-gray-600 border-gray-300 hover:bg-gray-50"
-              }`}
-              title={t.label}
-            >
-              {t.label}
-            </button>
-          ))}
+          {VARIABLE_TOKENS.map((t) => {
+            const example = sampleValues?.[t.token];
+            const tooltip = example
+              ? `${t.label} — e.g. "${example}"`
+              : t.label;
+            return (
+              <button
+                key={t.token}
+                type="button"
+                onClick={() => onChange(t.token)}
+                className={`text-[11px] px-1.5 py-0.5 rounded border ${
+                  value === t.token
+                    ? "bg-blue-600 text-white border-blue-600"
+                    : "bg-white text-gray-600 border-gray-300 hover:bg-gray-50"
+                }`}
+                title={tooltip}
+              >
+                {t.label}
+              </button>
+            );
+          })}
         </div>
       </div>
     </div>
@@ -878,12 +915,14 @@ function AutomationCard({
   automation,
   templates,
   products,
+  sampleValues,
   onChange,
   onToast,
 }: {
   automation: Automation;
   templates: TemplateInfo[];
   products: ProductInfo[];
+  sampleValues?: Record<string, string | null>;
   onChange: () => void;
   onToast: (kind: "success" | "error", text: string) => void;
 }) {
@@ -959,6 +998,7 @@ function AutomationCard({
         automation={automation}
         templates={templates}
         products={products}
+        sampleValues={sampleValues}
         onCancel={() => setEditing(false)}
         onSaved={() => {
           setEditing(false);
