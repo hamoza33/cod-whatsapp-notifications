@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { refreshAllTracking, reclassifyOtherOrders } from "@/lib/tracking";
+import { refreshAllTracking } from "@/lib/tracking";
 
 export async function GET(request: NextRequest) {
   const authHeader = request.headers.get("authorization");
@@ -8,13 +8,16 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  await reclassifyOtherOrders();
-  const { results, totalProcessed, batches, byCarrier } = await refreshAllTracking();
+  // refreshAllTracking() now runs reclassifyOtherOrders() inside its own
+  // wall-clock deadline so the cron call stays bounded.
+  const { results, totalProcessed, batches, byCarrier, reclassified } =
+    await refreshAllTracking();
   return NextResponse.json({
     refreshed: totalProcessed,
     batches,
     results,
     byCarrier,
+    reclassified,
     nextRunIn: "30 minutes",
   });
 }

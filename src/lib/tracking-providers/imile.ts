@@ -63,13 +63,21 @@ export async function fetchImileTracking(
     headers: { lang: "en", sign },
   });
 
+  // Surface 429 explicitly so the orchestrator can persist `imile_rate_limited`
+  // and the UI pill renders the dedicated throttling label instead of falling
+  // through to a generic "imile_error:..." catch block.
+  if (resp.status === 429) {
+    return { events: [], rawStatus: null, error: "imile_rate_limited" };
+  }
+
   const data = (await resp.json()) as ImileResponse;
 
-  if (
-    data.status !== "success" ||
-    !data.resultObject?.trackInfos?.length
-  ) {
-    return { events: [], rawStatus: null };
+  // The iMile API returns `status: "success"` only when it has a real result.
+  // Any other status (e.g. "fail" / blank trackInfos for an unknown number)
+  // must surface an error code so applyTrackingResult does not silently clear
+  // a prior `latestError` pill on transient upstream failures.
+  if (data.status !== "success" || !data.resultObject?.trackInfos?.length) {
+    return { events: [], rawStatus: null, error: "imile_no_result" };
   }
 
   const events: ParsedEvent[] = data.resultObject.trackInfos.map((info) => ({

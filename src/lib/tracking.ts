@@ -84,7 +84,11 @@ export function detectCarrier(
     const dc = deliveryCompany.toLowerCase();
     if (dc.includes("imile")) return TrackingCarrier.IMILE;
     if (dc.includes("injaz")) return TrackingCarrier.INJAZ;
-    if (dc.includes("jt") || dc.includes("j&t")) return TrackingCarrier.JTE;
+    // Match J&T / JT / J&T Express only on a word boundary so labels like
+    // "Future Logistics FJT" or "JT2 Cargo" don't get misclassified as JTE
+    // (which is the manual-only no-fetch path — a misclassification would
+    // permanently park the row at `jte_manual_only`).
+    if (/\bj&?t(?:\s+express)?\b/i.test(dc)) return TrackingCarrier.JTE;
     if (
       dc.includes("jdw") ||
       dc.includes("jingdong") ||
@@ -234,39 +238,14 @@ async function applyTrackingResult(
     });
   }
 
-  // If we got NO real events but the provider reported an error (e.g.
-  // not_found_on_4tracking, captcha_required, fourtracking_blocked), record
-  // it as a single debug TrackingEvent so it's DB-debuggable. We pin the
-  // occurredAt to "now" so a re-run on the same tick collides on the
-  // unique index and won't grow indefinitely.
-  if (events.length === 0 && error) {
-    const debugDescription = `_debug:${error}`;
-    const occurredAt = new Date(Math.floor(Date.now() / 1000) * 1000);
-    try {
-      await prisma.trackingEvent.upsert({
-        where: {
-          trackingOrderId_description_occurredAt: {
-            trackingOrderId: opts.orderId,
-            description: debugDescription,
-            occurredAt,
-          },
-        },
-        create: {
-          trackingOrderId: opts.orderId,
-          status: "DEBUG",
-          description: debugDescription,
-          location: null,
-          occurredAt,
-          rawData: { error } as Prisma.InputJsonValue,
-        },
-        update: {
-          rawData: { error } as Prisma.InputJsonValue,
-        },
-      });
-    } catch {
-      // Non-critical: a transient DB error here shouldn't fail the refresh.
-    }
-  }
+  // NOTE: We previously upserted a `_debug:<error>` TrackingEvent here when
+  // the provider returned no events but did report an error. With
+  // `latestError` now living on the TrackingOrder row itself, that debug
+  // event is duplicate signal that bloats `tracking_events` linearly across
+  // refresh ticks (the unique index only collapses collisions inside the
+  // same wall-clock second) and surfaces in the per-row timeline UI as
+  // unhelpful "_debug:jte_manual_only" entries. The error code is still
+  // persisted via `latestError` below.
 
   const latestEvent = events.length > 0 ? events[0] : null;
 
@@ -462,6 +441,7 @@ export async function reclassifyOtherOrders() {
 
 const IMILE_CONCURRENCY = 5;
 const INJAZ_CONCURRENCY = 5;
+const JTE_CONCURRENCY = 5;
 const JDW_CHUNK_SIZE = 10;
 const JDW_CONCURRENCY = 5;
 const DEFAULT_WALL_CLOCK_MS = 45_000;
@@ -499,6 +479,7 @@ export interface RefreshAllResult {
   batches: number;
   remaining: number;
   totalActive: number;
+  reclassified: number;
   byCarrier: {
     imile: PerCarrierStats;
     jte: PerCarrierStats;
@@ -513,6 +494,13 @@ export async function refreshAllTracking(
   const wallClockMs = DEFAULT_WALL_CLOCK_MS;
   const startedAt = Date.now();
   const deadline = startedAt + wallClockMs;
+
+  // Run reclassification BEFORE the findMany of active orders, but inside
+  // the same wall-clock deadline. This prevents a large OTHER bucket
+  // (e.g. ~1,200 stuck rows) from pushing the /api/tracking/refresh route
+  // past Fly's request timeout before the deadline even begins counting.
+  // If reclassify itself is slow we still cap the total wall-clock at 45s.
+  const reclassifyResult = await reclassifyOtherOrders();
 
   // Read captcha settings once. If the user hasn't set them we default the
   // provider to '2captcha' and leave the key null — the JDW provider gives a
@@ -672,47 +660,56 @@ export async function refreshAllTracking(
     }
   );
 
-  // ---------- JTE pool: NOT FETCHED — manual-only stub ----------
+  // ---------- JTE pool: NOT FETCHED — manual-only stub, parallelized ----------
   // We persist a `jte_manual_only` error so lastCheckedAt advances and the
   // UI can surface an external "Open in JT website" link per row. Counted
   // under byCarrier.jte.processed but NOT under byCarrier.jte.errors — it's
-  // an intentional state, not a failure.
-  const jtePool = (async () => {
-    for (const o of buckets.jte) {
-      if (Date.now() > deadline) return;
-      const result: ProviderResult = {
-        events: [],
-        rawStatus: null,
-        error: "jte_manual_only",
-      };
-      try {
-        const persisted = await applyTrackingResult(
-          {
-            orderId: o.id,
-            trackingNumber: o.trackingNumber,
-            currentLatestEvent: o.latestEvent,
-            currentLatestEventAt: o.latestEventAt,
-            carrier: o.carrier,
-          },
-          result
-        );
-        // Record processed without an error count — see comment above.
-        byCarrier.jte.processed += 1;
-        byCarrier.jte.eventsAdded += persisted.eventsCount;
-        results.push({
-          id: o.id,
-          trackingNumber: o.trackingNumber,
-          status: persisted.status,
-          eventsCount: persisted.eventsCount,
+  // an intentional state, not a failure. Even though there's no HTTP fetch,
+  // the per-row Postgres write benefits from concurrency: with up to 500
+  // rows per tick a serial loop can otherwise dominate the wall-clock
+  // budget and starve the other carriers.
+  const jteQueue: ActiveOrderRow[][] = buckets.jte.map((o) => [o]);
+  totalChunks += jteQueue.length;
+
+  const jtePool = drainQueue(
+    jteQueue,
+    JTE_CONCURRENCY,
+    deadline,
+    async (chunk) => {
+      for (const o of chunk) {
+        const result: ProviderResult = {
+          events: [],
+          rawStatus: null,
           error: "jte_manual_only",
-        });
-      } catch (err) {
-        const detail = err instanceof Error ? err.message : "apply_failed";
-        recordOutcome(o, { ok: false, error: detail });
+        };
+        try {
+          const persisted = await applyTrackingResult(
+            {
+              orderId: o.id,
+              trackingNumber: o.trackingNumber,
+              currentLatestEvent: o.latestEvent,
+              currentLatestEventAt: o.latestEventAt,
+              carrier: o.carrier,
+            },
+            result
+          );
+          // Record processed without an error count — see comment above.
+          byCarrier.jte.processed += 1;
+          byCarrier.jte.eventsAdded += persisted.eventsCount;
+          results.push({
+            id: o.id,
+            trackingNumber: o.trackingNumber,
+            status: persisted.status,
+            eventsCount: persisted.eventsCount,
+            error: "jte_manual_only",
+          });
+        } catch (err) {
+          const detail = err instanceof Error ? err.message : "apply_failed";
+          recordOutcome(o, { ok: false, error: detail });
+        }
       }
     }
-  })();
-  totalChunks += buckets.jte.length;
+  );
 
   // ---------- JDW pool ----------
   const jdwQueue: ActiveOrderRow[][] = [];
@@ -839,6 +836,7 @@ export async function refreshAllTracking(
     batches: totalChunks,
     remaining,
     totalActive,
+    reclassified: reclassifyResult.reclassified,
     byCarrier,
   };
 }

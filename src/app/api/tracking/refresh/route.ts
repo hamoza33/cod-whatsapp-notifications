@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getAuthUser } from "@/lib/auth";
-import { refreshAllTracking, reclassifyOtherOrders } from "@/lib/tracking";
+import { refreshAllTracking } from "@/lib/tracking";
 
 export async function POST(request: NextRequest) {
   const user = getAuthUser(request);
@@ -8,15 +8,17 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  // Re-classify OTHER orders first so they can be tracked by carrier APIs
-  const reclassify = await reclassifyOtherOrders();
-
+  // refreshAllTracking now runs reclassifyOtherOrders() inside its own
+  // 45 s wall-clock deadline so a large OTHER bucket can't push this route
+  // past Fly's request timeout. The orchestrator returns the reclassified
+  // count alongside the per-carrier stats.
   const {
     results,
     totalProcessed,
     batches,
     remaining,
     totalActive,
+    reclassified,
     byCarrier,
   } = await refreshAllTracking();
   return NextResponse.json({
@@ -25,7 +27,7 @@ export async function POST(request: NextRequest) {
     batches,
     remaining,
     totalActive,
-    reclassified: reclassify.reclassified,
+    reclassified,
     byCarrier,
   });
 }

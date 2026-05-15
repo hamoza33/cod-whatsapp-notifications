@@ -111,6 +111,12 @@ function errorPill(
         bg: "bg-orange-100",
         text: "text-orange-700",
       };
+    case "imile_no_result":
+      return {
+        label: "No iMile result",
+        bg: "bg-gray-100",
+        text: "text-gray-600",
+      };
     case "captcha_required":
       return {
         label: "Captcha key required",
@@ -124,6 +130,23 @@ function errorPill(
         text: "text-red-700",
       };
     default:
+      // Transport-level / parser flakes are persisted as
+      // "imile_error:<detail>" / "jdw_error:<code>" / "injaz_error:<detail>"
+      // / "fourtracking_fetch_failed:<detail>". Render those with a single
+      // operator-friendly "Carrier API error" label; the wrapping span
+      // already passes the raw code as its `title` for hover.
+      if (
+        latestError.startsWith("imile_error:") ||
+        latestError.startsWith("jdw_error:") ||
+        latestError.startsWith("injaz_error:") ||
+        latestError.startsWith("fourtracking_fetch_failed:")
+      ) {
+        return {
+          label: "Carrier API error",
+          bg: "bg-red-100",
+          text: "text-red-700",
+        };
+      }
       return {
         label: `Error: ${latestError}`,
         bg: "bg-red-100",
@@ -157,7 +180,9 @@ function trackingUrl(
   if (carrier === "JDW") {
     return `https://www.jingdonglogistics.com/Tracking`;
   }
-  return `https://www.4tracking.net/en/track?nums=${trackingNumber}`;
+  // OTHER: 4tracking.net is server-side dead (Cloudflare-protected SPA),
+  // so don't render a header link that goes nowhere useful.
+  return null;
 }
 
 function carrierIcon(carrier: TrackingCarrier): string {
@@ -1048,7 +1073,7 @@ function TrackingCard({
           className="flex items-center gap-1"
           onClick={(e) => e.stopPropagation()}
         >
-          {hasUrl && (
+          {hasUrl && !isJteManual && (
             <a
               href={url!}
               target="_blank"
