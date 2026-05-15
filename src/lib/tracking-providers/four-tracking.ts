@@ -1,3 +1,7 @@
+// NOT IN USE — server-side scraping of 4tracking.net is not viable
+// (Cloudflare-protected SPA). Kept here as documentation of the
+// previously-attempted approach.
+
 import type { ParsedEvent, ProviderResult } from "./types";
 
 /**
