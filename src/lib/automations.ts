@@ -2,7 +2,7 @@ import { Prisma, OrderStatus, Automation, Order } from "@prisma/client";
 import { prisma } from "./prisma";
 import { WhatsAppClient } from "./whatsapp";
 import { normalizePhoneNumber } from "./phone";
-import { getSetting, SETTING_KEYS } from "./settings";
+import { getSetting, getSettings, SETTING_KEYS } from "./settings";
 
 export interface AutomationTriggerOptions {
   /**
@@ -474,4 +474,31 @@ async function sendAutomationTemplate(
       sentAt: new Date(),
     },
   });
+}
+
+/**
+ * Auto-expire orders that have been PENDING or in transit for >25 days.
+ * Moves them to EXPIRED status. Called periodically (e.g., during sync).
+ */
+export async function autoExpireOrders(): Promise<number> {
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - 25);
+
+  const result = await prisma.order.updateMany({
+    where: {
+      status: { in: [OrderStatus.PENDING, OrderStatus.SHIPPED] },
+      codCreatedAt: { lt: cutoff },
+    },
+    data: { status: OrderStatus.EXPIRED },
+  });
+
+  return result.count;
+}
+
+/**
+ * Checks whether automation auto-run is enabled in settings.
+ */
+export async function isAutoRunEnabled(): Promise<boolean> {
+  const settings = await getSettings([SETTING_KEYS.AUTOMATION_AUTO_RUN]);
+  return settings[SETTING_KEYS.AUTOMATION_AUTO_RUN] === "true";
 }

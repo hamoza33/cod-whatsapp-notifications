@@ -124,6 +124,7 @@ export default function AutomationsPage() {
   const [sampleValues, setSampleValues] = useState<Record<string, string | null>>({});
   const [loading, setLoading] = useState(true);
   const [showCreate, setShowCreate] = useState(false);
+  const [autoRun, setAutoRun] = useState(false);
   const [toast, setToast] = useState<{ kind: "success" | "error"; text: string } | null>(null);
 
   const showToast = useCallback((kind: "success" | "error", text: string) => {
@@ -173,13 +174,41 @@ export default function AutomationsPage() {
     }
   }, []);
 
+  const fetchAutoRun = useCallback(async () => {
+    try {
+      const data = await api.get<{ settings: Record<string, string | null> }>(
+        "/settings?keys=automation_auto_run"
+      );
+      setAutoRun(data.settings.automation_auto_run === "true");
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  const toggleAutoRun = async () => {
+    const newVal = !autoRun;
+    setAutoRun(newVal);
+    try {
+      await fetch("/api/settings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ settings: { automation_auto_run: newVal ? "true" : "false" } }),
+      });
+      showToast("success", `Auto-run ${newVal ? "enabled" : "disabled"}`);
+    } catch {
+      setAutoRun(!newVal);
+      showToast("error", "Failed to update auto-run setting");
+    }
+  };
+
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     fetchAutomations();
     fetchTemplates();
     fetchProducts();
     fetchSampleValues();
-  }, [fetchAutomations, fetchTemplates, fetchProducts, fetchSampleValues]);
+    fetchAutoRun();
+  }, [fetchAutomations, fetchTemplates, fetchProducts, fetchSampleValues, fetchAutoRun]);
 
   return (
     <div className="max-w-5xl">
@@ -195,13 +224,33 @@ export default function AutomationsPage() {
             status — via sync, webhook, or manual drag in the Pipeline.
           </p>
         </div>
-        <button
-          onClick={() => setShowCreate((v) => !v)}
-          className="flex items-center gap-2 px-3 py-2 bg-blue-600 text-white rounded-md text-sm font-medium hover:bg-blue-700"
-        >
-          <Plus size={16} />
-          New Automation
-        </button>
+        <div className="flex items-center gap-3">
+          <label className="flex items-center gap-2 cursor-pointer">
+            <span className="text-sm text-gray-600 font-medium">Auto-run</span>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={autoRun}
+              onClick={toggleAutoRun}
+              className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                autoRun ? "bg-green-500" : "bg-gray-300"
+              }`}
+            >
+              <span
+                className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                  autoRun ? "translate-x-6" : "translate-x-1"
+                }`}
+              />
+            </button>
+          </label>
+          <button
+            onClick={() => setShowCreate((v) => !v)}
+            className="flex items-center gap-2 px-3 py-2 bg-blue-600 text-white rounded-md text-sm font-medium hover:bg-blue-700"
+          >
+            <Plus size={16} />
+            New Automation
+          </button>
+        </div>
       </div>
 
       {toast && (

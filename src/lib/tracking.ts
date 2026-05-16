@@ -4,10 +4,11 @@ import {
   SETTING_KEYS,
   getSettings,
 } from "./settings";
-import { runAutomationsForOrder } from "./automations";
+import { runAutomationsForOrder, isAutoRunEnabled } from "./automations";
 import { fetchImileTracking } from "./tracking-providers/imile";
 import { fetchInjazTracking } from "./tracking-providers/injaz";
 import { fetchJdwBulk } from "./tracking-providers/jdw";
+import { fetch4TrackingBatch } from "./tracking-providers/four-tracking";
 import type {
   ProviderResult,
 } from "./tracking-providers/types";
@@ -75,6 +76,7 @@ export function detectCarrier(
   if (tn.startsWith("INJAZ")) return TrackingCarrier.INJAZ;
   if (tn.startsWith("JTE")) return TrackingCarrier.JTE;
   if (tn.startsWith("JDW")) return TrackingCarrier.JDW;
+  if (/^3\d{8,}$/.test(tn)) return TrackingCarrier.NAQEL;
 
   // Fallback: when the tracking-number prefix isn't recognized, fall back to
   // the operator-provided delivery-company string from the order. COD
@@ -103,6 +105,8 @@ export function detectCarrier(
       dc.includes("jd logistics")
     )
       return TrackingCarrier.JDW;
+    if (dc.includes("naqel"))
+      return TrackingCarrier.NAQEL;
   }
 
   return null;
@@ -125,6 +129,8 @@ export function carrierDisplayName(
       return "JT Express";
     case TrackingCarrier.JDW:
       return "JD Logistics";
+    case TrackingCarrier.NAQEL:
+      return "Naqel Express";
     default:
       return deliveryCompany || "Other";
   }
@@ -144,13 +150,27 @@ async function fetchTrackingByCarrier(
     case TrackingCarrier.INJAZ:
       return fetchInjazTracking(trackingNumber);
     case TrackingCarrier.JTE:
-      // JTE is manual-only — see fetchJteTracking() for the full reasoning.
-      return { events: [], rawStatus: null, error: "jte_manual_only" };
+      return fetch4TrackingSingle(trackingNumber);
     case TrackingCarrier.JDW:
       return fetchJdwTracking(trackingNumber);
+    case TrackingCarrier.NAQEL:
+      return fetch4TrackingSingle(trackingNumber);
     default:
       return { events: [], rawStatus: null };
   }
+}
+
+async function fetch4TrackingSingle(
+  trackingNumber: string
+): Promise<ProviderResult> {
+  const map = await fetch4TrackingBatch([trackingNumber]);
+  return (
+    map.get(trackingNumber) ?? {
+      events: [],
+      rawStatus: null,
+      error: "not_found_on_4tracking",
+    }
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -278,9 +298,13 @@ async function applyTrackingResult(
       select: { orderId: true },
     });
     if (trackingRow?.orderId) {
-      runAutomationsForOrder(trackingRow.orderId).catch((err) =>
-        console.error("[tracking] automation trigger failed", err)
-      );
+      isAutoRunEnabled().then((enabled) => {
+        if (enabled) {
+          runAutomationsForOrder(trackingRow.orderId!).catch((err) =>
+            console.error("[tracking] automation trigger failed", err)
+          );
+        }
+      }).catch(() => {});
     }
   }
 
@@ -478,7 +502,6 @@ export async function reclassifyOtherOrders(deadlineMs?: number) {
 
 const IMILE_CONCURRENCY = 5;
 const INJAZ_CONCURRENCY = 5;
-const JTE_CONCURRENCY = 5;
 const JDW_CHUNK_SIZE = 10;
 const JDW_CONCURRENCY = 5;
 const RECLASSIFY_CONCURRENCY = 5;
@@ -524,6 +547,7 @@ export interface RefreshAllResult {
     jte: PerCarrierStats;
     jdw: PerCarrierStats;
     injaz: PerCarrierStats;
+    naqel: PerCarrierStats;
   };
 }
 
@@ -594,12 +618,14 @@ export async function refreshAllTracking(
     jte: [] as ActiveOrderRow[],
     jdw: [] as ActiveOrderRow[],
     injaz: [] as ActiveOrderRow[],
+    naqel: [] as ActiveOrderRow[],
   };
   for (const o of activeOrders) {
     if (o.carrier === TrackingCarrier.IMILE) buckets.imile.push(o);
     else if (o.carrier === TrackingCarrier.JTE) buckets.jte.push(o);
     else if (o.carrier === TrackingCarrier.JDW) buckets.jdw.push(o);
     else if (o.carrier === TrackingCarrier.INJAZ) buckets.injaz.push(o);
+    else if (o.carrier === TrackingCarrier.NAQEL) buckets.naqel.push(o);
   }
 
   const results: RefreshResultEntry[] = [];
@@ -608,6 +634,7 @@ export async function refreshAllTracking(
     jte: emptyStats(),
     jdw: emptyStats(),
     injaz: emptyStats(),
+    naqel: emptyStats(),
   };
 
   // Track how many chunks were dispatched in total — surfaced as `batches`
@@ -627,6 +654,8 @@ export async function refreshAllTracking(
         ? "jte"
         : order.carrier === TrackingCarrier.JDW
         ? "jdw"
+        : order.carrier === TrackingCarrier.NAQEL
+        ? "naqel"
         : "injaz";
     if (outcome.ok) {
       byCarrier[carrierKey].processed += 1;
@@ -701,27 +730,47 @@ export async function refreshAllTracking(
     }
   );
 
-  // ---------- JTE pool: NOT FETCHED — manual-only stub, parallelized ----------
-  // We persist a `jte_manual_only` error so lastCheckedAt advances and the
-  // UI can surface an external "Open in JT website" link per row. Counted
-  // under byCarrier.jte.processed but NOT under byCarrier.jte.errors — it's
-  // an intentional state, not a failure. Even though there's no HTTP fetch,
-  // the per-row Postgres write benefits from concurrency: with up to 500
-  // rows per tick a serial loop can otherwise dominate the wall-clock
-  // budget and starve the other carriers.
-  const jteQueue: ActiveOrderRow[][] = buckets.jte.map((o) => [o]);
+  // ---------- JTE pool: 4tracking.net, 10 per batch, 30s timeout ----------
+  const FOURTRACK_CHUNK_SIZE = 10;
+  const FOURTRACK_CONCURRENCY = 3;
+  const jteQueue: ActiveOrderRow[][] = [];
+  for (let i = 0; i < buckets.jte.length; i += FOURTRACK_CHUNK_SIZE) {
+    jteQueue.push(buckets.jte.slice(i, i + FOURTRACK_CHUNK_SIZE));
+  }
   totalChunks += jteQueue.length;
 
   const jtePool = drainQueue(
     jteQueue,
-    JTE_CONCURRENCY,
+    FOURTRACK_CONCURRENCY,
     deadline,
     async (chunk) => {
+      const numbers = chunk.map((o) => o.trackingNumber);
+      let map: Map<string, ProviderResult>;
+      try {
+        map = await fetch4TrackingBatch(numbers);
+      } catch (err) {
+        const detail = err instanceof Error ? err.message : "fetch_failed";
+        for (const o of chunk) {
+          await applyTrackingResult(
+            {
+              orderId: o.id,
+              trackingNumber: o.trackingNumber,
+              currentLatestEvent: o.latestEvent,
+              currentLatestEventAt: o.latestEventAt,
+              carrier: o.carrier,
+            },
+            { events: [], rawStatus: null, error: `fourtracking_fetch_failed:${detail}` }
+          );
+          recordOutcome(o, { ok: false, error: detail });
+        }
+        return;
+      }
+
       for (const o of chunk) {
-        const result: ProviderResult = {
+        const result = map.get(o.trackingNumber) ?? {
           events: [],
           rawStatus: null,
-          error: "jte_manual_only",
+          error: "not_found_on_4tracking",
         };
         try {
           const persisted = await applyTrackingResult(
@@ -734,15 +783,76 @@ export async function refreshAllTracking(
             },
             result
           );
-          // Record processed without an error count — see comment above.
-          byCarrier.jte.processed += 1;
-          byCarrier.jte.eventsAdded += persisted.eventsCount;
-          results.push({
-            id: o.id,
-            trackingNumber: o.trackingNumber,
+          recordOutcome(o, {
+            ok: true,
             status: persisted.status,
             eventsCount: persisted.eventsCount,
-            error: "jte_manual_only",
+            error: result.error,
+          });
+        } catch (err) {
+          const detail = err instanceof Error ? err.message : "apply_failed";
+          recordOutcome(o, { ok: false, error: detail });
+        }
+      }
+    }
+  );
+
+  // ---------- Naqel pool: 4tracking.net, 10 per batch ----------
+  const naqelQueue: ActiveOrderRow[][] = [];
+  for (let i = 0; i < buckets.naqel.length; i += FOURTRACK_CHUNK_SIZE) {
+    naqelQueue.push(buckets.naqel.slice(i, i + FOURTRACK_CHUNK_SIZE));
+  }
+  totalChunks += naqelQueue.length;
+
+  const naqelPool = drainQueue(
+    naqelQueue,
+    FOURTRACK_CONCURRENCY,
+    deadline,
+    async (chunk) => {
+      const numbers = chunk.map((o) => o.trackingNumber);
+      let map: Map<string, ProviderResult>;
+      try {
+        map = await fetch4TrackingBatch(numbers);
+      } catch (err) {
+        const detail = err instanceof Error ? err.message : "fetch_failed";
+        for (const o of chunk) {
+          await applyTrackingResult(
+            {
+              orderId: o.id,
+              trackingNumber: o.trackingNumber,
+              currentLatestEvent: o.latestEvent,
+              currentLatestEventAt: o.latestEventAt,
+              carrier: o.carrier,
+            },
+            { events: [], rawStatus: null, error: `fourtracking_fetch_failed:${detail}` }
+          );
+          recordOutcome(o, { ok: false, error: detail });
+        }
+        return;
+      }
+
+      for (const o of chunk) {
+        const result = map.get(o.trackingNumber) ?? {
+          events: [],
+          rawStatus: null,
+          error: "not_found_on_4tracking",
+        };
+        try {
+          const persisted = await applyTrackingResult(
+            {
+              orderId: o.id,
+              trackingNumber: o.trackingNumber,
+              currentLatestEvent: o.latestEvent,
+              currentLatestEventAt: o.latestEventAt,
+              carrier: o.carrier,
+            },
+            result
+          );
+          recordOutcome(o, {
+            ok: true,
+            status: persisted.status,
+            eventsCount: persisted.eventsCount,
+            error: result.error,
           });
         } catch (err) {
           const detail = err instanceof Error ? err.message : "apply_failed";
@@ -866,7 +976,7 @@ export async function refreshAllTracking(
   // Run all 4 pools concurrently. Each pool drains its own queue with its
   // own worker count. The shared deadline + applyTrackingResult writes mean
   // the orchestration is naturally back-pressured by Postgres latency.
-  await Promise.all([imilePool, injazPool, jdwPool, jtePool]);
+  await Promise.all([imilePool, injazPool, jdwPool, jtePool, naqelPool]);
 
   const totalProcessed = results.length;
   const remaining = Math.max(0, totalActive - totalProcessed);

@@ -15,6 +15,8 @@ import {
   Phone,
   Sparkles,
   Loader2,
+  Pin,
+  PinOff,
 } from "lucide-react";
 
 interface Conversation {
@@ -24,6 +26,8 @@ interface Conversation {
   lastText: string | null;
   lastType: string;
   totalMessages: number;
+  unreadCount: number;
+  isPinned: boolean;
   isOutboundOnly?: boolean;
   order: {
     id: string;
@@ -33,6 +37,8 @@ interface Conversation {
     status: string;
   } | null;
 }
+
+type InboxSort = "recent" | "unread" | "unreplied";
 
 type ThreadEntry =
   | {
@@ -115,6 +121,7 @@ export default function InboxPage() {
   const [selectedNumberId, setSelectedNumberId] = useState<string | null>(null);
   const [aiSuggestions, setAiSuggestions] = useState<string[]>([]);
   const [aiSuggestionsLoading, setAiSuggestionsLoading] = useState(false);
+  const [sortMode, setSortMode] = useState<InboxSort>("recent");
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const threadEndRef = useRef<HTMLDivElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
@@ -256,16 +263,54 @@ export default function InboxPage() {
     if (selectedPhone) fetchThread(selectedPhone);
   };
 
-  const filteredConversations = conversations.filter((c) => {
-    if (!searchQuery.trim()) return true;
-    const q = searchQuery.toLowerCase();
-    return (
-      (c.contactName?.toLowerCase().includes(q)) ||
-      c.phoneNumber.includes(q) ||
-      (c.order?.customerName?.toLowerCase().includes(q)) ||
-      (c.lastText?.toLowerCase().includes(q))
+  const togglePin = async (phone: string, currentlyPinned: boolean) => {
+    if (currentlyPinned) {
+      await fetch(`/api/whatsapp/inbox/pin?phoneNumber=${encodeURIComponent(phone)}`, { method: "DELETE" });
+    } else {
+      await fetch("/api/whatsapp/inbox/pin", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ phoneNumber: phone }),
+      });
+    }
+    setConversations((prev) =>
+      prev.map((c) => c.phoneNumber === phone ? { ...c, isPinned: !currentlyPinned } : c)
     );
-  });
+  };
+
+  const filteredConversations = useMemo(() => {
+    let list = conversations.filter((c) => {
+      if (!searchQuery.trim()) return true;
+      const q = searchQuery.toLowerCase();
+      return (
+        (c.contactName?.toLowerCase().includes(q)) ||
+        c.phoneNumber.includes(q) ||
+        (c.order?.customerName?.toLowerCase().includes(q)) ||
+        (c.lastText?.toLowerCase().includes(q))
+      );
+    });
+
+    // Sort: pinned first, then by sort mode
+    list = [...list].sort((a, b) => {
+      if (a.isPinned && !b.isPinned) return -1;
+      if (!a.isPinned && b.isPinned) return 1;
+
+      if (sortMode === "unread") {
+        if (a.unreadCount > 0 && b.unreadCount === 0) return -1;
+        if (a.unreadCount === 0 && b.unreadCount > 0) return 1;
+      }
+      if (sortMode === "unreplied") {
+        const aUnreplied = a.unreadCount > 0 && !a.isOutboundOnly;
+        const bUnreplied = b.unreadCount > 0 && !b.isOutboundOnly;
+        if (aUnreplied && !bUnreplied) return -1;
+        if (!aUnreplied && bUnreplied) return 1;
+      }
+
+      return new Date(b.lastReceivedAt).getTime() - new Date(a.lastReceivedAt).getTime();
+    });
+
+    return list;
+  }, [conversations, searchQuery, sortMode]);
 
   const selectedConvo = conversations.find((c) => c.phoneNumber === selectedPhone);
 
@@ -302,8 +347,8 @@ export default function InboxPage() {
           </button>
         </div>
 
-        {/* Search */}
-        <div className="px-3 py-2 bg-[#F0F2F5]">
+        {/* Search + Sort */}
+        <div className="px-3 py-2 bg-[#F0F2F5] space-y-1.5">
           <div className="flex items-center gap-3 bg-white rounded-lg px-3 py-1.5">
             <Search size={16} className="text-[#54656F]" />
             <input
@@ -313,6 +358,21 @@ export default function InboxPage() {
               placeholder="Search or start new chat"
               className="flex-1 text-sm bg-transparent outline-none placeholder-[#667781] text-[#111B21]"
             />
+          </div>
+          <div className="flex items-center gap-1">
+            {(["recent", "unread", "unreplied"] as InboxSort[]).map((mode) => (
+              <button
+                key={mode}
+                onClick={() => setSortMode(mode)}
+                className={`px-2.5 py-1 rounded-full text-[11px] font-medium transition-colors ${
+                  sortMode === mode
+                    ? "bg-[#008069] text-white"
+                    : "bg-white text-[#54656F] hover:bg-gray-100"
+                }`}
+              >
+                {mode === "recent" ? "Recent" : mode === "unread" ? "Unread" : "Unreplied"}
+              </button>
+            ))}
           </div>
         </div>
 
@@ -337,38 +397,59 @@ export default function InboxPage() {
           {filteredConversations.map((c) => {
             const active = selectedPhone === c.phoneNumber;
             return (
-              <button
+              <div
                 key={c.phoneNumber}
+                className={`w-full text-left px-3 py-3 flex items-center gap-3 hover:bg-[#F0F2F5] transition-colors border-b border-[#E9EDEF] cursor-pointer ${
+                  active ? "bg-[#F0F2F5]" : ""
+                }`}
                 onClick={() => {
                   setSelectedPhone(c.phoneNumber);
                   setAiSuggestions([]);
                 }}
-                className={`w-full text-left px-3 py-3 flex items-center gap-3 hover:bg-[#F0F2F5] transition-colors border-b border-[#E9EDEF] ${
-                  active ? "bg-[#F0F2F5]" : ""
-                }`}
               >
                 {/* Avatar */}
-                <div className="w-12 h-12 rounded-full bg-[#DFE5E7] flex items-center justify-center shrink-0">
+                <div className="w-12 h-12 rounded-full bg-[#DFE5E7] flex items-center justify-center shrink-0 relative">
                   <Phone size={20} className="text-[#54656F]" />
+                  {c.isPinned && (
+                    <div className="absolute -top-0.5 -right-0.5 w-4 h-4 bg-[#008069] rounded-full flex items-center justify-center">
+                      <Pin size={9} className="text-white" />
+                    </div>
+                  )}
                 </div>
 
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center justify-between gap-2">
-                    <span className="font-medium text-[#111B21] text-[15px] truncate">
+                    <span className={`text-[15px] truncate ${c.unreadCount > 0 ? "font-bold text-[#111B21]" : "font-medium text-[#111B21]"}`}>
                       {c.contactName || c.order?.customerName || c.phoneNumber}
                     </span>
-                    <span className="text-xs text-[#667781] shrink-0">
-                      {formatTime(c.lastReceivedAt)}
-                    </span>
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      <span className={`text-xs ${c.unreadCount > 0 ? "text-[#25D366] font-medium" : "text-[#667781]"}`}>
+                        {formatTime(c.lastReceivedAt)}
+                      </span>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          togglePin(c.phoneNumber, c.isPinned);
+                        }}
+                        className="p-0.5 rounded hover:bg-gray-200 transition-colors"
+                        title={c.isPinned ? "Unpin" : "Pin"}
+                      >
+                        {c.isPinned ? (
+                          <PinOff size={12} className="text-[#008069]" />
+                        ) : (
+                          <Pin size={12} className="text-[#8696A0]" />
+                        )}
+                      </button>
+                    </div>
                   </div>
                   <div className="flex items-center justify-between gap-2 mt-0.5">
-                    <span className="text-sm text-[#667781] truncate">
+                    <span className={`text-sm truncate ${c.unreadCount > 0 ? "text-[#111B21] font-medium" : "text-[#667781]"}`}>
                       {c.lastType !== "text" ? `📎 ${c.lastType}` : ""}
                       {c.lastText || ""}
                     </span>
-                    {c.totalMessages > 1 && (
+                    {c.unreadCount > 0 && (
                       <span className="bg-[#25D366] text-white text-[11px] font-medium rounded-full min-w-[20px] h-5 flex items-center justify-center px-1.5 shrink-0">
-                        {c.totalMessages}
+                        {c.unreadCount}
                       </span>
                     )}
                   </div>
@@ -384,7 +465,7 @@ export default function InboxPage() {
                     </div>
                   )}
                 </div>
-              </button>
+              </div>
             );
           })}
         </div>

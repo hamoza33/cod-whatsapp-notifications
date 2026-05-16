@@ -11,7 +11,7 @@ import { getSetting, SETTING_KEYS } from "./settings";
 import { normalizePhoneNumber } from "./phone";
 import { OrderStatus } from "@prisma/client";
 import { deriveOrderStatus } from "./order-status";
-import { runAutomationsForOrder } from "./automations";
+import { runAutomationsForOrder, isAutoRunEnabled } from "./automations";
 
 function extractLeadId(codOrder: CodNetworkOrder): string | null {
   // COD Network exposes the lead-id under various keys depending on which
@@ -78,9 +78,12 @@ export async function syncOrders(
       const defaultCountryCode =
         (await getSetting(SETTING_KEYS.DEFAULT_COUNTRY_CODE)) || "212";
 
+      const autoRunEnabled = await isAutoRunEnabled();
+      const shouldSkipAutomations = !!options.skipAutomations || !autoRunEnabled;
+
       for (const order of orders) {
         try {
-          await upsertOrder(order, result, defaultCountryCode, !!options.skipAutomations);
+          await upsertOrder(order, result, defaultCountryCode, shouldSkipAutomations);
         } catch (err) {
           const msg =
             err instanceof Error ? err.message : "Unknown error upserting order";

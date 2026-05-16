@@ -4,7 +4,7 @@ import { mapCodStatus, extractProductName, CodNetworkOrder } from "./cod-network
 import { deriveOrderStatus } from "./order-status";
 import { normalizePhoneNumber } from "./phone";
 import { getSetting, SETTING_KEYS } from "./settings";
-import { runAutomationsForOrder } from "./automations";
+import { runAutomationsForOrder, isAutoRunEnabled } from "./automations";
 
 interface CodWebhookEnvelope {
   event?: string;
@@ -217,7 +217,7 @@ export async function applyWebhookEvent(
 
   // Fire automation rules. Run in best-effort mode so a single bad rule
   // doesn't 500 the webhook (COD Network would otherwise retry forever).
-  if (statusChanged) {
+  if (statusChanged && await isAutoRunEnabled()) {
     try {
       await runAutomationsForOrder(orderRow.id);
     } catch (err) {

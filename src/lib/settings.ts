@@ -85,6 +85,9 @@ export const SETTING_KEYS = {
   AI_SUGGESTIONS_ENABLED: "ai_suggestions_enabled",
   AI_SUGGESTIONS_COUNT: "ai_suggestions_count",
   AI_SUGGESTIONS_SYSTEM_PROMPT: "ai_suggestions_system_prompt",
+  // Automation auto-run — when enabled, automations trigger automatically
+  // without needing to click "Run now"
+  AUTOMATION_AUTO_RUN: "automation_auto_run",
 } as const;
 
 export const SENSITIVE_SETTING_KEYS: readonly string[] = [

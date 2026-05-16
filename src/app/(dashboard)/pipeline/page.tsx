@@ -20,6 +20,9 @@ import {
   ArrowRightLeft,
   Search,
   GripHorizontal,
+  Copy,
+  Check,
+  Trash2,
 } from "lucide-react";
 
 type OrderStatus =
@@ -253,7 +256,7 @@ export default function PipelinePage() {
       groups[key].sort((a, b) => {
         const aDate = a.codCreatedAt ? new Date(a.codCreatedAt).getTime() : 0;
         const bDate = b.codCreatedAt ? new Date(b.codCreatedAt).getTime() : 0;
-        return aDate - bDate;
+        return bDate - aDate;
       });
     }
     return groups;
@@ -366,6 +369,15 @@ export default function PipelinePage() {
     );
     setSendDialogOrder(null);
     showToast("success", "WhatsApp message sent");
+  };
+
+  const handleDeleteOrder = async (orderId: string) => {
+    try {
+      await fetch(`/api/orders/${orderId}`, { method: "DELETE" });
+      setOrders((prev) => prev.filter((o) => o.id !== orderId));
+    } catch {
+      showToast("error", "Failed to delete order");
+    }
   };
 
   const toggleSelect = (orderId: string) => {
@@ -559,6 +571,7 @@ export default function PipelinePage() {
                 onCardDragEnd={handleDragEnd}
                 onCardClick={setSendDialogOrder}
                 onToggleSelect={toggleSelect}
+                onDeleteOrder={handleDeleteOrder}
                 isDragColumn={dragColumnKey === colKey}
                 onColumnDragStart={() => handleColumnDragStart(colKey)}
                 onColumnDragOver={(e) => handleColumnDragOver(e, colKey)}
@@ -631,6 +644,7 @@ function Column({
   onCardDragEnd,
   onCardClick,
   onToggleSelect,
+  onDeleteOrder,
   isDragColumn,
   onColumnDragStart,
   onColumnDragOver,
@@ -656,6 +670,7 @@ function Column({
   onCardDragEnd: () => void;
   onCardClick: (o: PipelineOrder) => void;
   onToggleSelect: (id: string) => void;
+  onDeleteOrder: (id: string) => void;
 }) {
   const borderClass = callAgentColumn
     ? "border-purple-300 bg-purple-50/30"
@@ -720,6 +735,7 @@ function Column({
             onDragEnd={onCardDragEnd}
             onClick={() => onCardClick(o)}
             onToggleSelect={() => onToggleSelect(o.id)}
+            onDelete={() => onDeleteOrder(o.id)}
           />
         ))}
         <div className="h-12 shrink-0" />
@@ -737,6 +753,7 @@ function Card({
   onDragEnd,
   onClick,
   onToggleSelect,
+  onDelete,
 }: {
   order: PipelineOrder;
   sentColumn?: boolean;
@@ -746,7 +763,9 @@ function Card({
   onDragEnd: () => void;
   onClick: () => void;
   onToggleSelect: () => void;
+  onDelete: () => void;
 }) {
+  const [copiedTracking, setCopiedTracking] = useState(false);
   const sentAt = order.whatsappSentAt
     ? new Date(order.whatsappSentAt).toLocaleString()
     : null;
@@ -860,6 +879,22 @@ function Card({
             <div className="flex items-center gap-1.5 text-gray-600">
               <Hash size={11} className="shrink-0 text-gray-400" />
               <span className="truncate font-mono">{order.trackingNumber}</span>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  navigator.clipboard.writeText(order.trackingNumber!).catch(() => {});
+                  setCopiedTracking(true);
+                  setTimeout(() => setCopiedTracking(false), 1500);
+                }}
+                className="p-0.5 rounded hover:bg-gray-200 transition-colors shrink-0"
+                title="Copy tracking number"
+              >
+                {copiedTracking ? (
+                  <Check size={10} className="text-green-600" />
+                ) : (
+                  <Copy size={10} className="text-gray-400" />
+                )}
+              </button>
             </div>
           )}
           {sentAt && (
@@ -868,15 +903,27 @@ function Card({
               <span className="truncate">Sent {sentAt}</span>
             </div>
           )}
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              onClick();
-            }}
-            className="mt-1 text-[10px] text-blue-600 hover:text-blue-800 hover:underline"
-          >
-            Send WhatsApp
-          </button>
+          <div className="flex items-center gap-2 mt-1">
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                onClick();
+              }}
+              className="text-[10px] text-blue-600 hover:text-blue-800 hover:underline"
+            >
+              Send WhatsApp
+            </button>
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                if (confirm("Delete this order permanently?")) onDelete();
+              }}
+              className="text-[10px] text-red-400 hover:text-red-600"
+              title="Delete order"
+            >
+              <Trash2 size={11} />
+            </button>
+          </div>
         </div>
       </div>
     </div>
@@ -906,6 +953,8 @@ function SendDialog({
   const [templateInfo, setTemplateInfo] = useState<TemplateInfo | null>(null);
   const [detecting, setDetecting] = useState(false);
   const [templateError, setTemplateError] = useState<string | null>(null);
+  const [imageLibrary, setImageLibrary] = useState<Array<{ id: string; url: string; name: string; mediaId: string | null }>>([]);
+  const [showImageLibrary, setShowImageLibrary] = useState(false);
   const variableInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -926,7 +975,14 @@ function SendDialog({
       }
     };
     run();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+
+    // Load image library
+    fetch("/api/images")
+      .then((r) => r.json())
+      .then((data: { images?: Array<{ id: string; url: string; name: string; mediaId: string | null }> }) => {
+        if (data.images) setImageLibrary(data.images);
+      })
+      .catch(() => {});
   }, []);
 
   const insertVariable = (key: string) => {
@@ -959,6 +1015,12 @@ function SendDialog({
       setHeaderImageId(data.mediaId);
       setHeaderImageFileName(file.name);
       setHeaderImageUrl("");
+      // Save to image library
+      fetch("/api/images", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url: "", name: file.name, mediaId: data.mediaId }),
+      }).catch(() => {});
     } catch (err) {
       onError(err instanceof Error ? err.message : "Image upload failed");
     } finally {
@@ -1159,6 +1221,46 @@ function SendDialog({
                 </span>
               )}
             </div>
+            {imageLibrary.length > 0 && (
+              <div className="mb-2">
+                <button
+                  type="button"
+                  onClick={() => setShowImageLibrary((v) => !v)}
+                  className="text-[11px] text-blue-600 hover:text-blue-800 hover:underline"
+                >
+                  {showImageLibrary ? "Hide image library" : "Pick from image library"}
+                </button>
+                {showImageLibrary && (
+                  <div className="mt-1.5 grid grid-cols-4 gap-1.5 max-h-32 overflow-y-auto border border-gray-200 rounded-md p-1.5">
+                    {imageLibrary.map((img) => (
+                      <button
+                        key={img.id}
+                        type="button"
+                        onClick={() => {
+                          if (img.mediaId) {
+                            setHeaderImageId(img.mediaId);
+                            setHeaderImageFileName(img.name);
+                            setHeaderImageUrl("");
+                          } else {
+                            setHeaderImageUrl(img.url);
+                            setHeaderImageId("");
+                            setHeaderImageFileName("");
+                          }
+                          setShowImageLibrary(false);
+                        }}
+                        className="relative group rounded overflow-hidden border border-gray-200 hover:border-blue-400 transition-colors"
+                        title={img.name}
+                      >
+                        <img src={img.url} alt={img.name} className="w-full h-16 object-cover" />
+                        <span className="absolute bottom-0 inset-x-0 bg-black/60 text-white text-[9px] px-1 truncate">
+                          {img.name}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
             <p className="text-[11px] text-gray-400 mb-1">…or paste a public image URL</p>
             <input
               type="url"

@@ -78,6 +78,29 @@ export async function GET(request: NextRequest) {
     inboundRows.map((r) => r.from_phone_number.replace(/\D/g, ""))
   );
 
+  // Load pinned conversations
+  const pinnedRows = await prisma.pinnedConversation.findMany();
+  const pinnedSet = new Set(pinnedRows.map((p) => p.phoneNumber));
+
+  // Count unread inbound messages (messages after the last outbound)
+  const unreadCounts = await prisma.$queryRaw<
+    Array<{ from_phone_number: string; unread_count: bigint }>
+  >`
+    SELECT im.from_phone_number, COUNT(*) AS unread_count
+    FROM inbound_messages im
+    WHERE im.received_at > COALESCE(
+      (SELECT MAX(COALESCE(wm.sent_at, wm.created_at))
+       FROM whatsapp_messages wm
+       WHERE REGEXP_REPLACE(wm.phone_number, '\\D', '', 'g')
+           = REGEXP_REPLACE(im.from_phone_number, '\\D', '', 'g')),
+      '1970-01-01'::timestamp
+    )
+    GROUP BY im.from_phone_number
+  `;
+  const unreadMap = new Map(
+    unreadCounts.map((r) => [r.from_phone_number, Number(r.unread_count)])
+  );
+
   const conversations = await Promise.all([
     ...inboundRows.map(async (row) => {
       const order = row.order_id
@@ -99,6 +122,8 @@ export async function GET(request: NextRequest) {
         lastText: row.last_text,
         lastType: row.last_type,
         totalMessages: Number(row.total_messages),
+        unreadCount: unreadMap.get(row.from_phone_number) ?? 0,
+        isPinned: pinnedSet.has(row.from_phone_number),
         order,
         isOutboundOnly: false,
       };
@@ -125,6 +150,8 @@ export async function GET(request: NextRequest) {
           lastText: `Template: ${row.last_template}`,
           lastType: "template",
           totalMessages: Number(row.total_messages),
+          unreadCount: 0,
+          isPinned: pinnedSet.has(row.phone_number),
           order,
           isOutboundOnly: true,
         };

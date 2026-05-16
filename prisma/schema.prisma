@@ -333,6 +333,7 @@ enum TrackingCarrier {
   INJAZ
   JTE
   JDW
+  NAQEL
   OTHER
 }
 
@@ -394,4 +395,24 @@ model TrackingEvent {
   @@index([trackingOrderId])
   @@index([occurredAt])
   @@map("tracking_events")
+}
+
+/// Stored images for template headers — avoids re-pasting URLs every time.
+model ImageLibrary {
+  id        String   @id @default(cuid())
+  url       String
+  name      String
+  mediaId   String?  @map("media_id")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@map("image_library")
+}
+
+/// Tracks which conversations are pinned in the inbox.
+model PinnedConversation {
+  id          String   @id @default(cuid())
+  phoneNumber String   @unique @map("phone_number")
+  pinnedAt    DateTime @default(now()) @map("pinned_at")
+
+  @@map("pinned_conversations")
 }
