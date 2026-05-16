@@ -24,6 +24,7 @@ export async function GET(request: NextRequest) {
 interface CreateAutomationBody {
   name?: string;
   isEnabled?: boolean;
+  autoRun?: boolean;
   whenStatusEquals?: string | null;
   andProductContains?: string | null;
   andProductDoesNotContain?: string | null;
@@ -100,6 +101,7 @@ export async function POST(request: NextRequest) {
     data: {
       name: body.name.trim(),
       isEnabled: body.isEnabled ?? false,
+      autoRun: body.autoRun ?? false,
       whenStatusEquals: asStatus(body.whenStatusEquals),
       andProductContains: body.andProductContains?.trim() || null,
       andProductDoesNotContain: body.andProductDoesNotContain?.trim() || null,

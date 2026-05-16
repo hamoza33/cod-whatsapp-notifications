@@ -209,6 +209,7 @@ model Automation {
   id                       String       @id @default(cuid())
   name                     String
   isEnabled                Boolean      @default(false) @map("is_enabled")
+  autoRun                  Boolean      @default(false) @map("auto_run")
   whenStatusEquals         OrderStatus? @map("when_status_equals")
   andProductContains       String?      @map("and_product_contains")
   andProductDoesNotContain String?      @map("and_product_does_not_contain")
@@ -415,4 +416,14 @@ model PinnedConversation {
   pinnedAt    DateTime @default(now()) @map("pinned_at")
 
   @@map("pinned_conversations")
+}
+
+/// Tracks when a user last read a conversation (by phone number).
+/// Used to compute unread counts: messages received after lastReadAt are unread.
+model ConversationReadState {
+  id          String   @id @default(cuid())
+  phoneNumber String   @unique @map("phone_number")
+  lastReadAt  DateTime @map("last_read_at")
+
+  @@map("conversation_read_states")
 }

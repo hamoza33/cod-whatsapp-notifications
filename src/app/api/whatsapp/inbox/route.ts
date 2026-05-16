@@ -82,17 +82,17 @@ export async function GET(request: NextRequest) {
   const pinnedRows = await prisma.pinnedConversation.findMany();
   const pinnedSet = new Set(pinnedRows.map((p) => p.phoneNumber));
 
-  // Count unread inbound messages (messages after the last outbound)
+  // Count unread inbound messages (messages received after lastReadAt).
+  // If no read state exists, all inbound messages are unread.
   const unreadCounts = await prisma.$queryRaw<
     Array<{ from_phone_number: string; unread_count: bigint }>
   >`
     SELECT im.from_phone_number, COUNT(*) AS unread_count
     FROM inbound_messages im
     WHERE im.received_at > COALESCE(
-      (SELECT MAX(COALESCE(wm.sent_at, wm.created_at))
-       FROM whatsapp_messages wm
-       WHERE REGEXP_REPLACE(wm.phone_number, '\\D', '', 'g')
-           = REGEXP_REPLACE(im.from_phone_number, '\\D', '', 'g')),
+      (SELECT crs.last_read_at
+       FROM conversation_read_states crs
+       WHERE crs.phone_number = im.from_phone_number),
       '1970-01-01'::timestamp
     )
     GROUP BY im.from_phone_number

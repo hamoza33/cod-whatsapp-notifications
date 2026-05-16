@@ -405,6 +405,17 @@ export default function InboxPage() {
                 onClick={() => {
                   setSelectedPhone(c.phoneNumber);
                   setAiSuggestions([]);
+                  // Mark conversation as read (WhatsApp-style)
+                  if (c.unreadCount > 0) {
+                    setConversations((prev) =>
+                      prev.map((conv) =>
+                        conv.phoneNumber === c.phoneNumber
+                          ? { ...conv, unreadCount: 0 }
+                          : conv
+                      )
+                    );
+                    api.post("/whatsapp/inbox/read", { phoneNumber: c.phoneNumber }).catch(() => {});
+                  }
                 }}
               >
                 {/* Avatar */}

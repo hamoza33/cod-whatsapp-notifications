@@ -70,6 +70,7 @@ interface Automation {
   id: string;
   name: string;
   isEnabled: boolean;
+  autoRun: boolean;
   whenStatusEquals: OrderStatus | null;
   andProductContains: string | null;
   andProductDoesNotContain: string | null;
@@ -124,7 +125,6 @@ export default function AutomationsPage() {
   const [sampleValues, setSampleValues] = useState<Record<string, string | null>>({});
   const [loading, setLoading] = useState(true);
   const [showCreate, setShowCreate] = useState(false);
-  const [autoRun, setAutoRun] = useState(false);
   const [toast, setToast] = useState<{ kind: "success" | "error"; text: string } | null>(null);
 
   const showToast = useCallback((kind: "success" | "error", text: string) => {
@@ -174,30 +174,19 @@ export default function AutomationsPage() {
     }
   }, []);
 
-  const fetchAutoRun = useCallback(async () => {
+  const toggleAutoRun = async (automationId: string, currentAutoRun: boolean) => {
+    const newVal = !currentAutoRun;
+    setAutomations((prev) =>
+      prev.map((a) => (a.id === automationId ? { ...a, autoRun: newVal } : a))
+    );
     try {
-      const data = await api.get<{ settings: Record<string, string | null> }>(
-        "/settings?keys=automation_auto_run"
-      );
-      setAutoRun(data.settings.automation_auto_run === "true");
-    } catch {
-      // ignore
-    }
-  }, []);
-
-  const toggleAutoRun = async () => {
-    const newVal = !autoRun;
-    setAutoRun(newVal);
-    try {
-      await fetch("/api/settings", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ settings: { automation_auto_run: newVal ? "true" : "false" } }),
-      });
+      await api.patch(`/automations/${automationId}`, { autoRun: newVal });
       showToast("success", `Auto-run ${newVal ? "enabled" : "disabled"}`);
     } catch {
-      setAutoRun(!newVal);
-      showToast("error", "Failed to update auto-run setting");
+      setAutomations((prev) =>
+        prev.map((a) => (a.id === automationId ? { ...a, autoRun: currentAutoRun } : a))
+      );
+      showToast("error", "Failed to update auto-run");
     }
   };
 
@@ -207,8 +196,7 @@ export default function AutomationsPage() {
     fetchTemplates();
     fetchProducts();
     fetchSampleValues();
-    fetchAutoRun();
-  }, [fetchAutomations, fetchTemplates, fetchProducts, fetchSampleValues, fetchAutoRun]);
+  }, [fetchAutomations, fetchTemplates, fetchProducts, fetchSampleValues]);
 
   return (
     <div className="max-w-5xl">
@@ -225,24 +213,6 @@ export default function AutomationsPage() {
           </p>
         </div>
         <div className="flex items-center gap-3">
-          <label className="flex items-center gap-2 cursor-pointer">
-            <span className="text-sm text-gray-600 font-medium">Auto-run</span>
-            <button
-              type="button"
-              role="switch"
-              aria-checked={autoRun}
-              onClick={toggleAutoRun}
-              className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
-                autoRun ? "bg-green-500" : "bg-gray-300"
-              }`}
-            >
-              <span
-                className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-                  autoRun ? "translate-x-6" : "translate-x-1"
-                }`}
-              />
-            </button>
-          </label>
           <button
             onClick={() => setShowCreate((v) => !v)}
             className="flex items-center gap-2 px-3 py-2 bg-blue-600 text-white rounded-md text-sm font-medium hover:bg-blue-700"
@@ -304,6 +274,7 @@ export default function AutomationsPage() {
               sampleValues={sampleValues}
               onChange={fetchAutomations}
               onToast={showToast}
+              onToggleAutoRun={toggleAutoRun}
             />
           ))}
         </div>
@@ -967,6 +938,7 @@ function AutomationCard({
   sampleValues,
   onChange,
   onToast,
+  onToggleAutoRun,
 }: {
   automation: Automation;
   templates: TemplateInfo[];
@@ -974,6 +946,7 @@ function AutomationCard({
   sampleValues?: Record<string, string | null>;
   onChange: () => void;
   onToast: (kind: "success" | "error", text: string) => void;
+  onToggleAutoRun: (id: string, currentAutoRun: boolean) => void;
 }) {
   const [preview, setPreview] = useState<PreviewResult | null>(null);
   const [previewing, setPreviewing] = useState(false);
@@ -1188,6 +1161,24 @@ function AutomationCard({
           <Zap size={14} />
           Run now
         </button>
+        <div className="ml-auto flex items-center gap-1.5">
+          <span className="text-xs text-gray-500">Auto-run</span>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={automation.autoRun}
+            onClick={() => onToggleAutoRun(automation.id, automation.autoRun)}
+            className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${
+              automation.autoRun ? "bg-green-500" : "bg-gray-300"
+            }`}
+          >
+            <span
+              className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${
+                automation.autoRun ? "translate-x-4" : "translate-x-0.5"
+              }`}
+            />
+          </button>
+        </div>
       </div>
 
       {preview && (

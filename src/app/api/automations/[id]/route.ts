@@ -50,6 +50,7 @@ export async function GET(request: NextRequest, context: RouteContext) {
 interface UpdateAutomationBody {
   name?: string;
   isEnabled?: boolean;
+  autoRun?: boolean;
   whenStatusEquals?: string | null;
   andProductContains?: string | null;
   andProductDoesNotContain?: string | null;
@@ -85,6 +86,7 @@ export async function PATCH(request: NextRequest, context: RouteContext) {
   const data: Prisma.AutomationUncheckedUpdateInput = {};
   if (body.name !== undefined) data.name = body.name.trim();
   if (body.isEnabled !== undefined) data.isEnabled = body.isEnabled;
+  if (body.autoRun !== undefined) data.autoRun = body.autoRun;
   if (body.whenStatusEquals !== undefined)
     data.whenStatusEquals = asStatus(body.whenStatusEquals);
   if (body.andProductContains !== undefined)

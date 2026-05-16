@@ -2,7 +2,7 @@ import { Prisma, OrderStatus, Automation, Order } from "@prisma/client";
 import { prisma } from "./prisma";
 import { WhatsAppClient } from "./whatsapp";
 import { normalizePhoneNumber } from "./phone";
-import { getSetting, getSettings, SETTING_KEYS } from "./settings";
+import { getSetting, SETTING_KEYS } from "./settings";
 
 export interface AutomationTriggerOptions {
   /**
@@ -16,6 +16,12 @@ export interface AutomationTriggerOptions {
    * the dry-run preview to only show the impact of a single rule.
    */
   automationIds?: string[];
+  /**
+   * When true, only automations with `autoRun=true` will execute. Set to true
+   * when triggering from sync/webhook/tracking (automatic triggers). When
+   * false (manual "Run now"), all enabled automations run regardless.
+   */
+  autoTriggered?: boolean;
 }
 
 export interface AutomationRunSummary {
@@ -272,6 +278,7 @@ export async function runAutomationsForOrder(
       ...(options.automationIds && options.automationIds.length > 0
         ? { id: { in: options.automationIds } }
         : {}),
+      ...(options.autoTriggered ? { autoRun: true } : {}),
     },
   });
 
@@ -486,7 +493,18 @@ export async function autoExpireOrders(): Promise<number> {
 
   const result = await prisma.order.updateMany({
     where: {
-      status: { in: [OrderStatus.PENDING, OrderStatus.SHIPPED] },
+      status: {
+        in: [
+          OrderStatus.PENDING,
+          OrderStatus.CONFIRMED,
+          OrderStatus.PROCESSING,
+          OrderStatus.SHIPPED,
+          OrderStatus.OUT_FOR_DELIVERY,
+          OrderStatus.NEW,
+          OrderStatus.NO_REPLY,
+          OrderStatus.CALL_LATER,
+        ],
+      },
       codCreatedAt: { lt: cutoff },
     },
     data: { status: OrderStatus.EXPIRED },
@@ -496,9 +514,11 @@ export async function autoExpireOrders(): Promise<number> {
 }
 
 /**
- * Checks whether automation auto-run is enabled in settings.
+ * @deprecated Use per-automation `autoRun` field instead.
+ * Kept for backward compatibility — now always returns true so
+ * callers fall through to the per-automation filter in
+ * runAutomationsForOrder({ autoTriggered: true }).
  */
 export async function isAutoRunEnabled(): Promise<boolean> {
-  const settings = await getSettings([SETTING_KEYS.AUTOMATION_AUTO_RUN]);
-  return settings[SETTING_KEYS.AUTOMATION_AUTO_RUN] === "true";
+  return true;
 }

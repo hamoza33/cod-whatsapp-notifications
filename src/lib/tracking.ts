@@ -4,11 +4,13 @@ import {
   SETTING_KEYS,
   getSettings,
 } from "./settings";
-import { runAutomationsForOrder, isAutoRunEnabled } from "./automations";
+import { runAutomationsForOrder } from "./automations";
 import { fetchImileTracking } from "./tracking-providers/imile";
 import { fetchInjazTracking } from "./tracking-providers/injaz";
 import { fetchJdwBulk } from "./tracking-providers/jdw";
 import { fetch4TrackingBatch } from "./tracking-providers/four-tracking";
+import { fetchJteOfficialTracking } from "./tracking-providers/jte";
+import { fetchNaqelOfficialTracking } from "./tracking-providers/naqel";
 import type {
   ProviderResult,
 } from "./tracking-providers/types";
@@ -149,12 +151,22 @@ async function fetchTrackingByCarrier(
       return fetchImileTracking(trackingNumber);
     case TrackingCarrier.INJAZ:
       return fetchInjazTracking(trackingNumber);
-    case TrackingCarrier.JTE:
-      return fetch4TrackingSingle(trackingNumber);
+    case TrackingCarrier.JTE: {
+      // Primary: 4tracking.net. Fallback: JTE official site.
+      const primary = await fetch4TrackingSingle(trackingNumber);
+      if (!primary.error || (primary.events.length > 0 && !primary.error)) return primary;
+      console.log(`[tracking] JTE 4tracking failed for ${trackingNumber}, trying official site`);
+      return fetchJteOfficialTracking(trackingNumber);
+    }
     case TrackingCarrier.JDW:
       return fetchJdwTracking(trackingNumber);
-    case TrackingCarrier.NAQEL:
-      return fetch4TrackingSingle(trackingNumber);
+    case TrackingCarrier.NAQEL: {
+      // Primary: 4tracking.net. Fallback: Naqel official site.
+      const primary = await fetch4TrackingSingle(trackingNumber);
+      if (!primary.error || (primary.events.length > 0 && !primary.error)) return primary;
+      console.log(`[tracking] Naqel 4tracking failed for ${trackingNumber}, trying official site`);
+      return fetchNaqelOfficialTracking(trackingNumber);
+    }
     default:
       return { events: [], rawStatus: null };
   }
@@ -298,13 +310,9 @@ async function applyTrackingResult(
       select: { orderId: true },
     });
     if (trackingRow?.orderId) {
-      isAutoRunEnabled().then((enabled) => {
-        if (enabled) {
-          runAutomationsForOrder(trackingRow.orderId!).catch((err) =>
-            console.error("[tracking] automation trigger failed", err)
-          );
-        }
-      }).catch(() => {});
+      runAutomationsForOrder(trackingRow.orderId!, { autoTriggered: true }).catch((err) =>
+        console.error("[tracking] automation trigger failed", err)
+      );
     }
   }
 
@@ -746,32 +754,38 @@ export async function refreshAllTracking(
     async (chunk) => {
       const numbers = chunk.map((o) => o.trackingNumber);
       let map: Map<string, ProviderResult>;
+      let fourTrackingFailed = false;
       try {
         map = await fetch4TrackingBatch(numbers);
       } catch (err) {
+        fourTrackingFailed = true;
+        map = new Map();
         const detail = err instanceof Error ? err.message : "fetch_failed";
-        for (const o of chunk) {
-          await applyTrackingResult(
-            {
-              orderId: o.id,
-              trackingNumber: o.trackingNumber,
-              currentLatestEvent: o.latestEvent,
-              currentLatestEventAt: o.latestEventAt,
-              carrier: o.carrier,
-            },
-            { events: [], rawStatus: null, error: `fourtracking_fetch_failed:${detail}` }
-          );
-          recordOutcome(o, { ok: false, error: detail });
+        for (const n of numbers) {
+          map.set(n, { events: [], rawStatus: null, error: `fourtracking_fetch_failed:${detail}` });
         }
-        return;
       }
 
       for (const o of chunk) {
-        const result = map.get(o.trackingNumber) ?? {
+        let result = map.get(o.trackingNumber) ?? {
           events: [],
           rawStatus: null,
           error: "not_found_on_4tracking",
         };
+
+        // Fallback: if 4tracking failed for this number, try JTE official site
+        if (result.error && result.events.length === 0) {
+          try {
+            console.log(`[tracking] JTE 4tracking failed for ${o.trackingNumber}, trying official site`);
+            const fallbackResult = await fetchJteOfficialTracking(o.trackingNumber);
+            if (!fallbackResult.error || fallbackResult.events.length > 0) {
+              result = fallbackResult;
+            }
+          } catch {
+            // Keep the original 4tracking error
+          }
+        }
+
         try {
           const persisted = await applyTrackingResult(
             {
@@ -794,6 +808,7 @@ export async function refreshAllTracking(
           recordOutcome(o, { ok: false, error: detail });
         }
       }
+      void fourTrackingFailed;
     }
   );
 
@@ -814,29 +829,33 @@ export async function refreshAllTracking(
       try {
         map = await fetch4TrackingBatch(numbers);
       } catch (err) {
+        map = new Map();
         const detail = err instanceof Error ? err.message : "fetch_failed";
-        for (const o of chunk) {
-          await applyTrackingResult(
-            {
-              orderId: o.id,
-              trackingNumber: o.trackingNumber,
-              currentLatestEvent: o.latestEvent,
-              currentLatestEventAt: o.latestEventAt,
-              carrier: o.carrier,
-            },
-            { events: [], rawStatus: null, error: `fourtracking_fetch_failed:${detail}` }
-          );
-          recordOutcome(o, { ok: false, error: detail });
+        for (const n of numbers) {
+          map.set(n, { events: [], rawStatus: null, error: `fourtracking_fetch_failed:${detail}` });
         }
-        return;
       }
 
       for (const o of chunk) {
-        const result = map.get(o.trackingNumber) ?? {
+        let result = map.get(o.trackingNumber) ?? {
           events: [],
           rawStatus: null,
           error: "not_found_on_4tracking",
         };
+
+        // Fallback: if 4tracking failed for this number, try Naqel official site
+        if (result.error && result.events.length === 0) {
+          try {
+            console.log(`[tracking] Naqel 4tracking failed for ${o.trackingNumber}, trying official site`);
+            const fallbackResult = await fetchNaqelOfficialTracking(o.trackingNumber);
+            if (!fallbackResult.error || fallbackResult.events.length > 0) {
+              result = fallbackResult;
+            }
+          } catch {
+            // Keep the original 4tracking error
+          }
+        }
+
         try {
           const persisted = await applyTrackingResult(
             {
