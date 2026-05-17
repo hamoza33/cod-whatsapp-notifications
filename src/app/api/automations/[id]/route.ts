@@ -240,15 +240,26 @@ export async function POST(request: NextRequest, context: RouteContext) {
     );
     let applied = 0;
     let failed = 0;
+    const errors: string[] = [];
     for (const order of matching) {
       try {
         const summaries = await runAutomationsForOrder(order.id, {
           automationIds: [automation.id],
         });
-        if (summaries.some((s) => s.status === "applied")) applied++;
-        else if (summaries.some((s) => s.status === "failed")) failed++;
-      } catch {
+        if (summaries.some((s) => s.status === "applied")) {
+          applied++;
+        } else if (summaries.some((s) => s.status === "failed")) {
+          failed++;
+          const failedSummary = summaries.find((s) => s.status === "failed");
+          if (failedSummary?.reason) {
+            errors.push(`#${order.codNetworkOrderId}: ${failedSummary.reason}`);
+          }
+        }
+      } catch (err) {
         failed++;
+        errors.push(
+          `#${order.codNetworkOrderId}: ${err instanceof Error ? err.message : String(err)}`
+        );
       }
     }
     return NextResponse.json({
@@ -256,6 +267,7 @@ export async function POST(request: NextRequest, context: RouteContext) {
       matchingCount: matching.length,
       applied,
       failed,
+      errors: errors.length > 0 ? errors : undefined,
     });
   }
 
