@@ -475,6 +475,7 @@ async function sendAutomationTemplate(
       templateName: automation.thenSendTemplateName,
       templateLanguage,
       templateVariablesJson: variables,
+      headerImageUrl: headerImage || null,
       providerMessageId: result.messages?.[0]?.id ?? null,
       status: "SENT",
       sentBy: `automation:${automation.id}`,
