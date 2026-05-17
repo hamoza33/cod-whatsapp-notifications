@@ -997,14 +997,21 @@ function AutomationCard({
     )
       return;
     try {
-      const data = await api.post<{ applied: number; failed: number; matchingCount: number }>(
+      const data = await api.post<{ applied: number; failed: number; matchingCount: number; errors?: string[] }>(
         `/automations/${automation.id}?action=run-now`,
         {}
       );
-      onToast(
-        "success",
-        `Applied to ${data.applied} of ${data.matchingCount} matching orders (${data.failed} failed)`
-      );
+      if (data.failed > 0 && data.errors?.length) {
+        onToast(
+          "error",
+          `Applied to ${data.applied} of ${data.matchingCount} matching orders (${data.failed} failed): ${data.errors[0]}`
+        );
+      } else {
+        onToast(
+          "success",
+          `Applied to ${data.applied} of ${data.matchingCount} matching orders${data.failed ? ` (${data.failed} failed)` : ""}`
+        );
+      }
       onChange();
     } catch (err) {
       onToast("error", err instanceof Error ? err.message : "Run-now failed");

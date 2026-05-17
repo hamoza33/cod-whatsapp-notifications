@@ -1,4 +1,4 @@
-import { Prisma, OrderStatus, Automation, Order } from "@prisma/client";
+import { OrderStatus, Automation, Order } from "@prisma/client";
 import { prisma } from "./prisma";
 import { WhatsAppClient } from "./whatsapp";
 import { normalizePhoneNumber } from "./phone";
@@ -296,8 +296,8 @@ export async function runAutomationsForOrder(
       continue;
     }
 
-    // De-dupe: if `thenSendOnce` is on and we already have a successful run
-    // for this (automation, order) pair, skip silently.
+    // De-dupe: if `thenSendOnce` is on and we already have a *successful* run
+    // for this (automation, order) pair, skip. Failed runs do NOT block retries.
     if (automation.thenSendOnce) {
       const existingRun = await prisma.automationRun.findUnique({
         where: {
@@ -307,13 +307,13 @@ export async function runAutomationsForOrder(
           },
         },
       });
-      if (existingRun) {
+      if (existingRun && existingRun.status === "success") {
         summaries.push({
           automationId: automation.id,
           automationName: automation.name,
           orderId: order.id,
           status: "skipped",
-          reason: `already ran on ${existingRun.createdAt.toISOString()}`,
+          reason: `already ran successfully on ${existingRun.createdAt.toISOString()}`,
         });
         continue;
       }
@@ -351,8 +351,22 @@ export async function runAutomationsForOrder(
       }
 
       if (!options.dryRun) {
-        await prisma.automationRun.create({
-          data: {
+        await prisma.automationRun.upsert({
+          where: {
+            automationId_orderId: {
+              automationId: automation.id,
+              orderId: order.id,
+            },
+          },
+          update: {
+            status: "success",
+            movedFromStatus,
+            movedToStatus: movedToStatus ?? null,
+            sentMessage,
+            errorMessage: null,
+            createdAt: new Date(),
+          },
+          create: {
             automationId: automation.id,
             orderId: order.id,
             status: "success",
@@ -381,12 +395,28 @@ export async function runAutomationsForOrder(
       });
     } catch (err) {
       errorMessage = err instanceof Error ? err.message : String(err);
+      console.error(
+        `[automations] automation "${automation.name}" failed for order ${order.codNetworkOrderId}:`,
+        errorMessage
+      );
       if (!options.dryRun) {
-        // Record the failed attempt so we don't infinitely retry on the next
-        // status flip. `thenSendOnce` will treat any existing row as "ran".
         try {
-          await prisma.automationRun.create({
-            data: {
+          await prisma.automationRun.upsert({
+            where: {
+              automationId_orderId: {
+                automationId: automation.id,
+                orderId: order.id,
+              },
+            },
+            update: {
+              status: "failed",
+              movedFromStatus,
+              movedToStatus: movedToStatus ?? null,
+              sentMessage,
+              errorMessage,
+              createdAt: new Date(),
+            },
+            create: {
               automationId: automation.id,
               orderId: order.id,
               status: "failed",
@@ -397,16 +427,7 @@ export async function runAutomationsForOrder(
             },
           });
         } catch (logErr) {
-          // P2002 unique violation = a previous failed run already exists.
-          // That's fine — fall through.
-          if (
-            !(
-              logErr instanceof Prisma.PrismaClientKnownRequestError &&
-              logErr.code === "P2002"
-            )
-          ) {
-            console.error("[automations] failed to record run", logErr);
-          }
+          console.error("[automations] failed to record run", logErr);
         }
       }
       summaries.push({
@@ -475,6 +496,7 @@ async function sendAutomationTemplate(
       templateName: automation.thenSendTemplateName,
       templateLanguage,
       templateVariablesJson: variables,
+      headerImageUrl: headerImage || null,
       providerMessageId: result.messages?.[0]?.id ?? null,
       status: "SENT",
       sentBy: `automation:${automation.id}`,

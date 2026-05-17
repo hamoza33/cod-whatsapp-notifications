@@ -108,11 +108,17 @@ interface WhatsappNumberOption {
 
 export default function InboxPage() {
   const [conversations, setConversations] = useState<Conversation[]>([]);
-  const [selectedPhone, setSelectedPhone] = useState<string | null>(null);
+  const [selectedPhone, setSelectedPhone] = useState<string | null>(() => {
+    if (typeof window === "undefined") return null;
+    return sessionStorage.getItem("inbox_selected_phone") || null;
+  });
   const [thread, setThread] = useState<ThreadResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [replyText, setReplyText] = useState("");
+  const [replyText, setReplyText] = useState(() => {
+    if (typeof window === "undefined") return "";
+    return sessionStorage.getItem("inbox_draft_text") || "";
+  });
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<{ kind: "error" | "success"; text: string } | null>(null);
@@ -195,6 +201,24 @@ export default function InboxPage() {
     }, 5000);
     return () => clearInterval(interval);
   }, [fetchConversations, fetchThread, selectedPhone]);
+
+  // Persist selected phone and draft text to sessionStorage so they survive
+  // page refreshes without polluting the URL.
+  useEffect(() => {
+    if (selectedPhone) {
+      sessionStorage.setItem("inbox_selected_phone", selectedPhone);
+    } else {
+      sessionStorage.removeItem("inbox_selected_phone");
+    }
+  }, [selectedPhone]);
+
+  useEffect(() => {
+    if (replyText) {
+      sessionStorage.setItem("inbox_draft_text", replyText);
+    } else {
+      sessionStorage.removeItem("inbox_draft_text");
+    }
+  }, [replyText]);
 
   useEffect(() => {
     if (selectedPhone) {

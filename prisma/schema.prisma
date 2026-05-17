@@ -209,7 +209,7 @@ model Automation {
   id                       String       @id @default(cuid())
   name                     String
   isEnabled                Boolean      @default(false) @map("is_enabled")
-  autoRun                  Boolean      @default(false) @map("auto_run")
+  autoRun                  Boolean      @default(true) @map("auto_run")
   whenStatusEquals         OrderStatus? @map("when_status_equals")
   andProductContains       String?      @map("and_product_contains")
   andProductDoesNotContain String?      @map("and_product_does_not_contain")
