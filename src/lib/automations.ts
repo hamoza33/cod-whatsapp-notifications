@@ -365,10 +365,11 @@ async function sendAutomationTemplate(
       : undefined
   );
 
+  const storedPhone = normalizedPhone.startsWith("+") ? normalizedPhone : `+${normalizedPhone}`;
   await prisma.whatsappMessage.create({
     data: {
       orderId: order.id,
-      phoneNumber: normalizedPhone,
+      phoneNumber: storedPhone,
       templateName: automation.thenSendTemplateName,
       templateLanguage,
       templateVariablesJson: variables,

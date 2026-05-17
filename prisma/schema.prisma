@@ -105,7 +105,7 @@ enum MessageStatus {
 
 model WhatsappMessage {
   id                    String        @id @default(cuid())
-  orderId               String        @map("order_id")
+  orderId               String?       @map("order_id")
   phoneNumber           String        @map("phone_number")
   templateName          String        @map("template_name")
   templateLanguage      String        @default("en") @map("template_language")
@@ -117,7 +117,7 @@ model WhatsappMessage {
   sentAt                DateTime?     @map("sent_at")
   createdAt             DateTime      @default(now()) @map("created_at")
 
-  order Order @relation(fields: [orderId], references: [id])
+  order Order? @relation(fields: [orderId], references: [id])
 
   @@index([orderId])
   @@index([phoneNumber])

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getAuthUser } from "@/lib/auth";
+import { prisma } from "@/lib/prisma";
 import { WhatsAppClient } from "@/lib/whatsapp";
 import { normalizePhoneNumber } from "@/lib/phone";
 import { rateLimit } from "@/lib/rate-limit";
@@ -109,6 +110,26 @@ export async function POST(request: NextRequest) {
       variables: variables ?? [],
       header,
     });
+
+    // Record the test message so it appears in the Inbox / chat history
+    try {
+      const formattedPhone = phone.startsWith("+") ? phone : `+${phone}`;
+      await prisma.whatsappMessage.create({
+        data: {
+          orderId: null,
+          phoneNumber: formattedPhone,
+          templateName,
+          templateLanguage: language,
+          templateVariablesJson: variables ?? [],
+          providerMessageId: result.messages?.[0]?.id ?? null,
+          status: "SENT",
+          sentBy: user.email,
+          sentAt: new Date(),
+        },
+      });
+    } catch (logErr) {
+      console.error("[test] failed to record test message", logErr);
+    }
 
     return NextResponse.json({
       success: true,
