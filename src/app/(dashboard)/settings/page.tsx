@@ -15,10 +15,19 @@ const TABS = [
   { id: "whatsapp", label: "WhatsApp" },
   { id: "wa_numbers", label: "WA Numbers" },
   { id: "sync", label: "Order Sync" },
+  { id: "tracking", label: "Tracking" },
   { id: "automation", label: "Automation" },
   { id: "ai", label: "AI Agent" },
   { id: "voice", label: "Voice Agent" },
 ] as const;
+
+const TRACKING_REFRESH_OPTIONS = [
+  { label: "Every 30 min", value: "30" },
+  { label: "Every 1 hour", value: "60" },
+  { label: "Every 6 hours", value: "360" },
+  { label: "Every 12 hours", value: "720" },
+  { label: "Once a day", value: "1440" },
+];
 
 interface WhatsappNumberRecord {
   id: string;
@@ -498,6 +507,84 @@ export default function SettingsPage() {
             value={settings.default_country_code || "212"}
             onChange={(v) => updateSetting("default_country_code", v)}
             placeholder="212"
+          />
+        </SettingsSection>
+      )}
+
+      {/* Tracking */}
+      {activeTab === "tracking" && (
+        <SettingsSection
+          title="Package Tracking"
+          description="Configure carrier tracking refresh cadence and the captcha solver used by JD Logistics (JDW) when their site challenges. The /tracking page also has a quick refresh-interval selector that mirrors this tab — both write to the same setting."
+          onSave={() =>
+            handleSave("Tracking", [
+              "captcha_provider",
+              "captcha_api_key",
+              "tracking_refresh_interval_minutes",
+            ])
+          }
+          saving={saving}
+        >
+          <div className="mb-4">
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Refresh Interval
+            </label>
+            <div className="flex gap-2 flex-wrap">
+              {TRACKING_REFRESH_OPTIONS.map((opt) => {
+                const current =
+                  settings.tracking_refresh_interval_minutes || "60";
+                return (
+                  <button
+                    key={opt.value}
+                    type="button"
+                    onClick={() =>
+                      updateSetting("tracking_refresh_interval_minutes", opt.value)
+                    }
+                    className={`px-3 py-1.5 text-sm rounded-md border ${
+                      current === opt.value
+                        ? "bg-blue-600 text-white border-blue-600"
+                        : "bg-white text-gray-700 border-gray-300 hover:bg-gray-50"
+                    }`}
+                  >
+                    {opt.label}
+                  </button>
+                );
+              })}
+            </div>
+            <p className="mt-1 text-xs text-gray-500">
+              Background cron cadence for refreshing pending and in-transit orders. Click Save below to apply.
+            </p>
+          </div>
+          <div className="mb-4">
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Captcha Provider
+            </label>
+            <select
+              value={settings.captcha_provider || "2captcha"}
+              onChange={(e) => updateSetting("captcha_provider", e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+            >
+              <option value="2captcha">2Captcha</option>
+              <option value="anti-captcha" disabled>
+                Anti-Captcha (coming soon)
+              </option>
+            </select>
+            <p className="mt-1 text-xs text-gray-500">
+              Service used to solve captcha challenges from carrier APIs. Currently 2Captcha is the only working provider.
+            </p>
+          </div>
+          <SettingsField
+            label="Captcha API Key"
+            value={settings.captcha_api_key || ""}
+            onChange={(v) => updateSetting("captcha_api_key", v)}
+            type="password"
+            configuredPreview={sensitivePreviews.captcha_api_key}
+            placeholder={
+              configuredSecrets.has("captcha_api_key")
+                ? "Currently configured — enter a new value to replace"
+                : "Your 2Captcha API key"
+            }
+            help="Only used when JD Logistics (JDW) tracking responses challenge with a captcha. Optional — without a key, JDW rows are marked captcha_required when challenged."
           />
         </SettingsSection>
       )}

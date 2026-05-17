@@ -79,6 +79,8 @@ export const SETTING_KEYS = {
   VOICE_AGENT_LLM_MODEL: "voice_agent_llm_model",
   VOICE_AGENT_WEBHOOK_URL: "voice_agent_webhook_url",
   TRACKING_REFRESH_INTERVAL_MINUTES: "tracking_refresh_interval_minutes",
+  CAPTCHA_PROVIDER: "captcha_provider",
+  CAPTCHA_API_KEY: "captcha_api_key",
 } as const;
 
 export const SENSITIVE_SETTING_KEYS: readonly string[] = [
@@ -91,6 +93,7 @@ export const SENSITIVE_SETTING_KEYS: readonly string[] = [
   SETTING_KEYS.OPENAI_API_KEY,
   SETTING_KEYS.VOICE_AGENT_API_KEY,
   SETTING_KEYS.VOICE_AGENT_LLM_API_KEY,
+  SETTING_KEYS.CAPTCHA_API_KEY,
 ];
 
 /**

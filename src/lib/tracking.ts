@@ -1,6 +1,64 @@
-import crypto from "node:crypto";
 import { prisma } from "./prisma";
-import { TrackingCarrier, TrackingStatus } from "@prisma/client";
+import { TrackingCarrier, TrackingStatus, type Prisma } from "@prisma/client";
+import {
+  SETTING_KEYS,
+  getSettings,
+} from "./settings";
+import { fetchImileTracking } from "./tracking-providers/imile";
+import { fetchInjazTracking } from "./tracking-providers/injaz";
+import { fetch4TrackingBatch } from "./tracking-providers/four-tracking";
+import { fetchJdwBulk } from "./tracking-providers/jdw";
+import type {
+  ProviderResult,
+} from "./tracking-providers/types";
+
+// ---------------------------------------------------------------------------
+// Re-exports — keep the public surface stable for existing callers and for
+// a potential rollback. Per-carrier scrapers live under src/lib/tracking-providers/.
+// ---------------------------------------------------------------------------
+
+export { fetchImileTracking } from "./tracking-providers/imile";
+export { fetchInjazTracking } from "./tracking-providers/injaz";
+// Legacy aliases for the JTE + JDW scrapers. The current architecture routes
+// these through 4tracking / JD Logistics bulk endpoints respectively, but
+// these named exports are preserved so a 1-line dispatcher flip restores the
+// per-carrier behavior if the bulk paths regress.
+export async function fetchJteTracking(
+  trackingNumber: string
+): Promise<ProviderResult> {
+  const map = await fetch4TrackingBatch([trackingNumber]);
+  return (
+    map.get(trackingNumber) ?? {
+      events: [],
+      rawStatus: null,
+      error: "not_found_on_4tracking",
+    }
+  );
+}
+
+export async function fetchJdwTracking(
+  trackingNumber: string
+): Promise<ProviderResult> {
+  // Single-number convenience wrapper. Reads captcha settings on demand so
+  // the legacy callers don't have to change.
+  const settings = await getSettings([
+    SETTING_KEYS.CAPTCHA_API_KEY,
+    SETTING_KEYS.CAPTCHA_PROVIDER,
+  ]);
+  const map = await fetchJdwBulk([trackingNumber], {
+    captchaApiKey: settings[SETTING_KEYS.CAPTCHA_API_KEY],
+    captchaProvider: settings[SETTING_KEYS.CAPTCHA_PROVIDER] ?? "2captcha",
+  });
+  return (
+    map.get(trackingNumber) ?? {
+      events: [],
+      rawStatus: null,
+      error: "not_found_on_jdw",
+    }
+  );
+}
+
+export type { ParsedEvent, ProviderResult } from "./tracking-providers/types";
 
 // ---------------------------------------------------------------------------
 // Carrier detection
@@ -10,266 +68,11 @@ export function detectCarrier(
   trackingNumber: string
 ): TrackingCarrier | null {
   const tn = trackingNumber.toUpperCase();
-  if (tn.startsWith("60")) return TrackingCarrier.IMILE;
-  if (tn.startsWith("INJAZ.") || tn.startsWith("INJAZ"))
-    return TrackingCarrier.INJAZ;
+  if (/^6[01]\d{11}$/.test(tn)) return TrackingCarrier.IMILE;
+  if (tn.startsWith("INJAZ")) return TrackingCarrier.INJAZ;
   if (tn.startsWith("JTE")) return TrackingCarrier.JTE;
   if (tn.startsWith("JDW")) return TrackingCarrier.JDW;
   return null;
-}
-
-// ---------------------------------------------------------------------------
-// iMile tracking
-// ---------------------------------------------------------------------------
-
-const IMILE_RSA_PUB_DER_B64 =
-  "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA3dFPiKNZwt+HoBbPAG/t" +
-  "7kZC2k3pBX2eCl5LeyeW8woNuEV5bA5kB9Y9KKTOQng62ERGPLwi84CdIB8s265lj" +
-  "QUib//iO3jVrZesJueO5Xu+s80s3Z/89jgJleT1XawN1GubgkGXOoT1a7tvX8+aItk" +
-  "GgR//48ELqJVVUL+yGsBtXxFjNmOEWxBJNQuwAf9yWcCIl1enD60GjZjPWrsfw8QU" +
-  "qam7K5e45ealcPEYGenNePwuPpCq6twdD0YYYzKdRN0dZP1uTviFpNfph90c9YgQ8" +
-  "kgDkRMcpjVv6KZ+bg5JZ4sK6LkV4vwOjPijisthHBvUXhu3fyhMgvoDO/j5gwIDAQ" +
-  "AB";
-
-const IMILE_SALT = "imileTrackQuery2024";
-
-interface ImileTrackInfo {
-  content: string;
-  trackStage: number | null;
-  trackStageTx: string | null;
-  time: string;
-  operateStationName: string | null;
-}
-
-interface ImileResponse {
-  status: string;
-  resultObject: {
-    waybillNo: string;
-    trackInfos: ImileTrackInfo[];
-  } | null;
-}
-
-export async function fetchImileTracking(
-  waybillNo: string
-): Promise<{ events: ParsedEvent[]; rawStatus: string | null }> {
-  const code = crypto
-    .createHash("md5")
-    .update(waybillNo + IMILE_SALT)
-    .digest("hex");
-
-  const keyObj = crypto.createPublicKey({
-    key: Buffer.from(IMILE_RSA_PUB_DER_B64, "base64"),
-    format: "der",
-    type: "spki",
-  });
-
-  const sign = crypto
-    .publicEncrypt(
-      { key: keyObj, padding: crypto.constants.RSA_PKCS1_PADDING },
-      Buffer.from(waybillNo)
-    )
-    .toString("base64");
-
-  const url = `https://www.imile.com/saastms/mobileWeb/track/query?waybillNo=${waybillNo}&code=${code}`;
-  const resp = await fetch(url, {
-    headers: { lang: "en", sign },
-  });
-
-  const data = (await resp.json()) as ImileResponse;
-
-  if (
-    data.status !== "success" ||
-    !data.resultObject?.trackInfos?.length
-  ) {
-    return { events: [], rawStatus: null };
-  }
-
-  const events: ParsedEvent[] = data.resultObject.trackInfos.map(
-    (info) => ({
-      status: info.trackStageTx ?? "Unknown",
-      description: info.content,
-      location: info.operateStationName ?? undefined,
-      occurredAt: parseImileDate(info.time),
-      rawData: info,
-    })
-  );
-
-  const latest = data.resultObject.trackInfos[0];
-  return { events, rawStatus: latest.trackStageTx ?? null };
-}
-
-function parseImileDate(dateStr: string): Date {
-  // iMile format: "2026-05-13 02:30:07"
-  return new Date(dateStr.replace(" ", "T") + "+03:00");
-}
-
-// ---------------------------------------------------------------------------
-// Injaz Express tracking
-// ---------------------------------------------------------------------------
-
-interface ParsedEvent {
-  status: string;
-  description: string;
-  location?: string;
-  occurredAt: Date;
-  rawData?: unknown;
-}
-
-export async function fetchInjazTracking(
-  trackingNumber: string
-): Promise<{ events: ParsedEvent[]; rawStatus: string | null }> {
-  const resp = await fetch(
-    "https://injaz-express.com/track_order.php",
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/x-www-form-urlencoded",
-      },
-      body: `order_id=${encodeURIComponent(trackingNumber)}`,
-    }
-  );
-
-  const html = await resp.text();
-  return parseInjazHtml(html);
-}
-
-function parseInjazHtml(
-  html: string
-): { events: ParsedEvent[]; rawStatus: string | null } {
-  const events: ParsedEvent[] = [];
-
-  // Extract timeline items:
-  // <div class='orderTravel_status'>Status text</div>
-  // <div class='orderTravel_time'...>2022-06-06</div>
-  const itemRegex =
-    /<li\s+class='ant-timeline-item[^']*'[^>]*>[\s\S]*?<div\s+class='orderTravel_status'\s*>(.*?)<\/div>[\s\S]*?<div\s+class='orderTravel_time'[^>]*>(.*?)<\/div>/g;
-
-  let match: RegExpExecArray | null;
-  while ((match = itemRegex.exec(html)) !== null) {
-    const status = match[1].trim();
-    const dateStr = match[2].trim();
-    if (!status || !dateStr) continue;
-
-    events.push({
-      status,
-      description: status,
-      occurredAt: new Date(dateStr),
-    });
-  }
-
-  // Reverse to chronological (newest first)
-  events.reverse();
-
-  const rawStatus = events.length > 0 ? events[0].status : null;
-  return { events, rawStatus };
-}
-
-// ---------------------------------------------------------------------------
-// JT Express tracking (scrape public tracking page)
-// ---------------------------------------------------------------------------
-
-export async function fetchJteTracking(
-  trackingNumber: string
-): Promise<{ events: ParsedEvent[]; rawStatus: string | null }> {
-  try {
-    const resp = await fetch(
-      `https://www.jtexpress-sa.com/api/tracking/query?waybillNo=${encodeURIComponent(trackingNumber)}`,
-      {
-        headers: {
-          Accept: "application/json",
-          "User-Agent": "Mozilla/5.0",
-        },
-      }
-    );
-    if (!resp.ok) return { events: [], rawStatus: null };
-    const data = (await resp.json()) as {
-      data?: {
-        trackInfos?: Array<{
-          content?: string;
-          status?: string;
-          time?: string;
-          location?: string;
-        }>;
-        status?: string;
-      };
-    };
-    if (!data.data?.trackInfos?.length) return { events: [], rawStatus: null };
-    const events: ParsedEvent[] = data.data.trackInfos.map((info) => ({
-      status: info.status ?? "Unknown",
-      description: info.content ?? info.status ?? "Update",
-      location: info.location,
-      occurredAt: new Date(info.time ?? Date.now()),
-      rawData: info,
-    }));
-    return { events, rawStatus: data.data.status ?? events[0]?.status ?? null };
-  } catch {
-    return { events: [], rawStatus: null };
-  }
-}
-
-// ---------------------------------------------------------------------------
-// JD Logistics tracking (scrape public tracking page)
-// ---------------------------------------------------------------------------
-
-export async function fetchJdwTracking(
-  trackingNumber: string
-): Promise<{ events: ParsedEvent[]; rawStatus: string | null }> {
-  try {
-    const resp = await fetch(
-      `https://www.jingdonglogistics.com/api/tracking/query?waybillNo=${encodeURIComponent(trackingNumber)}`,
-      {
-        headers: {
-          Accept: "application/json",
-          "User-Agent": "Mozilla/5.0",
-        },
-      }
-    );
-    if (!resp.ok) return { events: [], rawStatus: null };
-    const data = (await resp.json()) as {
-      data?: {
-        trackInfos?: Array<{
-          content?: string;
-          status?: string;
-          time?: string;
-          location?: string;
-        }>;
-        status?: string;
-      };
-    };
-    if (!data.data?.trackInfos?.length) return { events: [], rawStatus: null };
-    const events: ParsedEvent[] = data.data.trackInfos.map((info) => ({
-      status: info.status ?? "Unknown",
-      description: info.content ?? info.status ?? "Update",
-      location: info.location,
-      occurredAt: new Date(info.time ?? Date.now()),
-      rawData: info,
-    }));
-    return { events, rawStatus: data.data.status ?? events[0]?.status ?? null };
-  } catch {
-    return { events: [], rawStatus: null };
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Fetch tracking by carrier (dispatcher)
-// ---------------------------------------------------------------------------
-
-async function fetchTrackingByCarrier(
-  carrier: TrackingCarrier,
-  trackingNumber: string
-): Promise<{ events: ParsedEvent[]; rawStatus: string | null }> {
-  switch (carrier) {
-    case TrackingCarrier.IMILE:
-      return fetchImileTracking(trackingNumber);
-    case TrackingCarrier.INJAZ:
-      return fetchInjazTracking(trackingNumber);
-    case TrackingCarrier.JTE:
-      return fetchJteTracking(trackingNumber);
-    case TrackingCarrier.JDW:
-      return fetchJdwTracking(trackingNumber);
-    default:
-      return { events: [], rawStatus: null };
-  }
 }
 
 // ---------------------------------------------------------------------------
@@ -291,6 +94,28 @@ export function carrierDisplayName(
       return "JD Logistics";
     default:
       return deliveryCompany || "Other";
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Single-carrier dispatcher (kept for the per-row Refresh button)
+// ---------------------------------------------------------------------------
+
+async function fetchTrackingByCarrier(
+  carrier: TrackingCarrier,
+  trackingNumber: string
+): Promise<ProviderResult> {
+  switch (carrier) {
+    case TrackingCarrier.IMILE:
+      return fetchImileTracking(trackingNumber);
+    case TrackingCarrier.INJAZ:
+      return fetchInjazTracking(trackingNumber);
+    case TrackingCarrier.JTE:
+      return fetchJteTracking(trackingNumber);
+    case TrackingCarrier.JDW:
+      return fetchJdwTracking(trackingNumber);
+    default:
+      return { events: [], rawStatus: null };
   }
 }
 
@@ -328,18 +153,116 @@ function mapToTrackingStatus(
     s.includes("receive") ||
     s.includes("pending") ||
     s.includes("created") ||
-    s.includes("accepted")
+    s.includes("accepted") ||
+    s.includes("info recieved") ||
+    s.includes("info received")
   )
     return TrackingStatus.PENDING;
   if (s.includes("return")) return TrackingStatus.RETURNED;
-  if (s.includes("exception") || s.includes("failed") || s.includes("problem"))
+  if (
+    s.includes("exception") ||
+    s.includes("failed") ||
+    s.includes("problem") ||
+    s.includes("expired")
+  )
     return TrackingStatus.EXCEPTION;
 
   return TrackingStatus.IN_TRANSIT;
 }
 
 // ---------------------------------------------------------------------------
-// Refresh a single tracking order
+// Apply a fetched ProviderResult to a TrackingOrder row.
+// Used by both refreshTracking() (single-row) and refreshAllTracking()
+// (worker pools) so they share identical persistence semantics.
+// ---------------------------------------------------------------------------
+
+interface ApplyOpts {
+  orderId: string;
+  trackingNumber: string;
+  currentLatestEvent: string | null;
+  currentLatestEventAt: Date | null;
+  carrier: TrackingCarrier;
+}
+
+async function applyTrackingResult(
+  opts: ApplyOpts,
+  result: ProviderResult
+): Promise<{ status: TrackingStatus; eventsCount: number }> {
+  const { events, rawStatus, error } = result;
+  const status = mapToTrackingStatus(opts.carrier, rawStatus);
+
+  for (const evt of events) {
+    await prisma.trackingEvent.upsert({
+      where: {
+        trackingOrderId_description_occurredAt: {
+          trackingOrderId: opts.orderId,
+          description: evt.description,
+          occurredAt: evt.occurredAt,
+        },
+      },
+      create: {
+        trackingOrderId: opts.orderId,
+        status: evt.status,
+        description: evt.description,
+        location: evt.location ?? null,
+        occurredAt: evt.occurredAt,
+        rawData: (evt.rawData ?? undefined) as Prisma.InputJsonValue | undefined,
+      },
+      update: {},
+    });
+  }
+
+  // If we got NO real events but the provider reported an error (e.g.
+  // not_found_on_4tracking, captcha_required, fourtracking_blocked), record
+  // it as a single debug TrackingEvent so it's DB-debuggable. We pin the
+  // occurredAt to "now" so a re-run on the same tick collides on the
+  // unique index and won't grow indefinitely.
+  if (events.length === 0 && error) {
+    const debugDescription = `_debug:${error}`;
+    const occurredAt = new Date(Math.floor(Date.now() / 1000) * 1000);
+    try {
+      await prisma.trackingEvent.upsert({
+        where: {
+          trackingOrderId_description_occurredAt: {
+            trackingOrderId: opts.orderId,
+            description: debugDescription,
+            occurredAt,
+          },
+        },
+        create: {
+          trackingOrderId: opts.orderId,
+          status: "DEBUG",
+          description: debugDescription,
+          location: null,
+          occurredAt,
+          rawData: { error } as Prisma.InputJsonValue,
+        },
+        update: {
+          rawData: { error } as Prisma.InputJsonValue,
+        },
+      });
+    } catch {
+      // Non-critical: a transient DB error here shouldn't fail the refresh.
+    }
+  }
+
+  const latestEvent = events.length > 0 ? events[0] : null;
+
+  await prisma.trackingOrder.update({
+    where: { id: opts.orderId },
+    data: {
+      status,
+      latestEvent: latestEvent?.description ?? opts.currentLatestEvent,
+      latestEventAt: latestEvent?.occurredAt ?? opts.currentLatestEventAt,
+      lastCheckedAt: new Date(),
+    },
+  });
+
+  return { status, eventsCount: events.length };
+}
+
+// ---------------------------------------------------------------------------
+// Refresh a single tracking order (per-row Refresh button)
 // ---------------------------------------------------------------------------
 
 export async function refreshTracking(trackingOrderId: string) {
@@ -356,55 +279,34 @@ export async function refreshTracking(trackingOrderId: string) {
     return { status: order.status, eventsCount: 0 };
   }
 
-  const { events, rawStatus } = await fetchTrackingByCarrier(
-    order.carrier,
-    order.trackingNumber
-  );
+  let result = await fetchTrackingByCarrier(order.carrier, order.trackingNumber);
 
-  const status = mapToTrackingStatus(order.carrier, rawStatus);
-
-  // Upsert events (de-duplicate by description + timestamp)
-  for (const evt of events) {
-    await prisma.trackingEvent.upsert({
-      where: {
-        trackingOrderId_description_occurredAt: {
-          trackingOrderId: order.id,
-          description: evt.description,
-          occurredAt: evt.occurredAt,
-        },
-      },
-      create: {
-        trackingOrderId: order.id,
-        status: evt.status,
-        description: evt.description,
-        location: evt.location ?? null,
-        occurredAt: evt.occurredAt,
-        rawData: evt.rawData ?? undefined,
-      },
-      update: {},
-    });
+  // iMile fallback: if 4tracking didn't recognize the number (or was blocked
+  // by Cloudflare), retry against iMile's working RSA direct API.
+  if (
+    order.carrier === TrackingCarrier.IMILE &&
+    result.events.length === 0 &&
+    (result.error === "not_found_on_4tracking" ||
+      result.error === "fourtracking_blocked")
+  ) {
+    result = await fetchImileTracking(order.trackingNumber);
   }
 
-  const latestEvent =
-    events.length > 0 ? events[0] : null;
-
-  await prisma.trackingOrder.update({
-    where: { id: order.id },
-    data: {
-      status,
-      latestEvent: latestEvent?.description ?? order.latestEvent,
-      latestEventAt: latestEvent?.occurredAt ?? order.latestEventAt,
-      lastCheckedAt: new Date(),
+  return applyTrackingResult(
+    {
+      orderId: order.id,
+      trackingNumber: order.trackingNumber,
+      currentLatestEvent: order.latestEvent,
+      currentLatestEventAt: order.latestEventAt,
+      carrier: order.carrier,
     },
-  });
-
-  return { status, eventsCount: events.length };
+    result
+  );
 }
 
 // ---------------------------------------------------------------------------
 // Auto-import: scan the orders table for ALL orders with tracking numbers
-// and create TrackingOrder records. iMile/Injaz get auto-status-fetching;
-// other carriers are listed as OTHER with the delivery company name.
+// and create TrackingOrder records.
 // ---------------------------------------------------------------------------
 
 export async function syncTrackingFromOrders() {
@@ -425,22 +327,47 @@ export async function syncTrackingFromOrders() {
 
   let imported = 0;
   let skipped = 0;
+  let updated = 0;
 
   for (const order of orders) {
     if (!order.trackingNumber) continue;
     const tn = order.trackingNumber.trim();
     if (!tn) { skipped++; continue; }
 
+    const carrier = detectCarrier(tn) ?? TrackingCarrier.OTHER;
+    const carrierName = carrierDisplayName(carrier, order.deliveryCompany);
+
     const existing = await prisma.trackingOrder.findUnique({
       where: { trackingNumber: tn },
     });
     if (existing) {
-      skipped++;
+      const carrierChanged =
+        existing.carrier === TrackingCarrier.OTHER &&
+        carrier !== TrackingCarrier.OTHER;
+      const needsUpdate =
+        carrierChanged ||
+        existing.customerName !== order.customerName ||
+        existing.customerPhone !== order.customerPhone ||
+        existing.productName !== order.productName ||
+        existing.orderId !== order.id;
+      if (needsUpdate) {
+        await prisma.trackingOrder.update({
+          where: { id: existing.id },
+          data: {
+            ...(carrierChanged ? { carrier, carrierName } : {}),
+            customerName: order.customerName,
+            customerPhone: order.customerPhone,
+            productName: order.productName,
+            codCreatedAt: order.codCreatedAt,
+            orderId: order.id,
+          },
+        });
+        updated++;
+      } else {
+        skipped++;
+      }
       continue;
     }
-
-    const carrier = detectCarrier(tn) ?? TrackingCarrier.OTHER;
-    const carrierName = carrierDisplayName(carrier, order.deliveryCompany);
 
     await prisma.trackingOrder.create({
       data: {
@@ -457,52 +384,472 @@ export async function syncTrackingFromOrders() {
     imported++;
   }
 
-  return { imported, skipped, totalScanned: orders.length };
+  return { imported, skipped, updated, totalScanned: orders.length };
 }
 
 // ---------------------------------------------------------------------------
-// Refresh all active tracking orders
+// Re-classify OTHER tracking orders using improved carrier detection
 // ---------------------------------------------------------------------------
 
-export async function refreshAllTracking() {
-  const activeOrders = await prisma.trackingOrder.findMany({
-    where: {
-      status: {
-        notIn: [
-          TrackingStatus.DELIVERED,
-          TrackingStatus.RETURNED,
-        ],
-      },
-    },
+export async function reclassifyOtherOrders() {
+  const otherOrders = await prisma.trackingOrder.findMany({
+    where: { carrier: TrackingCarrier.OTHER },
   });
 
-  const results: Array<{
-    id: string;
-    trackingNumber: string;
-    status: string;
-    eventsCount: number;
-    error?: string;
-  }> = [];
+  let reclassified = 0;
+  for (const order of otherOrders) {
+    const newCarrier = detectCarrier(order.trackingNumber);
+    if (newCarrier && newCarrier !== TrackingCarrier.OTHER) {
+      const newCarrierName = carrierDisplayName(newCarrier, null);
+      await prisma.trackingOrder.update({
+        where: { id: order.id },
+        data: { carrier: newCarrier, carrierName: newCarrierName },
+      });
+      reclassified++;
+    }
+  }
 
-  for (const order of activeOrders) {
-    try {
-      const result = await refreshTracking(order.id);
+  return { reclassified, totalScanned: otherOrders.length };
+}
+
+// ---------------------------------------------------------------------------
+// Bulk refresh — 4 concurrent worker pools.
+//
+// Pool topology (matches the user-requested rewrite):
+//   - imile + jte SHARE a single 4tracking.net pool: 5 workers, each pulling
+//     10-number chunks off a shared queue.
+//   - jdw runs its own 5-worker pool on JD Logistics' bulk endpoint, also
+//     10-number chunks.
+//   - injaz runs its own 5-worker pool on the per-number HTML scraper.
+//   - All 4 pools start concurrently via Promise.all.
+//
+// Each per-tracking-number outcome is persisted via applyTrackingResult().
+// The TrackingOrder.lastCheckedAt always advances even on error so the next
+// cron tick doesn't re-pick the same failed orders first. iMile orders that
+// 4tracking can't find fall back to fetchImileTracking() (the working RSA
+// direct API).
+//
+// Bounded by a wall-clock timeout instead of MAX_PER_REQUEST so a single
+// HTTP /api/tracking/refresh call returns within Fly's request timeout while
+// still draining as many orders as possible per call.
+// ---------------------------------------------------------------------------
+
+const FOUR_TRACKING_CHUNK_SIZE = 10;
+const FOUR_TRACKING_CONCURRENCY = 5;
+const JDW_CHUNK_SIZE = 10;
+const JDW_CONCURRENCY = 5;
+const INJAZ_CONCURRENCY = 5;
+const DEFAULT_WALL_CLOCK_MS = 45_000;
+
+interface ActiveOrderRow {
+  id: string;
+  trackingNumber: string;
+  carrier: TrackingCarrier;
+  status: TrackingStatus;
+  latestEvent: string | null;
+  latestEventAt: Date | null;
+}
+
+interface PerCarrierStats {
+  processed: number;
+  eventsAdded: number;
+  errors: number;
+}
+
+function emptyStats(): PerCarrierStats {
+  return { processed: 0, eventsAdded: 0, errors: 0 };
+}
+
+export interface RefreshResultEntry {
+  id: string;
+  trackingNumber: string;
+  status: string;
+  eventsCount: number;
+  error?: string;
+}
+
+export interface RefreshAllResult {
+  results: RefreshResultEntry[];
+  totalProcessed: number;
+  batches: number;
+  remaining: number;
+  totalActive: number;
+  byCarrier: {
+    imile: PerCarrierStats;
+    jte: PerCarrierStats;
+    jdw: PerCarrierStats;
+    injaz: PerCarrierStats;
+  };
+}
+
+export async function refreshAllTracking(
+  limit?: number
+): Promise<RefreshAllResult> {
+  const wallClockMs = DEFAULT_WALL_CLOCK_MS;
+  const startedAt = Date.now();
+  const deadline = startedAt + wallClockMs;
+
+  // Read captcha settings once. If the user hasn't set them we default the
+  // provider to '2captcha' and leave the key null — the JDW provider gives a
+  // clear `captcha_required` error in that case.
+  const captchaSettings = await getSettings([
+    SETTING_KEYS.CAPTCHA_API_KEY,
+    SETTING_KEYS.CAPTCHA_PROVIDER,
+  ]);
+  const captchaApiKey = captchaSettings[SETTING_KEYS.CAPTCHA_API_KEY];
+  const captchaProvider =
+    captchaSettings[SETTING_KEYS.CAPTCHA_PROVIDER] ?? "2captcha";
+
+  const activeFilter = {
+    status: {
+      in: [
+        TrackingStatus.PENDING,
+        TrackingStatus.IN_TRANSIT,
+        TrackingStatus.OUT_FOR_DELIVERY,
+        TrackingStatus.EXCEPTION,
+        TrackingStatus.UNKNOWN,
+      ],
+    },
+    carrier: { not: TrackingCarrier.OTHER },
+  };
+
+  const totalActive = await prisma.trackingOrder.count({ where: activeFilter });
+
+  // Pull a healthy chunk per call but don't try to do everything at once.
+  // The UI loops until remaining===0 anyway, and the wall-clock guard above
+  // ensures we never exceed Fly's request timeout. A `limit` argument from
+  // a caller (e.g. cron) overrides the default cap.
+  const take = limit ?? 500;
+  const activeOrders = (await prisma.trackingOrder.findMany({
+    where: activeFilter,
+    orderBy: [{ lastCheckedAt: "asc" }, { createdAt: "asc" }],
+    take,
+    select: {
+      id: true,
+      trackingNumber: true,
+      carrier: true,
+      status: true,
+      latestEvent: true,
+      latestEventAt: true,
+    },
+  })) as ActiveOrderRow[];
+
+  // Group by carrier into 4 buckets.
+  const buckets = {
+    imile: [] as ActiveOrderRow[],
+    jte: [] as ActiveOrderRow[],
+    jdw: [] as ActiveOrderRow[],
+    injaz: [] as ActiveOrderRow[],
+  };
+  for (const o of activeOrders) {
+    if (o.carrier === TrackingCarrier.IMILE) buckets.imile.push(o);
+    else if (o.carrier === TrackingCarrier.JTE) buckets.jte.push(o);
+    else if (o.carrier === TrackingCarrier.JDW) buckets.jdw.push(o);
+    else if (o.carrier === TrackingCarrier.INJAZ) buckets.injaz.push(o);
+  }
+
+  const results: RefreshResultEntry[] = [];
+  const byCarrier = {
+    imile: emptyStats(),
+    jte: emptyStats(),
+    jdw: emptyStats(),
+    injaz: emptyStats(),
+  };
+
+  // Track how many chunks were dispatched in total — surfaced as `batches`
+  // for backward compatibility with the existing /api response.
+  let totalChunks = 0;
+
+  const recordOutcome = (
+    order: ActiveOrderRow,
+    outcome:
+      | { ok: true; status: TrackingStatus; eventsCount: number; error?: string }
+      | { ok: false; error: string }
+  ) => {
+    const carrierKey: keyof typeof byCarrier =
+      order.carrier === TrackingCarrier.IMILE
+        ? "imile"
+        : order.carrier === TrackingCarrier.JTE
+        ? "jte"
+        : order.carrier === TrackingCarrier.JDW
+        ? "jdw"
+        : "injaz";
+    if (outcome.ok) {
+      byCarrier[carrierKey].processed += 1;
+      byCarrier[carrierKey].eventsAdded += outcome.eventsCount;
+      if (outcome.error) byCarrier[carrierKey].errors += 1;
       results.push({
         id: order.id,
         trackingNumber: order.trackingNumber,
-        status: result.status,
-        eventsCount: result.eventsCount,
+        status: outcome.status,
+        eventsCount: outcome.eventsCount,
+        ...(outcome.error ? { error: outcome.error } : {}),
       });
-    } catch (err) {
+    } else {
+      byCarrier[carrierKey].processed += 1;
+      byCarrier[carrierKey].errors += 1;
       results.push({
         id: order.id,
         trackingNumber: order.trackingNumber,
         status: order.status,
         eventsCount: 0,
-        error: err instanceof Error ? err.message : "Unknown error",
+        error: outcome.error,
       });
     }
-  }
+  };
 
-  return results;
+  // ---------- 4tracking pool: imile + jte share one queue ----------
+  const fourTrackingQueue: ActiveOrderRow[][] = [];
+  const fourTrackingFlat = [...buckets.imile, ...buckets.jte];
+  for (let i = 0; i < fourTrackingFlat.length; i += FOUR_TRACKING_CHUNK_SIZE) {
+    fourTrackingQueue.push(
+      fourTrackingFlat.slice(i, i + FOUR_TRACKING_CHUNK_SIZE)
+    );
+  }
+  totalChunks += fourTrackingQueue.length;
+
+  const fourTrackingPool = drainQueue(
+    fourTrackingQueue,
+    FOUR_TRACKING_CONCURRENCY,
+    deadline,
+    async (chunk) => {
+      const numbers = chunk.map((o) => o.trackingNumber);
+      let map: Map<string, ProviderResult>;
+      try {
+        map = await fetch4TrackingBatch(numbers);
+      } catch (err) {
+        const detail = err instanceof Error ? err.message : "fetch_failed";
+        for (const o of chunk) {
+          await applyTrackingResult(
+            {
+              orderId: o.id,
+              trackingNumber: o.trackingNumber,
+              currentLatestEvent: o.latestEvent,
+              currentLatestEventAt: o.latestEventAt,
+              carrier: o.carrier,
+            },
+            { events: [], rawStatus: null, error: `fourtracking_error:${detail}` }
+          );
+          recordOutcome(o, { ok: false, error: detail });
+        }
+        return;
+      }
+
+      for (const o of chunk) {
+        let result = map.get(o.trackingNumber) ?? {
+          events: [],
+          rawStatus: null,
+          error: "not_found_on_4tracking",
+        };
+
+        // iMile fallback: when 4tracking can't find or is blocked, retry on
+        // iMile's RSA direct API. JTE has no equivalent fallback in this
+        // task — its rows simply remain unupdated this tick (the error gets
+        // recorded in TrackingEvent.rawData for debuggability).
+        if (
+          o.carrier === TrackingCarrier.IMILE &&
+          result.events.length === 0 &&
+          (result.error === "not_found_on_4tracking" ||
+            result.error === "fourtracking_blocked")
+        ) {
+          try {
+            result = await fetchImileTracking(o.trackingNumber);
+          } catch (err) {
+            const detail = err instanceof Error ? err.message : "fetch_failed";
+            result = {
+              events: [],
+              rawStatus: null,
+              error: `imile_fallback_error:${detail}`,
+            };
+          }
+        }
+
+        try {
+          const persisted = await applyTrackingResult(
+            {
+              orderId: o.id,
+              trackingNumber: o.trackingNumber,
+              currentLatestEvent: o.latestEvent,
+              currentLatestEventAt: o.latestEventAt,
+              carrier: o.carrier,
+            },
+            result
+          );
+          recordOutcome(o, {
+            ok: true,
+            status: persisted.status,
+            eventsCount: persisted.eventsCount,
+            error: result.error,
+          });
+        } catch (err) {
+          const detail = err instanceof Error ? err.message : "apply_failed";
+          recordOutcome(o, { ok: false, error: detail });
+        }
+      }
+    }
+  );
+
+  // ---------- JDW pool ----------
+  const jdwQueue: ActiveOrderRow[][] = [];
+  for (let i = 0; i < buckets.jdw.length; i += JDW_CHUNK_SIZE) {
+    jdwQueue.push(buckets.jdw.slice(i, i + JDW_CHUNK_SIZE));
+  }
+  totalChunks += jdwQueue.length;
+
+  const jdwPool = drainQueue(
+    jdwQueue,
+    JDW_CONCURRENCY,
+    deadline,
+    async (chunk) => {
+      const numbers = chunk.map((o) => o.trackingNumber);
+      let map: Map<string, ProviderResult>;
+      try {
+        map = await fetchJdwBulk(numbers, {
+          captchaApiKey,
+          captchaProvider,
+        });
+      } catch (err) {
+        const detail = err instanceof Error ? err.message : "fetch_failed";
+        for (const o of chunk) {
+          await applyTrackingResult(
+            {
+              orderId: o.id,
+              trackingNumber: o.trackingNumber,
+              currentLatestEvent: o.latestEvent,
+              currentLatestEventAt: o.latestEventAt,
+              carrier: o.carrier,
+            },
+            { events: [], rawStatus: null, error: `jdw_error:${detail}` }
+          );
+          recordOutcome(o, { ok: false, error: detail });
+        }
+        return;
+      }
+
+      for (const o of chunk) {
+        const result = map.get(o.trackingNumber) ?? {
+          events: [],
+          rawStatus: null,
+          error: "not_found_on_jdw",
+        };
+        try {
+          const persisted = await applyTrackingResult(
+            {
+              orderId: o.id,
+              trackingNumber: o.trackingNumber,
+              currentLatestEvent: o.latestEvent,
+              currentLatestEventAt: o.latestEventAt,
+              carrier: o.carrier,
+            },
+            result
+          );
+          recordOutcome(o, {
+            ok: true,
+            status: persisted.status,
+            eventsCount: persisted.eventsCount,
+            error: result.error,
+          });
+        } catch (err) {
+          const detail = err instanceof Error ? err.message : "apply_failed";
+          recordOutcome(o, { ok: false, error: detail });
+        }
+      }
+    }
+  );
+
+  // ---------- Injaz pool: 5 workers, one number at a time ----------
+  // We chunk to size 1 so the pool drives 5 concurrent single-number scrapes.
+  const injazQueue: ActiveOrderRow[][] = buckets.injaz.map((o) => [o]);
+  totalChunks += injazQueue.length;
+
+  const injazPool = drainQueue(
+    injazQueue,
+    INJAZ_CONCURRENCY,
+    deadline,
+    async (chunk) => {
+      for (const o of chunk) {
+        let result: ProviderResult;
+        try {
+          result = await fetchInjazTracking(o.trackingNumber);
+        } catch (err) {
+          const detail = err instanceof Error ? err.message : "fetch_failed";
+          result = { events: [], rawStatus: null, error: `injaz_error:${detail}` };
+        }
+        try {
+          const persisted = await applyTrackingResult(
+            {
+              orderId: o.id,
+              trackingNumber: o.trackingNumber,
+              currentLatestEvent: o.latestEvent,
+              currentLatestEventAt: o.latestEventAt,
+              carrier: o.carrier,
+            },
+            result
+          );
+          recordOutcome(o, {
+            ok: true,
+            status: persisted.status,
+            eventsCount: persisted.eventsCount,
+            error: result.error,
+          });
+        } catch (err) {
+          const detail = err instanceof Error ? err.message : "apply_failed";
+          recordOutcome(o, { ok: false, error: detail });
+        }
+      }
+    }
+  );
+
+  // Run all 4 pools concurrently. Each pool drains its own queue with its
+  // own worker count. The shared deadline + applyTrackingResult writes mean
+  // the orchestration is naturally back-pressured by Postgres latency.
+  await Promise.all([fourTrackingPool, jdwPool, injazPool]);
+
+  const totalProcessed = results.length;
+  const remaining = Math.max(0, totalActive - totalProcessed);
+
+  return {
+    results,
+    totalProcessed,
+    batches: totalChunks,
+    remaining,
+    totalActive,
+    byCarrier,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Internal: drain a queue of chunks with a fixed concurrency, respecting a
+// shared wall-clock deadline. Each worker pulls the next chunk off the queue
+// and stops when (a) the queue is empty or (b) the deadline has passed.
+// ---------------------------------------------------------------------------
+
+async function drainQueue<T>(
+  queue: T[],
+  concurrency: number,
+  deadlineMs: number,
+  handler: (chunk: T) => Promise<void>
+): Promise<void> {
+  if (queue.length === 0) return;
+  const workers = Array.from(
+    { length: Math.min(concurrency, queue.length) },
+    async () => {
+      while (true) {
+        if (Date.now() > deadlineMs) return;
+        const next = queue.shift();
+        if (!next) return;
+        try {
+          await handler(next);
+        } catch (err) {
+          // The handler is responsible for recording per-chunk failures.
+          // This catch is a safety net for unexpected throws.
+          console.warn(
+            "[tracking-refresh] worker error",
+            err instanceof Error ? err.message : err
+          );
+        }
+      }
+    }
+  );
+  await Promise.all(workers);
 }

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getAuthUser } from "@/lib/auth";
-import { refreshAllTracking } from "@/lib/tracking";
+import { refreshAllTracking, reclassifyOtherOrders } from "@/lib/tracking";
 
 export async function POST(request: NextRequest) {
   const user = getAuthUser(request);
@@ -8,6 +8,24 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const results = await refreshAllTracking();
-  return NextResponse.json({ results });
+  // Re-classify OTHER orders first so they can be tracked by carrier APIs
+  const reclassify = await reclassifyOtherOrders();
+
+  const {
+    results,
+    totalProcessed,
+    batches,
+    remaining,
+    totalActive,
+    byCarrier,
+  } = await refreshAllTracking();
+  return NextResponse.json({
+    results,
+    totalProcessed,
+    batches,
+    remaining,
+    totalActive,
+    reclassified: reclassify.reclassified,
+    byCarrier,
+  });
 }

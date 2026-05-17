@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getAuthUser } from "@/lib/auth";
 import { getSetting, setSetting, SETTING_KEYS } from "@/lib/settings";
 import { syncOrders } from "@/lib/sync";
-import { syncTrackingFromOrders } from "@/lib/tracking";
+import { syncTrackingFromOrders, reclassifyOtherOrders } from "@/lib/tracking";
 
 export async function POST(request: NextRequest) {
   const user = getAuthUser(request);
@@ -36,11 +36,16 @@ export async function POST(request: NextRequest) {
     // Sync tracking records from all imported orders
     const trackingResult = await syncTrackingFromOrders();
 
+    // Re-classify OTHER orders with improved carrier detection
+    const reclassifyResult = await reclassifyOtherOrders();
+
     return NextResponse.json({
       ordersFound: syncResult.ordersFound,
       ordersCreated: syncResult.ordersCreated,
       ordersUpdated: syncResult.ordersUpdated,
       trackingImported: trackingResult.imported,
+      trackingUpdated: trackingResult.updated,
+      reclassified: reclassifyResult.reclassified,
       errors: syncResult.errors.length > 0 ? syncResult.errors : undefined,
     });
   } catch (err) {
