@@ -86,10 +86,11 @@ export async function POST(request: NextRequest) {
       variables
     );
 
+    const storedPhone = phone.startsWith("+") ? phone : `+${phone}`;
     const message = await prisma.whatsappMessage.create({
       data: {
         orderId: order.id,
-        phoneNumber: phone,
+        phoneNumber: storedPhone,
         templateName,
         templateLanguage,
         templateVariablesJson: variables,
@@ -110,7 +111,7 @@ export async function POST(request: NextRequest) {
         await prisma.whatsappMessage.create({
           data: {
             orderId,
-            phoneNumber: phone ?? "unknown",
+            phoneNumber: phone ? (phone.startsWith("+") ? phone : `+${phone}`) : "unknown",
             templateName,
             templateLanguage,
             templateVariablesJson: [],

@@ -489,20 +489,31 @@ async function sendAutomationTemplate(
       : undefined
   );
 
-  await prisma.whatsappMessage.create({
-    data: {
-      orderId: order.id,
-      phoneNumber: normalizedPhone,
-      templateName: automation.thenSendTemplateName,
-      templateLanguage,
-      templateVariablesJson: variables,
-      headerImageUrl: headerImage || null,
-      providerMessageId: result.messages?.[0]?.id ?? null,
-      status: "SENT",
-      sentBy: `automation:${automation.id}`,
-      sentAt: new Date(),
-    },
-  });
+  const storedPhone = normalizedPhone.startsWith("+") ? normalizedPhone : `+${normalizedPhone}`;
+  try {
+    await prisma.whatsappMessage.create({
+      data: {
+        orderId: order.id,
+        phoneNumber: storedPhone,
+        templateName: automation.thenSendTemplateName,
+        templateLanguage,
+        templateVariablesJson: variables,
+        headerImageUrl: headerImage || null,
+        providerMessageId: result.messages?.[0]?.id ?? null,
+        status: "SENT",
+        sentBy: `automation:${automation.id}`,
+        sentAt: new Date(),
+      },
+    });
+    console.log(
+      `[automations] recorded outbound message for ${storedPhone} template=${automation.thenSendTemplateName}`
+    );
+  } catch (dbErr) {
+    console.error(
+      `[automations] failed to record outbound message for ${storedPhone}:`,
+      dbErr instanceof Error ? dbErr.message : dbErr
+    );
+  }
 }
 
 /**
