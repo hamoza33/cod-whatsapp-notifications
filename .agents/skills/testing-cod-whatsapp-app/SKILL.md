@@ -1,6 +1,6 @@
 ---
 name: testing-cod-whatsapp-app
-description: Reference knowledge for testing the COD WhatsApp Notifications app — local accounts, webhook HMAC signing pattern, known WABA-vs-PNI gotcha, Devin-tunnel basic-auth limitation, and PR #12 feature testing patterns. Use when verifying changes to /api/cod-network/webhook/*, /api/whatsapp/*, /api/voice-agent/*, or the Settings/Pipeline/Automations/Templates/Products pages.
+description: Reference knowledge for testing the COD WhatsApp Notifications app — local accounts, webhook HMAC signing pattern, known WABA-vs-PNI gotcha, product import dual-schema handling, Devin-tunnel basic-auth limitation, and PR #12 feature testing patterns. Use when verifying changes to /api/cod-network/webhook/*, /api/whatsapp/*, /api/voice-agent/*, /api/products/sync, or the Settings/Pipeline/Automations/Templates/Products pages.
 ---
 
 # Testing the COD WhatsApp Notifications app
@@ -20,6 +20,62 @@ description: Reference knowledge for testing the COD WhatsApp Notifications app 
 - `COD_NETWORK_WEBHOOK_SECRET` — shared secret for HMAC-SHA256 verification of webhooks.
 
 All of these are saved as permanent secrets in Devin's settings; they are surfaced as env vars in the shell and the app reads them via the Settings page (where they get persisted to the DB).
+
+## Product Import: Dual API Schema
+
+The COD Network API has two distinct product endpoints with **different field names**:
+
+| Field | My Products (`/v2/seller/products`) | Drop Products (`/v2/seller/drop-products`) |
+|-------|-------------------------------------|--------------------------------------------|
+| Image | `image_url` or `path_image` | `image` |
+| Price | `price` | `product_cost` |
+| Status | `status.label` | `marketplace_status.label` |
+| Common | `id`, `sku`, `name`, `name_arabic`, `currency`, `description` | Same |
+
+When testing product import changes:
+1. Verify both endpoints are called (check sync response: should show total = My Products + Drop Products)
+2. Verify drop products have images (proves `image` field mapping works)
+3. Verify drop products have prices (proves `product_cost` → `price` mapping works)
+4. Expected counts as of 2026-05: 28 My Products + 65 COD Drop Products = 93 total
+
+### Testing product sync via curl
+
+```bash
+# Login first
+curl -c /tmp/cookies.txt -X POST \
+  https://cod-whatsapp-notifications.fly.dev/api/auth/login \
+  -H 'content-type: application/json' \
+  -d '{"email":"admin@example.com","password":"admin1234"}'
+
+# Trigger sync
+curl -s -b /tmp/cookies.txt -X POST \
+  https://cod-whatsapp-notifications.fly.dev/api/products/sync
+# Expected: {"success":true,"fetched":93,"created":N,"updated":M}
+
+# Verify products loaded
+curl -s -b /tmp/cookies.txt \
+  'https://cod-whatsapp-notifications.fly.dev/api/products?pageSize=500' | jq '.pagination'
+# Expected: {"total":93}
+```
+
+### Common pitfall: Prisma schema vs DB mismatch
+
+If you see "Unexpected end of JSON input" on the Products page, Settings page, or other pages, it might mean the Prisma schema declares columns that don't exist in the actual database. Check:
+1. Compare `prisma/schema.prisma` model fields against the migration SQL files in `prisma/migrations/`
+2. If fields exist in the schema but not in any migration's `CREATE TABLE` or `ALTER TABLE`, a new migration is needed
+3. Run `npx prisma migrate dev --name fix_missing_columns` to generate and apply
+
+### COD Network API pagination
+
+The API ignores the `per_page` parameter and always returns 10 items per page. The sync code handles this via `pagination.current_page < pagination.total_pages` loop. Don't be alarmed if `per_page=100` still returns 10 items — it's an API-side limitation.
+
+## AI Agent Toggle Testing
+
+The AI Agent toggle on product cards uses `PATCH /api/products/:id` with `{"aiAgentEnabled": true/false}`. To test:
+1. Navigate to Products page, find any product card
+2. Click the toggle — should change visually (gray → blue)
+3. Navigate away and back — toggle state should persist
+4. Via curl: `curl -s -b /tmp/cookies.txt -X PATCH .../api/products/<id> -H 'content-type: application/json' -d '{"aiAgentEnabled":true}'`
 
 ## Webhook HMAC-SHA256 signing pattern (synthetic test)
 
@@ -75,6 +131,16 @@ The real WABA ID lives in **Meta Business Manager → WhatsApp Manager → API S
 
 See the `testing-cod-whatsapp` skill for login + curl patterns.
 
+Or use the Pipeline page: click a pending order → Send WhatsApp → pick the template → send.
+
+Or via curl:
+```bash
+curl -s -b /tmp/cookies.txt -X POST \
+  https://cod-whatsapp-notifications.fly.dev/api/whatsapp/send \
+  -H 'content-type: application/json' \
+  -d '{"phone":"+212690415194","templateName":"hello_world","languageCode":"en_US","bodyVariables":[]}'
+```
+
 ## Testing Call Agent column (Pipeline)
 
 The Call Agent column groups orders where `callAgentQueued = true`. To test:
@@ -84,6 +150,8 @@ The Call Agent column groups orders where `callAgentQueued = true`. To test:
 3. Refresh `/pipeline` and verify the card appears in the purple "CALL AGENT" column
 4. **Important**: After PATCH, you may need to click the Refresh button on the pipeline page to force a client-side data refetch. The page might show stale cached data.
 5. Revert with `{"callAgentQueued": false}` after testing
+
+For scripted testing, use PATCH endpoint directly (HTML5 drag-and-drop cannot be reliably scripted in headless environments — see testing-cod-whatsapp skill for details).
 
 ## Testing multi-product images on pipeline cards
 
