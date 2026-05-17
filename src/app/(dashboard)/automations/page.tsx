@@ -22,17 +22,29 @@ type OrderStatus =
   | "DELIVERED"
   | "RETURNED"
   | "CANCELLED"
-  | "UNKNOWN";
+  | "UNKNOWN"
+  | "NEW"
+  | "NO_REPLY"
+  | "WRONG"
+  | "EXPIRED"
+  | "CALL_LATER"
+  | "CANCELLED_PRICE";
 
 const STATUSES: OrderStatus[] = [
+  "NEW",
   "PENDING",
   "CONFIRMED",
   "PROCESSING",
+  "CALL_LATER",
+  "NO_REPLY",
   "SHIPPED",
   "OUT_FOR_DELIVERY",
   "DELIVERED",
   "RETURNED",
   "CANCELLED",
+  "CANCELLED_PRICE",
+  "WRONG",
+  "EXPIRED",
   "UNKNOWN",
 ];
 
@@ -51,15 +63,24 @@ const VARIABLE_TOKENS = [
   { token: "{order_id}", label: "Order ID" },
   { token: "{lead_id}", label: "Lead ID" },
   { token: "{delivery_company}", label: "Carrier" },
+  { token: "{tracking_status}", label: "Tracking Status" },
 ] as const;
 
 interface Automation {
   id: string;
   name: string;
   isEnabled: boolean;
+  autoRun: boolean;
   whenStatusEquals: OrderStatus | null;
   andProductContains: string | null;
   andProductDoesNotContain: string | null;
+  andPhoneStartsWith: string | null;
+  andTrackingCondition: string | null;
+  andCityContains: string | null;
+  andCustomerNameContains: string | null;
+  andMinPrice: string | null;
+  andMaxPrice: string | null;
+  andTrackingStatusContains: string | null;
   thenMoveToStatus: OrderStatus | null;
   thenSendTemplateName: string | null;
   thenSendTemplateLanguage: string | null;
@@ -101,6 +122,7 @@ export default function AutomationsPage() {
   const [automations, setAutomations] = useState<Automation[]>([]);
   const [templates, setTemplates] = useState<TemplateInfo[]>([]);
   const [products, setProducts] = useState<ProductInfo[]>([]);
+  const [sampleValues, setSampleValues] = useState<Record<string, string | null>>({});
   const [loading, setLoading] = useState(true);
   const [showCreate, setShowCreate] = useState(false);
   const [toast, setToast] = useState<{ kind: "success" | "error"; text: string } | null>(null);
@@ -141,12 +163,40 @@ export default function AutomationsPage() {
     }
   }, []);
 
+  const fetchSampleValues = useCallback(async () => {
+    try {
+      const data = await api.get<{ examples: Record<string, string | null> }>(
+        "/automations/sample-values"
+      );
+      setSampleValues(data.examples);
+    } catch {
+      // Sample values are optional — chips still work without examples.
+    }
+  }, []);
+
+  const toggleAutoRun = async (automationId: string, currentAutoRun: boolean) => {
+    const newVal = !currentAutoRun;
+    setAutomations((prev) =>
+      prev.map((a) => (a.id === automationId ? { ...a, autoRun: newVal } : a))
+    );
+    try {
+      await api.patch(`/automations/${automationId}`, { autoRun: newVal });
+      showToast("success", `Auto-run ${newVal ? "enabled" : "disabled"}`);
+    } catch {
+      setAutomations((prev) =>
+        prev.map((a) => (a.id === automationId ? { ...a, autoRun: currentAutoRun } : a))
+      );
+      showToast("error", "Failed to update auto-run");
+    }
+  };
+
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     fetchAutomations();
     fetchTemplates();
     fetchProducts();
-  }, [fetchAutomations, fetchTemplates, fetchProducts]);
+    fetchSampleValues();
+  }, [fetchAutomations, fetchTemplates, fetchProducts, fetchSampleValues]);
 
   return (
     <div className="max-w-5xl">
@@ -162,13 +212,15 @@ export default function AutomationsPage() {
             status — via sync, webhook, or manual drag in the Pipeline.
           </p>
         </div>
-        <button
-          onClick={() => setShowCreate((v) => !v)}
-          className="flex items-center gap-2 px-3 py-2 bg-blue-600 text-white rounded-md text-sm font-medium hover:bg-blue-700"
-        >
-          <Plus size={16} />
-          New Automation
-        </button>
+        <div className="flex items-center gap-3">
+          <button
+            onClick={() => setShowCreate((v) => !v)}
+            className="flex items-center gap-2 px-3 py-2 bg-blue-600 text-white rounded-md text-sm font-medium hover:bg-blue-700"
+          >
+            <Plus size={16} />
+            New Automation
+          </button>
+        </div>
       </div>
 
       {toast && (
@@ -188,6 +240,7 @@ export default function AutomationsPage() {
           mode="create"
           templates={templates}
           products={products}
+          sampleValues={sampleValues}
           onCancel={() => setShowCreate(false)}
           onSaved={() => {
             setShowCreate(false);
@@ -218,8 +271,10 @@ export default function AutomationsPage() {
               automation={a}
               templates={templates}
               products={products}
+              sampleValues={sampleValues}
               onChange={fetchAutomations}
               onToast={showToast}
+              onToggleAutoRun={toggleAutoRun}
             />
           ))}
         </div>
@@ -233,6 +288,13 @@ interface FormState {
   whenStatus: string;
   andProduct: string;
   andNotProduct: string;
+  andPhoneStartsWith: string;
+  andTrackingCondition: string;
+  andCityContains: string;
+  andCustomerNameContains: string;
+  andMinPrice: string;
+  andMaxPrice: string;
+  andTrackingStatusContains: string;
   thenMoveTo: string;
   thenSendTemplate: string;
   thenSendTemplateLanguage: string;
@@ -247,6 +309,13 @@ function buildInitialState(automation?: Automation): FormState {
     whenStatus: automation?.whenStatusEquals ?? "",
     andProduct: automation?.andProductContains ?? "",
     andNotProduct: automation?.andProductDoesNotContain ?? "",
+    andPhoneStartsWith: automation?.andPhoneStartsWith ?? "",
+    andTrackingCondition: automation?.andTrackingCondition ?? "",
+    andCityContains: automation?.andCityContains ?? "",
+    andCustomerNameContains: automation?.andCustomerNameContains ?? "",
+    andMinPrice: automation?.andMinPrice ?? "",
+    andMaxPrice: automation?.andMaxPrice ?? "",
+    andTrackingStatusContains: automation?.andTrackingStatusContains ?? "",
     thenMoveTo: automation?.thenMoveToStatus ?? "",
     thenSendTemplate: automation?.thenSendTemplateName ?? "",
     thenSendTemplateLanguage: automation?.thenSendTemplateLanguage ?? "",
@@ -263,6 +332,7 @@ function AutomationForm({
   automation,
   templates,
   products,
+  sampleValues,
   onCancel,
   onSaved,
   onError,
@@ -271,6 +341,7 @@ function AutomationForm({
   automation?: Automation;
   templates: TemplateInfo[];
   products: ProductInfo[];
+  sampleValues?: Record<string, string | null>;
   onCancel: () => void;
   onSaved: () => void;
   onError: (msg: string) => void;
@@ -333,6 +404,13 @@ function AutomationForm({
         thenSendTemplateVariables: state.templateVariables.slice(0, paramCount),
         thenSendHeaderImageUrl: state.headerImageUrl.trim() || null,
         thenSendOnce: state.thenSendOnce,
+        andPhoneStartsWith: state.andPhoneStartsWith.trim() || null,
+        andTrackingCondition: state.andTrackingCondition || null,
+        andCityContains: state.andCityContains.trim() || null,
+        andCustomerNameContains: state.andCustomerNameContains.trim() || null,
+        andMinPrice: state.andMinPrice.trim() || null,
+        andMaxPrice: state.andMaxPrice.trim() || null,
+        andTrackingStatusContains: state.andTrackingStatusContains.trim() || null,
         ...(mode === "create" ? { isEnabled: false } : {}),
       };
       if (mode === "create") {
@@ -398,6 +476,119 @@ function AutomationForm({
             className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm"
           />
         </Field>
+      </div>
+
+      {/* Advanced Conditions */}
+      <details className="mt-4 border-t border-gray-200 pt-4">
+        <summary className="cursor-pointer text-sm font-medium text-gray-700 hover:text-gray-900 flex items-center gap-1.5">
+          <span>Advanced Conditions</span>
+          <span className="text-xs text-gray-400 font-normal">(phone pattern, tracking, city, price)</span>
+        </summary>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-3">
+          <Field
+            label="...and phone starts with"
+            help="Match orders where customer phone starts with this prefix (e.g. +212, 06, 07)"
+          >
+            <input
+              type="text"
+              value={state.andPhoneStartsWith}
+              onChange={(e) =>
+                setState((s) => ({ ...s, andPhoneStartsWith: e.target.value }))
+              }
+              placeholder="e.g. +212, 06"
+              className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm"
+            />
+          </Field>
+          <Field
+            label="...and tracking number"
+            help="Trigger based on tracking number presence"
+          >
+            <select
+              value={state.andTrackingCondition}
+              onChange={(e) =>
+                setState((s) => ({ ...s, andTrackingCondition: e.target.value }))
+              }
+              className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm"
+            >
+              <option value="">— any (ignore tracking) —</option>
+              <option value="exists">Has tracking number</option>
+              <option value="not_exists">No tracking number</option>
+            </select>
+          </Field>
+          <Field
+            label="...and city contains"
+            help="Match orders where customer city contains this text"
+          >
+            <input
+              type="text"
+              value={state.andCityContains}
+              onChange={(e) =>
+                setState((s) => ({ ...s, andCityContains: e.target.value }))
+              }
+              placeholder="e.g. Casablanca"
+              className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm"
+            />
+          </Field>
+          <Field
+            label="...and customer name contains"
+            help="Match orders where customer name contains this text"
+          >
+            <input
+              type="text"
+              value={state.andCustomerNameContains}
+              onChange={(e) =>
+                setState((s) => ({ ...s, andCustomerNameContains: e.target.value }))
+              }
+              placeholder="optional"
+              className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm"
+            />
+          </Field>
+          <Field
+            label="...and min price"
+            help="Only match orders with price >= this value"
+          >
+            <input
+              type="text"
+              value={state.andMinPrice}
+              onChange={(e) =>
+                setState((s) => ({ ...s, andMinPrice: e.target.value }))
+              }
+              placeholder="e.g. 100"
+              className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm"
+            />
+          </Field>
+          <Field
+            label="...and max price"
+            help="Only match orders with price <= this value"
+          >
+            <input
+              type="text"
+              value={state.andMaxPrice}
+              onChange={(e) =>
+                setState((s) => ({ ...s, andMaxPrice: e.target.value }))
+              }
+              placeholder="e.g. 500"
+              className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm"
+            />
+          </Field>
+          <Field
+            label="...and tracking status contains"
+            help="Match when latest tracking event contains this phrase (e.g. 'location changed', 'out for delivery')"
+          >
+            <input
+              type="text"
+              value={state.andTrackingStatusContains}
+              onChange={(e) =>
+                setState((s) => ({ ...s, andTrackingStatusContains: e.target.value }))
+              }
+              placeholder="e.g. location changed"
+              className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm"
+            />
+          </Field>
+        </div>
+      </details>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
         <Field label="Then move order to status">
           <select
             value={state.thenMoveTo}
@@ -444,6 +635,7 @@ function AutomationForm({
         <TemplatePreview
           template={selectedTemplate}
           variables={state.templateVariables}
+          sampleValues={sampleValues}
           onVariableChange={(idx, value) =>
             setState((s) => {
               const next = [...s.templateVariables];
@@ -562,12 +754,14 @@ function ProductPicker({
 function TemplatePreview({
   template,
   variables,
+  sampleValues,
   onVariableChange,
   headerImageUrl,
   onHeaderImageChange,
 }: {
   template: TemplateInfo;
   variables: string[];
+  sampleValues?: Record<string, string | null>;
   onVariableChange: (idx: number, v: string) => void;
   headerImageUrl: string;
   onHeaderImageChange: (v: string) => void;
@@ -622,6 +816,7 @@ function TemplatePreview({
               key={i}
               index={i + 1}
               value={variables[i] ?? ""}
+              sampleValues={sampleValues}
               onChange={(v) => onVariableChange(i, v)}
             />
           ))}
@@ -654,12 +849,17 @@ function TemplatePreview({
 function VariableSlotRow({
   index,
   value,
+  sampleValues,
   onChange,
 }: {
   index: number;
   value: string;
+  sampleValues?: Record<string, string | null>;
   onChange: (v: string) => void;
 }) {
+  const selectedExample =
+    sampleValues && value in sampleValues ? sampleValues[value] : null;
+
   return (
     <div className="flex items-start gap-2">
       <div className="font-mono text-xs text-gray-500 mt-2 w-12 shrink-0">
@@ -673,22 +873,33 @@ function VariableSlotRow({
           placeholder={`Pick a variable or type a literal value for {{${index}}}`}
           className="w-full px-3 py-1.5 border border-gray-300 rounded-md text-sm"
         />
+        {selectedExample && (
+          <div className="mt-0.5 text-[11px] text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded inline-block">
+            Example: &quot;{selectedExample}&quot;
+          </div>
+        )}
         <div className="mt-1 flex flex-wrap gap-1">
-          {VARIABLE_TOKENS.map((t) => (
-            <button
-              key={t.token}
-              type="button"
-              onClick={() => onChange(t.token)}
-              className={`text-[11px] px-1.5 py-0.5 rounded border ${
-                value === t.token
-                  ? "bg-blue-600 text-white border-blue-600"
-                  : "bg-white text-gray-600 border-gray-300 hover:bg-gray-50"
-              }`}
-              title={t.label}
-            >
-              {t.label}
-            </button>
-          ))}
+          {VARIABLE_TOKENS.map((t) => {
+            const example = sampleValues?.[t.token];
+            const tooltip = example
+              ? `${t.label} — e.g. "${example}"`
+              : t.label;
+            return (
+              <button
+                key={t.token}
+                type="button"
+                onClick={() => onChange(t.token)}
+                className={`text-[11px] px-1.5 py-0.5 rounded border ${
+                  value === t.token
+                    ? "bg-blue-600 text-white border-blue-600"
+                    : "bg-white text-gray-600 border-gray-300 hover:bg-gray-50"
+                }`}
+                title={tooltip}
+              >
+                {t.label}
+              </button>
+            );
+          })}
         </div>
       </div>
     </div>
@@ -724,14 +935,18 @@ function AutomationCard({
   automation,
   templates,
   products,
+  sampleValues,
   onChange,
   onToast,
+  onToggleAutoRun,
 }: {
   automation: Automation;
   templates: TemplateInfo[];
   products: ProductInfo[];
+  sampleValues?: Record<string, string | null>;
   onChange: () => void;
   onToast: (kind: "success" | "error", text: string) => void;
+  onToggleAutoRun: (id: string, currentAutoRun: boolean) => void;
 }) {
   const [preview, setPreview] = useState<PreviewResult | null>(null);
   const [previewing, setPreviewing] = useState(false);
@@ -805,6 +1020,7 @@ function AutomationCard({
         automation={automation}
         templates={templates}
         products={products}
+        sampleValues={sampleValues}
         onCancel={() => setEditing(false)}
         onSaved={() => {
           setEditing(false);
@@ -945,6 +1161,24 @@ function AutomationCard({
           <Zap size={14} />
           Run now
         </button>
+        <div className="ml-auto flex items-center gap-1.5">
+          <span className="text-xs text-gray-500">Auto-run</span>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={automation.autoRun}
+            onClick={() => onToggleAutoRun(automation.id, automation.autoRun)}
+            className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${
+              automation.autoRun ? "bg-green-500" : "bg-gray-300"
+            }`}
+          >
+            <span
+              className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${
+                automation.autoRun ? "translate-x-4" : "translate-x-0.5"
+              }`}
+            />
+          </button>
+        </div>
       </div>
 
       {preview && (

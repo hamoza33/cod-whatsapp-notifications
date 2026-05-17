@@ -78,9 +78,11 @@ export async function syncOrders(
       const defaultCountryCode =
         (await getSetting(SETTING_KEYS.DEFAULT_COUNTRY_CODE)) || "212";
 
+      const shouldSkipAutomations = !!options.skipAutomations;
+
       for (const order of orders) {
         try {
-          await upsertOrder(order, result, defaultCountryCode, !!options.skipAutomations);
+          await upsertOrder(order, result, defaultCountryCode, shouldSkipAutomations);
         } catch (err) {
           const msg =
             err instanceof Error ? err.message : "Unknown error upserting order";
@@ -250,7 +252,7 @@ async function upsertOrder(
 
     if (statusChanged && !skipAutomations) {
       try {
-        await runAutomationsForOrder(existing.id);
+        await runAutomationsForOrder(existing.id, { autoTriggered: true });
       } catch (err) {
         console.error("[sync] automation engine threw", err);
       }
@@ -282,7 +284,7 @@ async function upsertOrder(
 
     if (!skipAutomations) {
       try {
-        await runAutomationsForOrder(created.id);
+        await runAutomationsForOrder(created.id, { autoTriggered: true });
       } catch (err) {
         console.error("[sync] automation engine threw on new order", err);
       }

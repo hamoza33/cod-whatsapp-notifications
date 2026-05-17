@@ -219,7 +219,7 @@ export async function applyWebhookEvent(
   // doesn't 500 the webhook (COD Network would otherwise retry forever).
   if (statusChanged) {
     try {
-      await runAutomationsForOrder(orderRow.id);
+      await runAutomationsForOrder(orderRow.id, { autoTriggered: true });
     } catch (err) {
       console.error("[cod-webhook] automation engine threw", err);
     }

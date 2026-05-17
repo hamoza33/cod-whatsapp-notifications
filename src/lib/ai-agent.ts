@@ -9,6 +9,9 @@ interface OrderContext {
   trackingNumber: string | null;
   customerCity: string | null;
   codNetworkOrderId: string;
+  productPrice: string | null;
+  deliveryCompany: string | null;
+  latestTrackingEvent: string | null;
 }
 
 /**
@@ -62,7 +65,7 @@ export async function handleAiAutoReply(
   }
 
   const orderContext = order
-    ? `\n\nCustomer order context:\n- Name: ${order.customerName || "Unknown"}\n- Product: ${order.productName || "Unknown"}\n- Status: ${order.status}\n- Tracking: ${order.trackingNumber || "N/A"}\n- City: ${order.customerCity || "N/A"}\n- Order ID: ${order.codNetworkOrderId}`
+    ? `\n\nCustomer order context:\n- Name: ${order.customerName || "Unknown"}\n- Product: ${order.productName || "Unknown"}\n- Price: ${order.productPrice || "N/A"}\n- Status: ${order.status}\n- Tracking: ${order.trackingNumber || "N/A"}\n- Latest tracking update: ${order.latestTrackingEvent || "N/A"}\n- Carrier: ${order.deliveryCompany || "N/A"}\n- City: ${order.customerCity || "N/A"}\n- Order ID: ${order.codNetworkOrderId}`
     : "";
 
   // Fetch recent conversation history for context
