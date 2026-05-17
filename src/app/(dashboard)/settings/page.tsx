@@ -82,6 +82,24 @@ export default function SettingsPage() {
     return () => { cancelled = true; };
   }, []);
 
+  // Honor a `#<tab-id>` hash on the URL so deep links from elsewhere in
+  // the app (e.g. the per-row "Captcha key required" pill on /tracking
+  // links to /settings#tracking) land the operator on the right tab
+  // instead of the default "cod" tab. Listening to `hashchange` lets
+  // this work for both initial load and in-page navigation.
+  useEffect(() => {
+    function applyHash() {
+      if (typeof window === "undefined") return;
+      const hash = window.location.hash.slice(1);
+      if (!hash) return;
+      const match = TABS.find((t) => t.id === hash);
+      if (match) setActiveTab(match.id);
+    }
+    applyHash();
+    window.addEventListener("hashchange", applyHash);
+    return () => window.removeEventListener("hashchange", applyHash);
+  }, []);
+
   const handleSave = async (section: string, keys: string[]) => {
     setSaving(true);
     setNotification(null);

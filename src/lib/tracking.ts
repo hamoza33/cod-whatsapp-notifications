@@ -6,7 +6,6 @@ import {
 } from "./settings";
 import { fetchImileTracking } from "./tracking-providers/imile";
 import { fetchInjazTracking } from "./tracking-providers/injaz";
-import { fetch4TrackingBatch } from "./tracking-providers/four-tracking";
 import { fetchJdwBulk } from "./tracking-providers/jdw";
 import type {
   ProviderResult,
@@ -19,21 +18,23 @@ import type {
 
 export { fetchImileTracking } from "./tracking-providers/imile";
 export { fetchInjazTracking } from "./tracking-providers/injaz";
-// Legacy aliases for the JTE + JDW scrapers. The current architecture routes
-// these through 4tracking / JD Logistics bulk endpoints respectively, but
-// these named exports are preserved so a 1-line dispatcher flip restores the
-// per-carrier behavior if the bulk paths regress.
+// Legacy aliases for the JTE + JDW scrapers. JTE is intentionally a
+// manual-only stub: server-side scraping requires Tencent Captcha + a
+// dynamic ofmg.jtjms-sa.com URL that's not viable without a headless
+// browser, so the orchestrator surfaces `jte_manual_only` and the UI
+// renders an "Open in JT website" link per row. JDW still goes through
+// the working JD Logistics bulk endpoint.
+/**
+ * Manual-only stub for JT Express. Server-side tracking is not viable
+ * (Tencent Captcha + dynamic URL); callers MUST treat this as a signal
+ * to render a "Track on jtexpress.me" external link in the UI rather
+ * than retry. Kept as a named export so legacy callers don't break.
+ */
 export async function fetchJteTracking(
   trackingNumber: string
 ): Promise<ProviderResult> {
-  const map = await fetch4TrackingBatch([trackingNumber]);
-  return (
-    map.get(trackingNumber) ?? {
-      events: [],
-      rawStatus: null,
-      error: "not_found_on_4tracking",
-    }
-  );
+  void trackingNumber;
+  return { events: [], rawStatus: null, error: "jte_manual_only" };
 }
 
 export async function fetchJdwTracking(
@@ -65,13 +66,44 @@ export type { ParsedEvent, ProviderResult } from "./tracking-providers/types";
 // ---------------------------------------------------------------------------
 
 export function detectCarrier(
-  trackingNumber: string
+  trackingNumber: string,
+  deliveryCompany?: string | null
 ): TrackingCarrier | null {
-  const tn = trackingNumber.toUpperCase();
+  const tn = trackingNumber.trim().toUpperCase();
   if (/^6[01]\d{11}$/.test(tn)) return TrackingCarrier.IMILE;
   if (tn.startsWith("INJAZ")) return TrackingCarrier.INJAZ;
   if (tn.startsWith("JTE")) return TrackingCarrier.JTE;
   if (tn.startsWith("JDW")) return TrackingCarrier.JDW;
+
+  // Fallback: when the tracking-number prefix isn't recognized, fall back to
+  // the operator-provided delivery-company string from the order. COD
+  // Network exposes this as a free-text label (e.g. "iMile", "Injaz",
+  // "J&T Express", "JD Logistics") so we match case-insensitively on the
+  // common spellings.
+  if (deliveryCompany) {
+    const dc = deliveryCompany.toLowerCase();
+    if (dc.includes("imile")) return TrackingCarrier.IMILE;
+    if (dc.includes("injaz")) return TrackingCarrier.INJAZ;
+    // Match J&T / JT / J&T Express only on a word boundary so labels like
+    // "Future Logistics FJT" or "JT2 Cargo" don't get misclassified as JTE
+    // (which is the manual-only no-fetch path — a misclassification would
+    // permanently park the row at `jte_manual_only`).
+    // Normalize underscores / dots / slashes to spaces before testing so
+    // operator labels like "JT_Express", "JT.Express" or "JT/Express"
+    // aren't masked by the fact that `_` is a JS-regex word character
+    // (so `\b` would not fire between `T` and `_`). After normalization
+    // `\b` correctly fires while `FJT` / `JT2` / `Aramex JTX` still don't.
+    const dcNormalized = dc.replace(/[_./]/g, " ");
+    if (/\bj&?t(?:\s+express)?\b/i.test(dcNormalized))
+      return TrackingCarrier.JTE;
+    if (
+      dc.includes("jdw") ||
+      dc.includes("jingdong") ||
+      dc.includes("jd logistics")
+    )
+      return TrackingCarrier.JDW;
+  }
+
   return null;
 }
 
@@ -111,7 +143,8 @@ async function fetchTrackingByCarrier(
     case TrackingCarrier.INJAZ:
       return fetchInjazTracking(trackingNumber);
     case TrackingCarrier.JTE:
-      return fetchJteTracking(trackingNumber);
+      // JTE is manual-only — see fetchJteTracking() for the full reasoning.
+      return { events: [], rawStatus: null, error: "jte_manual_only" };
     case TrackingCarrier.JDW:
       return fetchJdwTracking(trackingNumber);
     default:
@@ -212,39 +245,14 @@ async function applyTrackingResult(
     });
   }
 
-  // If we got NO real events but the provider reported an error (e.g.
-  // not_found_on_4tracking, captcha_required, fourtracking_blocked), record
-  // it as a single debug TrackingEvent so it's DB-debuggable. We pin the
-  // occurredAt to "now" so a re-run on the same tick collides on the
-  // unique index and won't grow indefinitely.
-  if (events.length === 0 && error) {
-    const debugDescription = `_debug:${error}`;
-    const occurredAt = new Date(Math.floor(Date.now() / 1000) * 1000);
-    try {
-      await prisma.trackingEvent.upsert({
-        where: {
-          trackingOrderId_description_occurredAt: {
-            trackingOrderId: opts.orderId,
-            description: debugDescription,
-            occurredAt,
-          },
-        },
-        create: {
-          trackingOrderId: opts.orderId,
-          status: "DEBUG",
-          description: debugDescription,
-          location: null,
-          occurredAt,
-          rawData: { error } as Prisma.InputJsonValue,
-        },
-        update: {
-          rawData: { error } as Prisma.InputJsonValue,
-        },
-      });
-    } catch {
-      // Non-critical: a transient DB error here shouldn't fail the refresh.
-    }
-  }
+  // NOTE: We previously upserted a `_debug:<error>` TrackingEvent here when
+  // the provider returned no events but did report an error. With
+  // `latestError` now living on the TrackingOrder row itself, that debug
+  // event is duplicate signal that bloats `tracking_events` linearly across
+  // refresh ticks (the unique index only collapses collisions inside the
+  // same wall-clock second) and surfaces in the per-row timeline UI as
+  // unhelpful "_debug:jte_manual_only" entries. The error code is still
+  // persisted via `latestError` below.
 
   const latestEvent = events.length > 0 ? events[0] : null;
 
@@ -254,6 +262,7 @@ async function applyTrackingResult(
       status,
       latestEvent: latestEvent?.description ?? opts.currentLatestEvent,
       latestEventAt: latestEvent?.occurredAt ?? opts.currentLatestEventAt,
+      latestError: error ?? null,
       lastCheckedAt: new Date(),
     },
   });
@@ -279,18 +288,10 @@ export async function refreshTracking(trackingOrderId: string) {
     return { status: order.status, eventsCount: 0 };
   }
 
-  let result = await fetchTrackingByCarrier(order.carrier, order.trackingNumber);
-
-  // iMile fallback: if 4tracking didn't recognize the number (or was blocked
-  // by Cloudflare), retry against iMile's working RSA direct API.
-  if (
-    order.carrier === TrackingCarrier.IMILE &&
-    result.events.length === 0 &&
-    (result.error === "not_found_on_4tracking" ||
-      result.error === "fourtracking_blocked")
-  ) {
-    result = await fetchImileTracking(order.trackingNumber);
-  }
+  const result = await fetchTrackingByCarrier(
+    order.carrier,
+    order.trackingNumber
+  );
 
   return applyTrackingResult(
     {
@@ -334,7 +335,8 @@ export async function syncTrackingFromOrders() {
     const tn = order.trackingNumber.trim();
     if (!tn) { skipped++; continue; }
 
-    const carrier = detectCarrier(tn) ?? TrackingCarrier.OTHER;
+    const carrier =
+      detectCarrier(tn, order.deliveryCompany) ?? TrackingCarrier.OTHER;
     const carrierName = carrierDisplayName(carrier, order.deliveryCompany);
 
     const existing = await prisma.trackingOrder.findUnique({
@@ -391,54 +393,79 @@ export async function syncTrackingFromOrders() {
 // Re-classify OTHER tracking orders using improved carrier detection
 // ---------------------------------------------------------------------------
 
-export async function reclassifyOtherOrders() {
+export async function reclassifyOtherOrders(deadlineMs?: number) {
   const otherOrders = await prisma.trackingOrder.findMany({
     where: { carrier: TrackingCarrier.OTHER },
+    include: {
+      order: {
+        select: { deliveryCompany: true },
+      },
+    },
+    take: RECLASSIFY_TAKE,
   });
 
   let reclassified = 0;
-  for (const order of otherOrders) {
-    const newCarrier = detectCarrier(order.trackingNumber);
+  // Drive the per-row UPDATE through drainQueue with chunk-size 1 so 5
+  // Postgres writes overlap (matching the carrier-pool topology) and so
+  // each worker honours the same wall-clock deadline used by the carrier
+  // pools downstream. Without this, a 1,200-row OTHER bucket can blow
+  // the entire 45 s budget before any pool starts.
+  const queue: typeof otherOrders = [...otherOrders];
+  const effectiveDeadline = deadlineMs ?? Number.POSITIVE_INFINITY;
+  await drainQueue(queue, RECLASSIFY_CONCURRENCY, effectiveDeadline, async (order) => {
+    const deliveryCompany = order.order?.deliveryCompany ?? null;
+    const newCarrier = detectCarrier(order.trackingNumber, deliveryCompany);
     if (newCarrier && newCarrier !== TrackingCarrier.OTHER) {
-      const newCarrierName = carrierDisplayName(newCarrier, null);
+      const newCarrierName = carrierDisplayName(newCarrier, deliveryCompany);
       await prisma.trackingOrder.update({
         where: { id: order.id },
         data: { carrier: newCarrier, carrierName: newCarrierName },
       });
       reclassified++;
     }
-  }
+  });
 
-  return { reclassified, totalScanned: otherOrders.length };
+  const cappedAt = otherOrders.length === RECLASSIFY_TAKE ? RECLASSIFY_TAKE : null;
+  return {
+    reclassified,
+    totalScanned: otherOrders.length,
+    ...(cappedAt !== null ? { cappedAt } : {}),
+  };
 }
 
 // ---------------------------------------------------------------------------
 // Bulk refresh — 4 concurrent worker pools.
 //
-// Pool topology (matches the user-requested rewrite):
-//   - imile + jte SHARE a single 4tracking.net pool: 5 workers, each pulling
-//     10-number chunks off a shared queue.
-//   - jdw runs its own 5-worker pool on JD Logistics' bulk endpoint, also
-//     10-number chunks.
-//   - injaz runs its own 5-worker pool on the per-number HTML scraper.
-//   - All 4 pools start concurrently via Promise.all.
+// Pool topology:
+//   - imile: 5 workers, chunk-size 1, calling fetchImileTracking() per
+//     number against the RSA direct API. (4tracking.net has been removed —
+//     it's a Cloudflare-protected SPA; see four-tracking.ts for details.)
+//   - injaz: 5 workers, chunk-size 1, calling fetchInjazTracking() per
+//     number against the public HTML scraper.
+//   - jdw:   5 workers, chunk-size 10, calling fetchJdwBulk() against the
+//     JD Logistics consumer endpoint (the only true batch endpoint).
+//   - jte:   NO HTTP fetch. JT Express requires Tencent Captcha + a
+//     dynamic ofmg.jtjms-sa.com URL that's not viable without a headless
+//     browser. Each JTE row is persisted with `error: 'jte_manual_only'`
+//     so lastCheckedAt advances and the UI can render an "Open in JT
+//     website" link instead of a broken refresh.
 //
 // Each per-tracking-number outcome is persisted via applyTrackingResult().
 // The TrackingOrder.lastCheckedAt always advances even on error so the next
-// cron tick doesn't re-pick the same failed orders first. iMile orders that
-// 4tracking can't find fall back to fetchImileTracking() (the working RSA
-// direct API).
+// cron tick doesn't re-pick the same failed orders first.
 //
 // Bounded by a wall-clock timeout instead of MAX_PER_REQUEST so a single
 // HTTP /api/tracking/refresh call returns within Fly's request timeout while
 // still draining as many orders as possible per call.
 // ---------------------------------------------------------------------------
 
-const FOUR_TRACKING_CHUNK_SIZE = 10;
-const FOUR_TRACKING_CONCURRENCY = 5;
+const IMILE_CONCURRENCY = 5;
+const INJAZ_CONCURRENCY = 5;
+const JTE_CONCURRENCY = 5;
 const JDW_CHUNK_SIZE = 10;
 const JDW_CONCURRENCY = 5;
-const INJAZ_CONCURRENCY = 5;
+const RECLASSIFY_CONCURRENCY = 5;
+const RECLASSIFY_TAKE = 250;
 const DEFAULT_WALL_CLOCK_MS = 45_000;
 
 interface ActiveOrderRow {
@@ -474,6 +501,7 @@ export interface RefreshAllResult {
   batches: number;
   remaining: number;
   totalActive: number;
+  reclassified: number;
   byCarrier: {
     imile: PerCarrierStats;
     jte: PerCarrierStats;
@@ -488,6 +516,15 @@ export async function refreshAllTracking(
   const wallClockMs = DEFAULT_WALL_CLOCK_MS;
   const startedAt = Date.now();
   const deadline = startedAt + wallClockMs;
+
+  // Run reclassification BEFORE the findMany of active orders, but inside
+  // the same wall-clock deadline. This prevents a large OTHER bucket
+  // (e.g. ~1,200 stuck rows) from pushing the /api/tracking/refresh route
+  // past Fly's request timeout before the deadline even begins counting.
+  // reclassifyOtherOrders honours the deadline internally via drainQueue
+  // and is also row-capped via RECLASSIFY_TAKE so a single tick can never
+  // burn the entire budget on reclassification.
+  const reclassifyResult = await reclassifyOtherOrders(deadline);
 
   // Read captcha settings once. If the user hasn't set them we default the
   // provider to '2captcha' and leave the key null — the JDW provider gives a
@@ -598,72 +635,30 @@ export async function refreshAllTracking(
     }
   };
 
-  // ---------- 4tracking pool: imile + jte share one queue ----------
-  const fourTrackingQueue: ActiveOrderRow[][] = [];
-  const fourTrackingFlat = [...buckets.imile, ...buckets.jte];
-  for (let i = 0; i < fourTrackingFlat.length; i += FOUR_TRACKING_CHUNK_SIZE) {
-    fourTrackingQueue.push(
-      fourTrackingFlat.slice(i, i + FOUR_TRACKING_CHUNK_SIZE)
-    );
-  }
-  totalChunks += fourTrackingQueue.length;
+  // ---------- iMile pool: 5 workers, one number at a time ----------
+  // We chunk to size 1 so the pool drives 5 concurrent single-number calls
+  // against the iMile RSA direct API. (4tracking.net has been removed; see
+  // four-tracking.ts for the reason.)
+  const imileQueue: ActiveOrderRow[][] = buckets.imile.map((o) => [o]);
+  totalChunks += imileQueue.length;
 
-  const fourTrackingPool = drainQueue(
-    fourTrackingQueue,
-    FOUR_TRACKING_CONCURRENCY,
+  const imilePool = drainQueue(
+    imileQueue,
+    IMILE_CONCURRENCY,
     deadline,
     async (chunk) => {
-      const numbers = chunk.map((o) => o.trackingNumber);
-      let map: Map<string, ProviderResult>;
-      try {
-        map = await fetch4TrackingBatch(numbers);
-      } catch (err) {
-        const detail = err instanceof Error ? err.message : "fetch_failed";
-        for (const o of chunk) {
-          await applyTrackingResult(
-            {
-              orderId: o.id,
-              trackingNumber: o.trackingNumber,
-              currentLatestEvent: o.latestEvent,
-              currentLatestEventAt: o.latestEventAt,
-              carrier: o.carrier,
-            },
-            { events: [], rawStatus: null, error: `fourtracking_error:${detail}` }
-          );
-          recordOutcome(o, { ok: false, error: detail });
-        }
-        return;
-      }
-
       for (const o of chunk) {
-        let result = map.get(o.trackingNumber) ?? {
-          events: [],
-          rawStatus: null,
-          error: "not_found_on_4tracking",
-        };
-
-        // iMile fallback: when 4tracking can't find or is blocked, retry on
-        // iMile's RSA direct API. JTE has no equivalent fallback in this
-        // task — its rows simply remain unupdated this tick (the error gets
-        // recorded in TrackingEvent.rawData for debuggability).
-        if (
-          o.carrier === TrackingCarrier.IMILE &&
-          result.events.length === 0 &&
-          (result.error === "not_found_on_4tracking" ||
-            result.error === "fourtracking_blocked")
-        ) {
-          try {
-            result = await fetchImileTracking(o.trackingNumber);
-          } catch (err) {
-            const detail = err instanceof Error ? err.message : "fetch_failed";
-            result = {
-              events: [],
-              rawStatus: null,
-              error: `imile_fallback_error:${detail}`,
-            };
-          }
+        let result: ProviderResult;
+        try {
+          result = await fetchImileTracking(o.trackingNumber);
+        } catch (err) {
+          const detail = err instanceof Error ? err.message : "fetch_failed";
+          result = {
+            events: [],
+            rawStatus: null,
+            error: `imile_error:${detail}`,
+          };
         }
-
         try {
           const persisted = await applyTrackingResult(
             {
@@ -680,6 +675,57 @@ export async function refreshAllTracking(
             status: persisted.status,
             eventsCount: persisted.eventsCount,
             error: result.error,
+          });
+        } catch (err) {
+          const detail = err instanceof Error ? err.message : "apply_failed";
+          recordOutcome(o, { ok: false, error: detail });
+        }
+      }
+    }
+  );
+
+  // ---------- JTE pool: NOT FETCHED — manual-only stub, parallelized ----------
+  // We persist a `jte_manual_only` error so lastCheckedAt advances and the
+  // UI can surface an external "Open in JT website" link per row. Counted
+  // under byCarrier.jte.processed but NOT under byCarrier.jte.errors — it's
+  // an intentional state, not a failure. Even though there's no HTTP fetch,
+  // the per-row Postgres write benefits from concurrency: with up to 500
+  // rows per tick a serial loop can otherwise dominate the wall-clock
+  // budget and starve the other carriers.
+  const jteQueue: ActiveOrderRow[][] = buckets.jte.map((o) => [o]);
+  totalChunks += jteQueue.length;
+
+  const jtePool = drainQueue(
+    jteQueue,
+    JTE_CONCURRENCY,
+    deadline,
+    async (chunk) => {
+      for (const o of chunk) {
+        const result: ProviderResult = {
+          events: [],
+          rawStatus: null,
+          error: "jte_manual_only",
+        };
+        try {
+          const persisted = await applyTrackingResult(
+            {
+              orderId: o.id,
+              trackingNumber: o.trackingNumber,
+              currentLatestEvent: o.latestEvent,
+              currentLatestEventAt: o.latestEventAt,
+              carrier: o.carrier,
+            },
+            result
+          );
+          // Record processed without an error count — see comment above.
+          byCarrier.jte.processed += 1;
+          byCarrier.jte.eventsAdded += persisted.eventsCount;
+          results.push({
+            id: o.id,
+            trackingNumber: o.trackingNumber,
+            status: persisted.status,
+            eventsCount: persisted.eventsCount,
+            error: "jte_manual_only",
           });
         } catch (err) {
           const detail = err instanceof Error ? err.message : "apply_failed";
@@ -803,7 +849,7 @@ export async function refreshAllTracking(
   // Run all 4 pools concurrently. Each pool drains its own queue with its
   // own worker count. The shared deadline + applyTrackingResult writes mean
   // the orchestration is naturally back-pressured by Postgres latency.
-  await Promise.all([fourTrackingPool, jdwPool, injazPool]);
+  await Promise.all([imilePool, injazPool, jdwPool, jtePool]);
 
   const totalProcessed = results.length;
   const remaining = Math.max(0, totalActive - totalProcessed);
@@ -814,6 +860,7 @@ export async function refreshAllTracking(
     batches: totalChunks,
     remaining,
     totalActive,
+    reclassified: reclassifyResult.reclassified,
     byCarrier,
   };
 }

@@ -11,6 +11,12 @@
  * never silently drop. If a number isn't recognized, surface a per-number
  * `error` like `not_found_on_4tracking` / `not_found_on_jdw` so the
  * orchestrator can route the retry path.
+ *
+ * The orchestrator (`applyTrackingResult` in src/lib/tracking.ts) also
+ * persists the `error` string into `TrackingOrder.latestError` so the
+ * user-visible row in the /tracking UI can surface a per-row diagnostic
+ * (e.g. "not_found_on_injaz", "jte_manual_only", "captcha_required") in
+ * addition to the generic status enum.
  */
 
 export interface ParsedEvent {

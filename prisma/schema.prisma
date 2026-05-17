@@ -330,6 +330,7 @@ model TrackingOrder {
   status          TrackingStatus  @default(PENDING)
   latestEvent     String?         @map("latest_event")
   latestEventAt   DateTime?       @map("latest_event_at")
+  latestError     String?         @map("latest_error")
   customerName    String?         @map("customer_name")
   customerPhone   String?         @map("customer_phone")
   productName     String?         @map("product_name")
