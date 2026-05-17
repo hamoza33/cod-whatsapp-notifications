@@ -186,6 +186,10 @@ export async function applyWebhookEvent(
   let created = false;
   let updated = false;
   const statusChanged = !existing || existing.status !== derived;
+  const trackingChanged = existing
+    ? (trackingNumber !== null && trackingNumber !== existing.trackingNumber) ||
+      (rawStatusLabel !== null && rawStatusLabel !== existing.codDeliveryStatus)
+    : false;
 
   if (existing) {
     const updateData: Prisma.OrderUncheckedUpdateInput = {};
@@ -215,9 +219,10 @@ export async function applyWebhookEvent(
     created = true;
   }
 
-  // Fire automation rules. Run in best-effort mode so a single bad rule
-  // doesn't 500 the webhook (COD Network would otherwise retry forever).
-  if (statusChanged) {
+  // Fire automation rules when status OR tracking data changes. Run in
+  // best-effort mode so a single bad rule doesn't 500 the webhook (COD
+  // Network would otherwise retry forever).
+  if (statusChanged || trackingChanged || created) {
     try {
       await runAutomationsForOrder(orderRow.id, { autoTriggered: true });
     } catch (err) {

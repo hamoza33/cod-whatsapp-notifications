@@ -35,6 +35,10 @@ export async function GET(request: NextRequest) {
       (
         SELECT COUNT(*) FROM inbound_messages im2
         WHERE im2.from_phone_number = inbound_messages.from_phone_number
+      ) + (
+        SELECT COUNT(*) FROM whatsapp_messages wm2
+        WHERE REGEXP_REPLACE(wm2.phone_number, '\\D', '', 'g')
+            = REGEXP_REPLACE(inbound_messages.from_phone_number, '\\D', '', 'g')
       ) AS total_messages,
       text AS last_text,
       type AS last_type,

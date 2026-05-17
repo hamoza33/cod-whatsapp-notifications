@@ -226,6 +226,9 @@ async function upsertOrder(
 
   if (existing) {
     const statusChanged = existing.status !== status;
+    const trackingChanged =
+      (trackingNumber && trackingNumber !== existing.trackingNumber) ||
+      (rawStatusLabel && rawStatusLabel !== existing.codDeliveryStatus);
     await prisma.order.update({
       where: { codNetworkOrderId: codOrderId },
       data: {
@@ -250,7 +253,7 @@ async function upsertOrder(
     });
     result.ordersUpdated++;
 
-    if (statusChanged && !skipAutomations) {
+    if ((statusChanged || trackingChanged) && !skipAutomations) {
       try {
         await runAutomationsForOrder(existing.id, { autoTriggered: true });
       } catch (err) {
