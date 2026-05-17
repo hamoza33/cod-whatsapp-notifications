@@ -231,6 +231,11 @@ function stripHtml(html: string): string {
     .trim();
 }
 
+function isArabic(text: string): boolean {
+  const arabicPattern = /[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF]/;
+  return arabicPattern.test(text);
+}
+
 function ProductCard({
   product,
   onUpdate,
@@ -240,8 +245,10 @@ function ProductCard({
 }) {
   const [expanded, setExpanded] = useState(false);
   const [editing, setEditing] = useState(false);
-  const [desc, setDesc] = useState(product.description || "");
+  const plainDesc = stripHtml(product.description || "");
+  const [desc, setDesc] = useState(plainDesc);
   const [saving, setSaving] = useState(false);
+  const descIsArabic = isArabic(plainDesc);
 
   const saveDescription = async () => {
     setSaving(true);
@@ -356,6 +363,7 @@ function ProductCard({
                     value={desc}
                     onChange={(e) => setDesc(e.target.value)}
                     rows={4}
+                    dir={descIsArabic ? "rtl" : "ltr"}
                     className="w-full px-2 py-1.5 border border-gray-300 rounded text-xs focus:outline-none focus:ring-2 focus:ring-blue-500"
                     placeholder="Enter product description..."
                   />
@@ -371,7 +379,7 @@ function ProductCard({
                     <button
                       onClick={() => {
                         setEditing(false);
-                        setDesc(product.description || "");
+                        setDesc(plainDesc);
                       }}
                       className="px-2 py-1 text-xs text-gray-600 hover:text-gray-800"
                     >
@@ -381,8 +389,11 @@ function ProductCard({
                 </div>
               ) : (
                 <div>
-                  <p className="text-xs text-gray-600 whitespace-pre-wrap">
-                    {product.description ? stripHtml(product.description) : "No description available."}
+                  <p
+                    className="text-xs text-gray-600 whitespace-pre-wrap"
+                    dir={descIsArabic ? "rtl" : "ltr"}
+                  >
+                    {plainDesc || "No description available."}
                   </p>
                   <button
                     onClick={() => setEditing(true)}

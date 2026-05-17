@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { refreshAllTracking } from "@/lib/tracking";
+import { refreshAllTracking, reclassifyOtherOrders } from "@/lib/tracking";
 
 export async function GET(request: NextRequest) {
   const authHeader = request.headers.get("authorization");
@@ -8,9 +8,11 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const results = await refreshAllTracking();
+  await reclassifyOtherOrders();
+  const { results, totalProcessed, batches } = await refreshAllTracking();
   return NextResponse.json({
-    refreshed: results.length,
+    refreshed: totalProcessed,
+    batches,
     results,
     nextRunIn: "30 minutes",
   });

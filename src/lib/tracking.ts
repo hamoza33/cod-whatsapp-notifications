@@ -10,9 +10,8 @@ export function detectCarrier(
   trackingNumber: string
 ): TrackingCarrier | null {
   const tn = trackingNumber.toUpperCase();
-  if (tn.startsWith("60")) return TrackingCarrier.IMILE;
-  if (tn.startsWith("INJAZ.") || tn.startsWith("INJAZ"))
-    return TrackingCarrier.INJAZ;
+  if (/^6[01]\d{11}$/.test(tn)) return TrackingCarrier.IMILE;
+  if (tn.startsWith("INJAZ")) return TrackingCarrier.INJAZ;
   if (tn.startsWith("JTE")) return TrackingCarrier.JTE;
   if (tn.startsWith("JDW")) return TrackingCarrier.JDW;
   return null;
@@ -426,21 +425,46 @@ export async function syncTrackingFromOrders() {
   let imported = 0;
   let skipped = 0;
 
+  let updated = 0;
+
   for (const order of orders) {
     if (!order.trackingNumber) continue;
     const tn = order.trackingNumber.trim();
     if (!tn) { skipped++; continue; }
 
+    const carrier = detectCarrier(tn) ?? TrackingCarrier.OTHER;
+    const carrierName = carrierDisplayName(carrier, order.deliveryCompany);
+
     const existing = await prisma.trackingOrder.findUnique({
       where: { trackingNumber: tn },
     });
     if (existing) {
-      skipped++;
+      // Re-detect carrier for orders stuck as OTHER
+      const carrierChanged = existing.carrier === TrackingCarrier.OTHER && carrier !== TrackingCarrier.OTHER;
+      const needsUpdate =
+        carrierChanged ||
+        existing.customerName !== order.customerName ||
+        existing.customerPhone !== order.customerPhone ||
+        existing.productName !== order.productName ||
+        existing.orderId !== order.id;
+      if (needsUpdate) {
+        await prisma.trackingOrder.update({
+          where: { id: existing.id },
+          data: {
+            ...(carrierChanged ? { carrier, carrierName } : {}),
+            customerName: order.customerName,
+            customerPhone: order.customerPhone,
+            productName: order.productName,
+            codCreatedAt: order.codCreatedAt,
+            orderId: order.id,
+          },
+        });
+        updated++;
+      } else {
+        skipped++;
+      }
       continue;
     }
-
-    const carrier = detectCarrier(tn) ?? TrackingCarrier.OTHER;
-    const carrierName = carrierDisplayName(carrier, order.deliveryCompany);
 
     await prisma.trackingOrder.create({
       data: {
@@ -457,23 +481,75 @@ export async function syncTrackingFromOrders() {
     imported++;
   }
 
-  return { imported, skipped, totalScanned: orders.length };
+  return { imported, skipped, updated, totalScanned: orders.length };
 }
 
 // ---------------------------------------------------------------------------
-// Refresh all active tracking orders
+// Re-classify OTHER tracking orders using improved carrier detection
 // ---------------------------------------------------------------------------
 
-export async function refreshAllTracking() {
+export async function reclassifyOtherOrders() {
+  const otherOrders = await prisma.trackingOrder.findMany({
+    where: { carrier: TrackingCarrier.OTHER },
+  });
+
+  let reclassified = 0;
+  for (const order of otherOrders) {
+    const newCarrier = detectCarrier(order.trackingNumber);
+    if (newCarrier && newCarrier !== TrackingCarrier.OTHER) {
+      const newCarrierName = carrierDisplayName(newCarrier, null);
+      await prisma.trackingOrder.update({
+        where: { id: order.id },
+        data: { carrier: newCarrier, carrierName: newCarrierName },
+      });
+      reclassified++;
+    }
+  }
+
+  return { reclassified, totalScanned: otherOrders.length };
+}
+
+// ---------------------------------------------------------------------------
+// Refresh active tracking orders in batches of 10
+// ---------------------------------------------------------------------------
+
+const BATCH_SIZE = 10;
+const MAX_PER_REQUEST = 50; // Process at most 50 orders per HTTP request to avoid timeout
+
+export async function refreshAllTracking(limit?: number) {
+  const take = limit ?? MAX_PER_REQUEST;
+
+  // Count total remaining active orders
+  const totalRemaining = await prisma.trackingOrder.count({
+    where: {
+      status: {
+        in: [
+          TrackingStatus.PENDING,
+          TrackingStatus.IN_TRANSIT,
+          TrackingStatus.OUT_FOR_DELIVERY,
+          TrackingStatus.EXCEPTION,
+          TrackingStatus.UNKNOWN,
+        ],
+      },
+      carrier: { not: TrackingCarrier.OTHER },
+    },
+  });
+
   const activeOrders = await prisma.trackingOrder.findMany({
     where: {
       status: {
-        notIn: [
-          TrackingStatus.DELIVERED,
-          TrackingStatus.RETURNED,
+        in: [
+          TrackingStatus.PENDING,
+          TrackingStatus.IN_TRANSIT,
+          TrackingStatus.OUT_FOR_DELIVERY,
+          TrackingStatus.EXCEPTION,
+          TrackingStatus.UNKNOWN,
         ],
       },
+      carrier: { not: TrackingCarrier.OTHER },
     },
+    orderBy: { lastCheckedAt: "asc" },
+    take,
   });
 
   const results: Array<{
@@ -484,25 +560,47 @@ export async function refreshAllTracking() {
     error?: string;
   }> = [];
 
-  for (const order of activeOrders) {
-    try {
-      const result = await refreshTracking(order.id);
-      results.push({
-        id: order.id,
-        trackingNumber: order.trackingNumber,
-        status: result.status,
-        eventsCount: result.eventsCount,
-      });
-    } catch (err) {
-      results.push({
-        id: order.id,
-        trackingNumber: order.trackingNumber,
-        status: order.status,
-        eventsCount: 0,
-        error: err instanceof Error ? err.message : "Unknown error",
-      });
+  for (let i = 0; i < activeOrders.length; i += BATCH_SIZE) {
+    const batch = activeOrders.slice(i, i + BATCH_SIZE);
+    const batchResults = await Promise.allSettled(
+      batch.map(async (order) => {
+        const result = await refreshTracking(order.id);
+        return {
+          id: order.id,
+          trackingNumber: order.trackingNumber,
+          status: result.status,
+          eventsCount: result.eventsCount,
+        };
+      })
+    );
+
+    for (let j = 0; j < batchResults.length; j++) {
+      const r = batchResults[j];
+      if (r.status === "fulfilled") {
+        results.push(r.value);
+      } else {
+        results.push({
+          id: batch[j].id,
+          trackingNumber: batch[j].trackingNumber,
+          status: batch[j].status,
+          eventsCount: 0,
+          error: r.reason instanceof Error ? r.reason.message : "Unknown error",
+        });
+      }
+    }
+
+    // Brief pause between batches to avoid rate limiting
+    if (i + BATCH_SIZE < activeOrders.length) {
+      await new Promise((resolve) => setTimeout(resolve, 500));
     }
   }
 
-  return results;
+  const remaining = totalRemaining - activeOrders.length;
+  return {
+    results,
+    totalProcessed: activeOrders.length,
+    batches: Math.ceil(activeOrders.length / BATCH_SIZE),
+    remaining,
+    totalActive: totalRemaining,
+  };
 }

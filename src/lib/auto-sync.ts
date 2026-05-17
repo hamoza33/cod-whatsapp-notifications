@@ -194,11 +194,11 @@ async function tickTrackingRefresh(): Promise<void> {
       );
     }
 
-    const results = await refreshAllTracking();
+    const { results, totalProcessed, batches } = await refreshAllTracking();
     const updated = results.filter((r) => r.eventsCount > 0).length;
     const errors = results.filter((r) => r.error).length;
     console.log(
-      `[tracking-refresh] cron refreshed ${results.length} orders (${updated} updated, ${errors} errors)`
+      `[tracking-refresh] cron refreshed ${totalProcessed} orders in ${batches} batches (${updated} updated, ${errors} errors)`
     );
   } catch (err) {
     console.warn(
