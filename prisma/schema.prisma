@@ -77,6 +77,8 @@ model Order {
   // Pipeline UI to short-circuit accidental re-sends and to render the
   // "WhatsApp Sent" virtual column.
   whatsappSentAt      DateTime?   @map("whatsapp_sent_at")
+  // Whether this order has been queued for the AI voice agent to call.
+  callAgentQueued     Boolean     @default(false) @map("call_agent_queued")
   // Free-form notes the operator can attach to an order from the Pipeline
   // (e.g. "called customer, no answer"). Not synced from COD Network.
   pipelineNote        String?     @map("pipeline_note")
@@ -86,6 +88,7 @@ model Order {
   whatsappMessages WhatsappMessage[]
   inboundMessages  InboundMessage[]
   automationRuns   AutomationRun[]
+  trackingOrders   TrackingOrder[]
 
   @@index([status])
   @@index([codNetworkOrderId])
@@ -105,11 +108,12 @@ enum MessageStatus {
 
 model WhatsappMessage {
   id                    String        @id @default(cuid())
-  orderId               String        @map("order_id")
+  orderId               String?       @map("order_id")
   phoneNumber           String        @map("phone_number")
   templateName          String        @map("template_name")
   templateLanguage      String        @default("en") @map("template_language")
   templateVariablesJson Json?         @map("template_variables_json")
+  headerImageUrl        String?       @map("header_image_url")
   providerMessageId     String?       @map("provider_message_id")
   status                MessageStatus @default(PENDING)
   errorMessage          String?       @map("error_message")
@@ -117,7 +121,7 @@ model WhatsappMessage {
   sentAt                DateTime?     @map("sent_at")
   createdAt             DateTime      @default(now()) @map("created_at")
 
-  order Order @relation(fields: [orderId], references: [id])
+  order Order? @relation(fields: [orderId], references: [id])
 
   @@index([orderId])
   @@index([phoneNumber])
@@ -268,6 +272,8 @@ model Product {
   productStatus      String?  @map("product_status")
   // Whether this is a COD Drop product (vs seller's own product).
   isDropProduct      Boolean  @default(false) @map("is_drop_product")
+  // Whether the AI agent is enabled for this product specifically.
+  aiAgentEnabled     Boolean  @default(false) @map("ai_agent_enabled")
   // Direct link to the seller's landing page for the product (from COD).
   storeUrl           String?  @map("store_url")
   rawProductJson    Json?    @map("raw_product_json")
@@ -278,4 +284,85 @@ model Product {
   @@index([name])
   @@index([sku])
   @@map("products")
+}
+
+/// Multiple WhatsApp Business numbers can be managed via the Settings UI.
+/// The operator picks which number to use in the Inbox dropdown.
+model WhatsappNumber {
+  id              String   @id @default(cuid())
+  label           String
+  phoneNumberId   String   @map("phone_number_id")
+  displayPhone    String   @map("display_phone")
+  isDefault       Boolean  @default(false) @map("is_default")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  @@map("whatsapp_numbers")
+}
+
+enum TrackingCarrier {
+  IMILE
+  INJAZ
+  JTE
+  JDW
+  OTHER
+}
+
+enum TrackingStatus {
+  PENDING
+  IN_TRANSIT
+  OUT_FOR_DELIVERY
+  DELIVERED
+  RETURNED
+  EXCEPTION
+  UNKNOWN
+}
+
+/// A package being tracked via iMile or Injaz Express. Tracking numbers
+/// starting with "60" are routed to iMile; those starting with "INJAZ."
+/// are routed to Injaz Express. The cron job refreshes all active
+/// (non-delivered, non-returned) packages every 30 minutes.
+model TrackingOrder {
+  id              String          @id @default(cuid())
+  trackingNumber  String          @unique @map("tracking_number")
+  carrier         TrackingCarrier
+  carrierName     String?         @map("carrier_name")
+  status          TrackingStatus  @default(PENDING)
+  latestEvent     String?         @map("latest_event")
+  latestEventAt   DateTime?       @map("latest_event_at")
+  customerName    String?         @map("customer_name")
+  customerPhone   String?         @map("customer_phone")
+  productName     String?         @map("product_name")
+  codCreatedAt    DateTime?       @map("cod_created_at")
+  orderId         String?         @map("order_id")
+  order           Order?          @relation(fields: [orderId], references: [id])
+  lastCheckedAt   DateTime?       @map("last_checked_at")
+  createdAt       DateTime        @default(now()) @map("created_at")
+  updatedAt       DateTime        @updatedAt @map("updated_at")
+
+  events TrackingEvent[]
+
+  @@index([carrier])
+  @@index([status])
+  @@index([orderId])
+  @@map("tracking_orders")
+}
+
+/// Individual status update for a tracked package. Each refresh appends
+/// new events that haven't been seen yet (de-duped by content + timestamp).
+model TrackingEvent {
+  id              String        @id @default(cuid())
+  trackingOrderId String        @map("tracking_order_id")
+  trackingOrder   TrackingOrder @relation(fields: [trackingOrderId], references: [id], onDelete: Cascade)
+  status          String
+  description     String
+  location        String?
+  occurredAt      DateTime      @map("occurred_at")
+  rawData         Json?         @map("raw_data")
+  createdAt       DateTime      @default(now()) @map("created_at")
+
+  @@unique([trackingOrderId, description, occurredAt])
+  @@index([trackingOrderId])
+  @@index([occurredAt])
+  @@map("tracking_events")
 }

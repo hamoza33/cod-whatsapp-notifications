@@ -44,7 +44,9 @@ export function isSyncInProgress(): boolean {
   return syncInProgress;
 }
 
-export async function syncOrders(): Promise<SyncResult> {
+export async function syncOrders(
+  options: { skipAutomations?: boolean } = {}
+): Promise<SyncResult> {
   const startTime = Date.now();
   const result: SyncResult = {
     ordersFound: 0,
@@ -78,7 +80,7 @@ export async function syncOrders(): Promise<SyncResult> {
 
       for (const order of orders) {
         try {
-          await upsertOrder(order, result, defaultCountryCode);
+          await upsertOrder(order, result, defaultCountryCode, !!options.skipAutomations);
         } catch (err) {
           const msg =
             err instanceof Error ? err.message : "Unknown error upserting order";
@@ -169,7 +171,8 @@ function extractProductPriceAndQuantity(
 async function upsertOrder(
   codOrder: CodNetworkOrder,
   result: SyncResult,
-  defaultCountryCode: string
+  defaultCountryCode: string,
+  skipAutomations = false
 ): Promise<void> {
   const codOrderId = String(codOrder.id);
   const codLeadId = extractLeadId(codOrder);
@@ -245,9 +248,7 @@ async function upsertOrder(
     });
     result.ordersUpdated++;
 
-    if (statusChanged) {
-      // Fire automations off the new derived status. Best-effort — never
-      // throw inside the sync loop.
+    if (statusChanged && !skipAutomations) {
       try {
         await runAutomationsForOrder(existing.id);
       } catch (err) {
@@ -279,10 +280,12 @@ async function upsertOrder(
     });
     result.ordersCreated++;
 
-    try {
-      await runAutomationsForOrder(created.id);
-    } catch (err) {
-      console.error("[sync] automation engine threw on new order", err);
+    if (!skipAutomations) {
+      try {
+        await runAutomationsForOrder(created.id);
+      } catch (err) {
+        console.error("[sync] automation engine threw on new order", err);
+      }
     }
   }
 }

@@ -13,11 +13,16 @@ interface MessageLog {
   sentBy: string;
   sentAt: string | null;
   createdAt: string;
+  renderedText: string | null;
   order: {
     codNetworkOrderId: string;
     customerName: string | null;
     status: string;
-  };
+  } | null;
+}
+
+function hasArabic(text: string): boolean {
+  return /[\u0600-\u06FF]/.test(text);
 }
 
 const STATUS_OPTIONS = ["ALL", "PENDING", "SENT", "DELIVERED", "READ", "FAILED"];
@@ -28,11 +33,13 @@ export default function MessagesPage() {
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
   const [statusFilter, setStatusFilter] = useState("ALL");
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     async function fetchMessages() {
       setLoading(true);
+      setError(null);
       try {
         const params: Record<string, string> = {
           page: String(page),
@@ -48,8 +55,10 @@ export default function MessagesPage() {
           setMessages(data.messages);
           setTotalPages(data.pagination.totalPages);
         }
-      } catch {
-        // ignore
+      } catch (err) {
+        if (!cancelled) {
+          setError(err instanceof Error ? err.message : "Failed to load messages");
+        }
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -78,6 +87,12 @@ export default function MessagesPage() {
   return (
     <div>
       <h1 className="text-2xl font-bold text-gray-900 mb-6">Message Logs</h1>
+
+      {error && (
+        <div className="mb-4 p-3 rounded-md text-sm border bg-red-50 text-red-700 border-red-200">
+          {error}
+        </div>
+      )}
 
       <div className="mb-4">
         <select
@@ -114,6 +129,9 @@ export default function MessagesPage() {
                   Template
                 </th>
                 <th className="text-left px-4 py-3 font-medium text-gray-600">
+                  Content
+                </th>
+                <th className="text-left px-4 py-3 font-medium text-gray-600">
                   Status
                 </th>
                 <th className="text-left px-4 py-3 font-medium text-gray-600">
@@ -130,7 +148,7 @@ export default function MessagesPage() {
             <tbody>
               {loading ? (
                 <tr>
-                  <td colSpan={8} className="text-center py-8">
+                  <td colSpan={9} className="text-center py-8">
                     <RefreshCw
                       className="animate-spin text-gray-400 mx-auto"
                       size={20}
@@ -140,7 +158,7 @@ export default function MessagesPage() {
               ) : messages.length === 0 ? (
                 <tr>
                   <td
-                    colSpan={8}
+                    colSpan={9}
                     className="text-center py-8 text-gray-500"
                   >
                     No messages found.
@@ -153,15 +171,27 @@ export default function MessagesPage() {
                     className="border-b border-gray-100 hover:bg-gray-50"
                   >
                     <td className="px-4 py-3 font-mono text-xs">
-                      {msg.order.codNetworkOrderId}
+                      {msg.order?.codNetworkOrderId || "—"}
                     </td>
                     <td className="px-4 py-3">
-                      {msg.order.customerName || "—"}
+                      {msg.order?.customerName || "—"}
                     </td>
                     <td className="px-4 py-3 font-mono text-xs">
                       {msg.phoneNumber}
                     </td>
                     <td className="px-4 py-3">{msg.templateName}</td>
+                    <td className="px-4 py-3 max-w-[300px]">
+                      {msg.renderedText ? (
+                        <p
+                          className="text-xs whitespace-pre-wrap break-words text-gray-700"
+                          dir={hasArabic(msg.renderedText) ? "rtl" : "ltr"}
+                        >
+                          {msg.renderedText}
+                        </p>
+                      ) : (
+                        <span className="text-gray-400 text-xs">—</span>
+                      )}
+                    </td>
                     <td className="px-4 py-3">
                       {getStatusBadge(msg.status)}
                     </td>

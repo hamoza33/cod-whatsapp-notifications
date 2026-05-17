@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback, useRef } from "react";
+import { useEffect, useState, useCallback, useRef, useMemo } from "react";
 import { api } from "@/lib/api-client";
 import {
   RefreshCw,
@@ -50,6 +50,7 @@ type ThreadEntry =
       templateName: string;
       templateVariables: unknown;
       renderedText: string | null;
+      headerImageUrl: string | null;
       sentBy: string | null;
       status: string;
       providerMessageId: string | null;
@@ -85,6 +86,18 @@ function formatMessageTime(dateStr: string) {
   });
 }
 
+function hasArabic(text: string): boolean {
+  return /[\u0600-\u06FF]/.test(text);
+}
+
+interface WhatsappNumberOption {
+  id: string;
+  label: string;
+  phoneNumberId: string;
+  displayPhone: string;
+  isDefault: boolean;
+}
+
 export default function InboxPage() {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [selectedPhone, setSelectedPhone] = useState<string | null>(null);
@@ -96,8 +109,13 @@ export default function InboxPage() {
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<{ kind: "error" | "success"; text: string } | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
+  const [whatsappNumbers, setWhatsappNumbers] = useState<WhatsappNumberOption[]>([]);
+  const [selectedNumberId, setSelectedNumberId] = useState<string | null>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const threadEndRef = useRef<HTMLDivElement>(null);
+  const messagesContainerRef = useRef<HTMLDivElement>(null);
+  const userScrolledUp = useRef(false);
+  const prevThreadLength = useRef(0);
 
   const showToast = useCallback((kind: "error" | "success", text: string) => {
     setToast({ kind, text });
@@ -125,10 +143,16 @@ export default function InboxPage() {
       const data = await api.get<ThreadResponse>(
         `/whatsapp/inbox/${encodeURIComponent(phone)}`
       );
+      const isNewConversation = prevThreadLength.current === 0;
+      const hasNewMessages = data.thread.length > prevThreadLength.current;
       setThread(data);
-      setTimeout(() => {
-        threadEndRef.current?.scrollIntoView({ behavior: "smooth" });
-      }, 100);
+      prevThreadLength.current = data.thread.length;
+
+      if (isNewConversation || (hasNewMessages && !userScrolledUp.current)) {
+        setTimeout(() => {
+          threadEndRef.current?.scrollIntoView({ behavior: "smooth" });
+        }, 100);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load thread");
     }
@@ -140,6 +164,20 @@ export default function InboxPage() {
   }, [fetchConversations]);
 
   useEffect(() => {
+    async function loadNumbers() {
+      try {
+        const data = await api.get<{ numbers: WhatsappNumberOption[] }>("/whatsapp/numbers");
+        setWhatsappNumbers(data.numbers);
+        const def = data.numbers.find((n) => n.isDefault);
+        if (def) setSelectedNumberId(def.id);
+      } catch {
+        // ignore
+      }
+    }
+    loadNumbers();
+  }, []);
+
+  useEffect(() => {
     const interval = setInterval(() => {
       fetchConversations();
       if (selectedPhone) fetchThread(selectedPhone);
@@ -149,10 +187,13 @@ export default function InboxPage() {
 
   useEffect(() => {
     if (selectedPhone) {
+      prevThreadLength.current = 0;
+      userScrolledUp.current = false;
       // eslint-disable-next-line react-hooks/set-state-in-effect
       fetchThread(selectedPhone);
     } else {
       setThread(null);
+      prevThreadLength.current = 0;
     }
   }, [selectedPhone, fetchThread]);
 
@@ -353,6 +394,19 @@ export default function InboxPage() {
                   {selectedPhone}
                 </div>
               </div>
+              {whatsappNumbers.length > 1 && (
+                <select
+                  value={selectedNumberId || ""}
+                  onChange={(e) => setSelectedNumberId(e.target.value)}
+                  className="bg-white/20 text-white text-xs border border-white/30 rounded-md px-2 py-1 outline-none"
+                >
+                  {whatsappNumbers.map((n) => (
+                    <option key={n.id} value={n.id} className="text-gray-900">
+                      {n.label} ({n.displayPhone})
+                    </option>
+                  ))}
+                </select>
+              )}
               {thread && (
                 <span
                   className={`text-xs px-3 py-1 rounded-full font-medium ${
@@ -370,6 +424,13 @@ export default function InboxPage() {
 
             {/* Messages area */}
             <div
+              ref={messagesContainerRef}
+              onScroll={() => {
+                const el = messagesContainerRef.current;
+                if (!el) return;
+                const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+                userScrolledUp.current = distanceFromBottom > 100;
+              }}
               className="flex-1 overflow-y-auto px-16 py-4 space-y-1"
               style={{
                 backgroundColor: "#EFEAE2",
@@ -485,7 +546,10 @@ function InboundBubble({
           </div>
         )}
         {msg.text ? (
-          <p className="text-sm text-[#111B21] whitespace-pre-wrap break-words leading-[19px]">{msg.text}</p>
+          <p
+            className="text-sm text-[#111B21] whitespace-pre-wrap break-words leading-[19px]"
+            dir={hasArabic(msg.text) ? "rtl" : "ltr"}
+          >{msg.text}</p>
         ) : (
           <p className="text-sm text-[#8696A0] italic">
             ({msg.type} attachment)
@@ -545,8 +609,21 @@ function OutboundBubble({
             <span>Template: {msg.templateName}</span>
           )}
         </div>
+        {msg.headerImageUrl && (
+          <div className="mb-1.5 -mx-1 rounded overflow-hidden">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={msg.headerImageUrl}
+              alt="Template header"
+              className="w-full max-h-48 object-cover rounded"
+            />
+          </div>
+        )}
         {displayText ? (
-          <p className="text-sm text-[#111B21] whitespace-pre-wrap break-words leading-[19px]">
+          <p
+            className="text-sm text-[#111B21] whitespace-pre-wrap break-words leading-[19px]"
+            dir={hasArabic(displayText) ? "rtl" : "ltr"}
+          >
             {displayText}
           </p>
         ) : !isText ? (

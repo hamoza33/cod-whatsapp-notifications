@@ -91,6 +91,7 @@ export async function GET(request: NextRequest) {
 
   const enrichedOrders = orders.map((o) => ({
     ...o,
+    productImages: extractProductImages(o.rawOrderJson),
     productImageUrl: o.productName
       ? productImageMap.get(o.productName) ?? null
       : null,
@@ -200,6 +201,36 @@ export async function POST(request: NextRequest) {
   });
 
   return NextResponse.json({ order });
+}
+
+function extractProductImages(rawOrderJson: unknown): string[] {
+  if (!rawOrderJson || typeof rawOrderJson !== "object") return [];
+  const raw = rawOrderJson as Record<string, unknown>;
+  const images: string[] = [];
+  const items = raw.items;
+  const itemList = Array.isArray(items)
+    ? items
+    : items && typeof items === "object" && "data" in items
+      ? (items as { data?: unknown[] }).data ?? []
+      : [];
+  for (const item of itemList) {
+    if (item && typeof item === "object") {
+      const it = item as Record<string, unknown>;
+      const imgUrl =
+        (it.image_url as string) ??
+        (it.path_image as string) ??
+        ((it.product as Record<string, unknown>)?.data as Record<string, unknown>)?.image_url ??
+        ((it.product as Record<string, unknown>)?.data as Record<string, unknown>)?.path_image ??
+        ((it.product as Record<string, unknown>)?.image_url as string) ??
+        null;
+      if (typeof imgUrl === "string" && imgUrl) images.push(imgUrl);
+    }
+  }
+  if (images.length === 0) {
+    const topImage = (raw.image_url ?? raw.path_image) as string | undefined;
+    if (topImage) images.push(topImage);
+  }
+  return images;
 }
 
 function optionalString(v: string | undefined | null): string | null {

@@ -12,14 +12,40 @@ export async function PATCH(
   }
 
   const { id } = await params;
-  const body = (await request.json()) as { description?: string };
 
-  const product = await prisma.product.update({
-    where: { id },
-    data: {
-      description: body.description ?? null,
-    },
-  });
+  let body: { aiAgentEnabled?: boolean; description?: string };
+  try {
+    body = (await request.json()) as typeof body;
+  } catch {
+    return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
+  }
+
+  const data: { aiAgentEnabled?: boolean; description?: string | null } = {};
+
+  if (body.aiAgentEnabled !== undefined) {
+    if (typeof body.aiAgentEnabled !== "boolean") {
+      return NextResponse.json(
+        { error: "aiAgentEnabled must be a boolean" },
+        { status: 400 }
+      );
+    }
+    data.aiAgentEnabled = body.aiAgentEnabled;
+  }
+
+  if (body.description !== undefined) {
+    data.description = body.description ?? null;
+  }
+
+  const product = await prisma.product
+    .update({
+      where: { id },
+      data,
+    })
+    .catch(() => null);
+
+  if (!product) {
+    return NextResponse.json({ error: "Product not found" }, { status: 404 });
+  }
 
   return NextResponse.json({ product });
 }

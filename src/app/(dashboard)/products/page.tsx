@@ -29,6 +29,7 @@ interface Product {
   productStatus: string | null;
   storeUrl: string | null;
   isDropProduct: boolean;
+  aiAgentEnabled: boolean;
   lastSyncedAt: string;
 }
 
@@ -215,6 +216,21 @@ export default function ProductsPage() {
   );
 }
 
+function stripHtml(html: string): string {
+  return html
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/p>/gi, "\n")
+    .replace(/<[^>]+>/g, "")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&nbsp;/g, " ")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
 function ProductCard({
   product,
   onUpdate,
@@ -298,6 +314,31 @@ function ProductCard({
           )}
         </div>
 
+        {/* AI Agent toggle */}
+        <div className="flex items-center justify-between mt-2 py-2 border-t border-gray-100">
+          <span className="text-xs font-medium text-gray-600">AI Agent</span>
+          <button
+            onClick={async () => {
+              const newVal = !product.aiAgentEnabled;
+              onUpdate({ ...product, aiAgentEnabled: newVal });
+              try {
+                await api.patch(`/products/${product.id}`, { aiAgentEnabled: newVal });
+              } catch {
+                onUpdate({ ...product, aiAgentEnabled: !newVal });
+              }
+            }}
+            className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${
+              product.aiAgentEnabled ? "bg-blue-600" : "bg-gray-300"
+            }`}
+          >
+            <span
+              className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${
+                product.aiAgentEnabled ? "translate-x-[18px]" : "translate-x-[3px]"
+              }`}
+            />
+          </button>
+        </div>
+
         {/* Description expand/collapse */}
         <div className="mt-2 border-t border-gray-100 pt-2">
           <button
@@ -341,7 +382,7 @@ function ProductCard({
               ) : (
                 <div>
                   <p className="text-xs text-gray-600 whitespace-pre-wrap">
-                    {product.description || "No description available."}
+                    {product.description ? stripHtml(product.description) : "No description available."}
                   </p>
                   <button
                     onClick={() => setEditing(true)}

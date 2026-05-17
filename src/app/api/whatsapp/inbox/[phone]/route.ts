@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getAuthUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { WhatsAppClient, WhatsAppApiError } from "@/lib/whatsapp";
+import { getSetting, SETTING_KEYS } from "@/lib/settings";
 import { rateLimit } from "@/lib/rate-limit";
 
 /**
@@ -20,19 +21,25 @@ export async function GET(
   const { phone } = await params;
   const decodedPhone = decodeURIComponent(phone);
 
+  // Webhook stores inbound phones with "+" prefix, outbound may omit it.
+  // Query both variants so messages always match regardless of format.
+  const digits = decodedPhone.replace(/[^\d]/g, "");
+  const phoneVariants = [...new Set([decodedPhone, digits, `+${digits}`])];
+
   const [inbound, outbound] = await Promise.all([
     prisma.inboundMessage.findMany({
-      where: { fromPhoneNumber: decodedPhone },
+      where: { fromPhoneNumber: { in: phoneVariants } },
       orderBy: { receivedAt: "asc" },
     }),
     prisma.whatsappMessage.findMany({
-      where: { phoneNumber: decodedPhone },
+      where: { phoneNumber: { in: phoneVariants } },
       orderBy: { createdAt: "asc" },
       select: {
         id: true,
         templateName: true,
         templateLanguage: true,
         templateVariablesJson: true,
+        headerImageUrl: true,
         providerMessageId: true,
         status: true,
         errorMessage: true,
@@ -61,24 +68,31 @@ export async function GET(
         templateName: string;
         templateVariables: unknown;
         renderedText: string | null;
+        headerImageUrl: string | null;
         sentBy: string | null;
         status: string;
         providerMessageId: string | null;
         errorMessage: string | null;
       };
 
-  // Pre-fetch template bodies for rendering outbound messages
+  // Pre-fetch template bodies and header types for rendering outbound messages
   const templateNames = [...new Set(outbound.map((m) => m.templateName).filter((n) => n !== "<text>"))];
   const templateBodies = new Map<string, string>();
+  const templateHeaderTypes = new Map<string, string | null>();
   if (templateNames.length > 0) {
     const templates = await prisma.whatsappTemplate.findMany({
       where: { name: { in: templateNames } },
-      select: { name: true, bodyText: true },
+      select: { name: true, bodyText: true, headerType: true },
     });
     for (const t of templates) {
       if (t.bodyText) templateBodies.set(t.name, t.bodyText);
+      templateHeaderTypes.set(t.name, t.headerType);
     }
   }
+
+  const defaultHeaderImage = await getSetting(
+    SETTING_KEYS.WHATSAPP_DEFAULT_TEMPLATE_HEADER_IMAGE_URL
+  );
 
   const thread: ThreadEntry[] = [];
   for (const m of inbound) {
@@ -112,6 +126,13 @@ export async function GET(
         });
       }
     }
+    // Resolve header image: stored per-message first, then fall back to
+    // the default header image if the template has an IMAGE header.
+    let headerImageUrl: string | null = m.headerImageUrl ?? null;
+    if (!headerImageUrl && templateHeaderTypes.get(m.templateName) === "IMAGE" && defaultHeaderImage) {
+      headerImageUrl = defaultHeaderImage;
+    }
+
     thread.push({
       kind: "outbound",
       id: m.id,
@@ -119,6 +140,7 @@ export async function GET(
       templateName: m.templateName,
       templateVariables: m.templateVariablesJson,
       renderedText,
+      headerImageUrl,
       sentBy: m.sentBy,
       status: m.status,
       providerMessageId: m.providerMessageId,
@@ -180,8 +202,10 @@ export async function POST(
     );
   }
 
+  const postDigits = decodedPhone.replace(/[^\d]/g, "");
+  const postPhoneVariants = [...new Set([decodedPhone, postDigits, `+${postDigits}`])];
   const lastInbound = await prisma.inboundMessage.findFirst({
-    where: { fromPhoneNumber: decodedPhone },
+    where: { fromPhoneNumber: { in: postPhoneVariants } },
     orderBy: { receivedAt: "desc" },
     select: { receivedAt: true, orderId: true },
   });
@@ -207,7 +231,7 @@ export async function POST(
     try {
       await prisma.whatsappMessage.create({
         data: {
-          orderId: lastInbound?.orderId ?? "",
+          orderId: lastInbound?.orderId ?? undefined,
           phoneNumber: decodedPhone,
           templateName: "<text>",
           templateLanguage: "",
@@ -247,4 +271,48 @@ export async function POST(
       { status: 500 }
     );
   }
+}
+
+/**
+ * Simulate an inbound message for testing. Auth-protected — only logged-in
+ * users can call this. Useful when the Meta webhook isn't configured yet.
+ */
+export async function PUT(
+  request: NextRequest,
+  { params }: { params: Promise<{ phone: string }> }
+) {
+  const user = getAuthUser(request);
+  if (!user) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+  const { phone } = await params;
+  const decodedPhone = decodeURIComponent(phone);
+  let body: { text?: unknown; contactName?: unknown };
+  try {
+    body = (await request.json()) as { text?: unknown; contactName?: unknown };
+  } catch {
+    return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+  }
+  if (typeof body.text !== "string" || !body.text.trim()) {
+    return NextResponse.json(
+      { error: "text is required and must be a non-empty string" },
+      { status: 400 }
+    );
+  }
+
+  const digits = decodedPhone.replace(/[^\d]/g, "");
+  const normalizedPhone = `+${digits}`;
+
+  const msg = await prisma.inboundMessage.create({
+    data: {
+      providerMessageId: `simulated-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      fromPhoneNumber: normalizedPhone,
+      contactName: typeof body.contactName === "string" ? body.contactName : null,
+      type: "text",
+      text: body.text.trim(),
+      rawPayload: { simulated: true, by: user.email },
+    },
+  });
+
+  return NextResponse.json({ success: true, id: msg.id });
 }
