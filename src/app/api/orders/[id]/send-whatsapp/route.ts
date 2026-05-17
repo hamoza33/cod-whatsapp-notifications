@@ -181,10 +181,11 @@ export async function POST(
       header
     );
 
+    const storedPhone = phone.startsWith("+") ? phone : `+${phone}`;
     const message = await prisma.whatsappMessage.create({
       data: {
         orderId: order.id,
-        phoneNumber: phone,
+        phoneNumber: storedPhone,
         templateName,
         templateLanguage,
         templateVariablesJson: variables,
@@ -210,10 +211,11 @@ export async function POST(
       err instanceof Error ? err.message : "Failed to send WhatsApp message";
     const isApiError = err instanceof WhatsAppApiError;
     try {
+      const failedPhone = phone.startsWith("+") ? phone : `+${phone}`;
       await prisma.whatsappMessage.create({
         data: {
           orderId: order.id,
-          phoneNumber: phone,
+          phoneNumber: failedPhone,
           templateName,
           templateLanguage,
           templateVariablesJson: variables,

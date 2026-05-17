@@ -207,7 +207,7 @@ export async function POST(
     try {
       await prisma.whatsappMessage.create({
         data: {
-          orderId: lastInbound?.orderId ?? "",
+          orderId: lastInbound?.orderId ?? null,
           phoneNumber: decodedPhone,
           templateName: "<text>",
           templateLanguage: "",
