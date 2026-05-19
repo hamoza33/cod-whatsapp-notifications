@@ -51,6 +51,17 @@ export async function handleAiAutoReply(
     (await getSetting(SETTING_KEYS.AI_AGENT_SYSTEM_PROMPT)) ||
     "You are a helpful customer service agent for a delivery company. Keep responses short for WhatsApp.";
 
+  // Language detection: check if message contains significant Arabic
+  const arabicChars = (messageText.match(/[\u0600-\u06FF]/g) || []).length;
+  const totalChars = messageText.replace(/\s/g, "").length || 1;
+  const isArabic = arabicChars / totalChars > 0.3;
+
+  if (isArabic) {
+    systemPrompt += "\n\nIMPORTANT: The customer is writing in Arabic. You MUST respond in Saudi Arabian Arabic dialect (اللهجة السعودية). Use natural Saudi expressions and wording like a real Saudi customer service agent would use. Do NOT use formal/classical Arabic (فصحى). Use words like 'حياك الله', 'ان شاء الله', 'يعطيك العافية', etc.";
+  } else {
+    systemPrompt += "\n\nIMPORTANT: The customer is writing in English. Respond in clear, natural English.";
+  }
+
   if (order) {
     systemPrompt = systemPrompt
       .replace(/\{customer_name\}/g, order.customerName || "Customer")

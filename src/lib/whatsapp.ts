@@ -169,6 +169,21 @@ export class WhatsAppClient {
     this.apiVersion = apiVersion;
   }
 
+  static async fromPhoneNumberId(phoneNumberId: string): Promise<WhatsAppClient> {
+    const accessToken =
+      (await getSetting(SETTING_KEYS.WHATSAPP_ACCESS_TOKEN)) ||
+      process.env.WHATSAPP_ACCESS_TOKEN ||
+      "";
+    const apiVersion =
+      (await getSetting(SETTING_KEYS.WHATSAPP_API_VERSION)) ||
+      process.env.WHATSAPP_API_VERSION ||
+      "v17.0";
+    if (!accessToken) {
+      throw new Error("WhatsApp Cloud API access token not configured.");
+    }
+    return new WhatsAppClient(phoneNumberId, accessToken, apiVersion);
+  }
+
   static async fromSettings(): Promise<WhatsAppClient> {
     const phoneNumberId =
       (await getSetting(SETTING_KEYS.WHATSAPP_PHONE_NUMBER_ID)) ||
@@ -272,6 +287,58 @@ export class WhatsAppClient {
       to,
       type: "text",
       text: { preview_url: false, body: text },
+    };
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${this.accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(body),
+    });
+    if (!response.ok) {
+      const errorBody = await response.text();
+      throw new WhatsAppApiError(response.status, errorBody);
+    }
+    return response.json();
+  }
+
+  async uploadMedia(file: ArrayBuffer, mimeType: string, filename: string): Promise<string> {
+    const url = `https://graph.facebook.com/${this.apiVersion}/${this.phoneNumberId}/media`;
+    const form = new FormData();
+    form.set("messaging_product", "whatsapp");
+    form.set("type", mimeType);
+    form.set("file", new Blob([file], { type: mimeType }), filename);
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${this.accessToken}` },
+      body: form,
+    });
+    if (!response.ok) {
+      const errorBody = await response.text();
+      throw new WhatsAppApiError(response.status, errorBody);
+    }
+    const data = (await response.json()) as { id: string };
+    return data.id;
+  }
+
+  async sendMedia(
+    to: string,
+    type: "image" | "video" | "audio" | "document",
+    mediaId: string,
+    caption?: string
+  ): Promise<WhatsAppSendResult> {
+    const url = `https://graph.facebook.com/${this.apiVersion}/${this.phoneNumberId}/messages`;
+    const mediaObj: Record<string, string> = { id: mediaId };
+    if (caption) mediaObj.caption = caption;
+
+    const body = {
+      messaging_product: "whatsapp",
+      recipient_type: "individual",
+      to,
+      type,
+      [type]: mediaObj,
     };
     const response = await fetch(url, {
       method: "POST",

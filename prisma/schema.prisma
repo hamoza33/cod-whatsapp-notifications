@@ -147,10 +147,12 @@ model InboundMessage {
   receivedAt        DateTime  @default(now()) @map("received_at")
   orderId           String?   @map("order_id")
   order             Order?    @relation(fields: [orderId], references: [id])
+  toPhoneNumberId   String?   @map("to_phone_number_id")
 
   @@index([fromPhoneNumber])
   @@index([receivedAt])
   @@index([orderId])
+  @@index([toPhoneNumberId])
   @@map("inbound_messages")
 }
 

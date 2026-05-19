@@ -182,6 +182,9 @@ export async function POST(request: NextRequest) {
         }
       }
 
+      // Extract the receiving phone number ID from metadata
+      const receivingPhoneNumberId = value.metadata?.phone_number_id ?? null;
+
       // Persist inbound messages
       const msgs = value.messages ?? [];
       console.log("[webhook] processing", msgs.length, "inbound message(s)");
@@ -204,6 +207,7 @@ export async function POST(request: NextRequest) {
               mediaMimeType: mimeType ?? null,
               rawPayload: msg as unknown as Prisma.InputJsonValue,
               orderId,
+              toPhoneNumberId: receivingPhoneNumberId,
             },
           });
         } catch (err) {

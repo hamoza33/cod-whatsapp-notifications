@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback, useRef, useMemo } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { api } from "@/lib/api-client";
 import {
   RefreshCw,
@@ -13,6 +13,11 @@ import {
   X,
   Search,
   Phone,
+  Sparkles,
+  Paperclip,
+  FileText,
+  Clock,
+  Download,
 } from "lucide-react";
 
 interface Conversation {
@@ -23,6 +28,7 @@ interface Conversation {
   lastType: string;
   totalMessages: number;
   isOutboundOnly?: boolean;
+  deliveryStatus?: string;
   order: {
     id: string;
     codNetworkOrderId: string;
@@ -98,6 +104,49 @@ interface WhatsappNumberOption {
   isDefault: boolean;
 }
 
+function DeliveryStatusBadge({ status }: { status?: string }) {
+  if (!status) return null;
+  switch (status) {
+    case "DELIVERED":
+      return (
+        <span className="flex items-center gap-1 text-[11px] text-green-600">
+          <CheckCheck size={12} className="text-green-600" />
+          Delivered
+        </span>
+      );
+    case "READ":
+      return (
+        <span className="flex items-center gap-1 text-[11px] text-[#53BDEB]">
+          <CheckCheck size={12} className="text-[#53BDEB]" />
+          Read
+        </span>
+      );
+    case "SENT":
+      return (
+        <span className="flex items-center gap-1 text-[11px] text-[#667781]">
+          <Check size={12} className="text-[#667781]" />
+          Sent
+        </span>
+      );
+    case "FAILED":
+      return (
+        <span className="flex items-center gap-1 text-[11px] text-red-500 font-medium">
+          <X size={12} className="text-red-500" />
+          Not Delivered
+        </span>
+      );
+    case "PENDING":
+      return (
+        <span className="flex items-center gap-1 text-[11px] text-[#667781]">
+          <Clock size={12} className="text-[#667781]" />
+          Pending
+        </span>
+      );
+    default:
+      return null;
+  }
+}
+
 export default function InboxPage() {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [selectedPhone, setSelectedPhone] = useState<string | null>(null);
@@ -117,17 +166,36 @@ export default function InboxPage() {
   const userScrolledUp = useRef(false);
   const prevThreadLength = useRef(0);
 
+  // Suggestions state
+  const [suggestions, setSuggestions] = useState<string[]>([]);
+  const [customContext, setCustomContext] = useState("");
+  const [loadingSuggestions, setLoadingSuggestions] = useState(false);
+  const [showContextInput, setShowContextInput] = useState(false);
+
+  // Media attachment state
+  const [attachedFile, setAttachedFile] = useState<File | null>(null);
+  const [attachedPreview, setAttachedPreview] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
   const showToast = useCallback((kind: "error" | "success", text: string) => {
     setToast({ kind, text });
     if (toastTimer.current) clearTimeout(toastTimer.current);
     toastTimer.current = setTimeout(() => setToast(null), 5000);
   }, []);
 
+  const selectedPhoneNumberId = (() => {
+    if (!selectedNumberId) return undefined;
+    const num = whatsappNumbers.find((n) => n.id === selectedNumberId);
+    return num?.phoneNumberId;
+  })();
+
   const fetchConversations = useCallback(async () => {
     try {
-      const data = await api.get<{ conversations: Conversation[] }>(
-        "/whatsapp/inbox"
-      );
+      let url = "/whatsapp/inbox";
+      if (selectedPhoneNumberId) {
+        url += `?phoneNumberId=${encodeURIComponent(selectedPhoneNumberId)}`;
+      }
+      const data = await api.get<{ conversations: Conversation[] }>(url);
       setConversations(data.conversations);
       setError(null);
     } catch (err) {
@@ -136,13 +204,15 @@ export default function InboxPage() {
       setLoading(false);
       setRefreshing(false);
     }
-  }, []);
+  }, [selectedPhoneNumberId]);
 
   const fetchThread = useCallback(async (phone: string) => {
     try {
-      const data = await api.get<ThreadResponse>(
-        `/whatsapp/inbox/${encodeURIComponent(phone)}`
-      );
+      let url = `/whatsapp/inbox/${encodeURIComponent(phone)}`;
+      if (selectedPhoneNumberId) {
+        url += `?phoneNumberId=${encodeURIComponent(selectedPhoneNumberId)}`;
+      }
+      const data = await api.get<ThreadResponse>(url);
       const isNewConversation = prevThreadLength.current === 0;
       const hasNewMessages = data.thread.length > prevThreadLength.current;
       setThread(data);
@@ -156,7 +226,7 @@ export default function InboxPage() {
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load thread");
     }
-  }, []);
+  }, [selectedPhoneNumberId]);
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
@@ -190,6 +260,14 @@ export default function InboxPage() {
       prevThreadLength.current = 0;
       userScrolledUp.current = false;
       // eslint-disable-next-line react-hooks/set-state-in-effect
+      setSuggestions([]);
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setCustomContext("");
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setAttachedFile(null);
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setAttachedPreview(null);
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       fetchThread(selectedPhone);
     } else {
       setThread(null);
@@ -197,27 +275,117 @@ export default function InboxPage() {
     }
   }, [selectedPhone, fetchThread]);
 
+  // Refresh conversations when the selected WhatsApp number changes
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setLoading(true);
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setSelectedPhone(null);
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setThread(null);
+    prevThreadLength.current = 0;
+    fetchConversations();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedPhoneNumberId]);
+
   const handleReply = async () => {
-    if (!selectedPhone || !replyText.trim()) return;
+    if (!selectedPhone || (!replyText.trim() && !attachedFile)) return;
     setSending(true);
     try {
-      const response = await fetch(
-        `/api/whatsapp/inbox/${encodeURIComponent(selectedPhone)}`,
-        {
+      if (attachedFile) {
+        // Upload media first
+        const uploadForm = new FormData();
+        uploadForm.append("file", attachedFile);
+        const uploadRes = await fetch("/api/whatsapp/media/upload", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ text: replyText }),
-        }
-      );
-      const data = (await response.json()) as { error?: string };
-      if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+          body: uploadForm,
+        });
+        const uploadData = (await uploadRes.json()) as { mediaId?: string; error?: string };
+        if (!uploadRes.ok) throw new Error(uploadData.error || "Media upload failed");
+
+        const mediaType = attachedFile.type.startsWith("image/")
+          ? "image"
+          : attachedFile.type.startsWith("video/")
+            ? "video"
+            : attachedFile.type.startsWith("audio/")
+              ? "audio"
+              : "document";
+
+        const response = await fetch(
+          `/api/whatsapp/inbox/${encodeURIComponent(selectedPhone)}`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              text: replyText || undefined,
+              mediaId: uploadData.mediaId,
+              mediaType,
+              mediaMimeType: attachedFile.type,
+              phoneNumberId: selectedPhoneNumberId,
+            }),
+          }
+        );
+        const data = (await response.json()) as { error?: string };
+        if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+      } else {
+        const response = await fetch(
+          `/api/whatsapp/inbox/${encodeURIComponent(selectedPhone)}`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              text: replyText,
+              phoneNumberId: selectedPhoneNumberId,
+            }),
+          }
+        );
+        const data = (await response.json()) as { error?: string };
+        if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+      }
       setReplyText("");
+      setAttachedFile(null);
+      setAttachedPreview(null);
       showToast("success", "Reply sent");
       fetchThread(selectedPhone);
     } catch (err) {
       showToast("error", err instanceof Error ? err.message : "Reply failed");
     } finally {
       setSending(false);
+    }
+  };
+
+  const handleGenerateSuggestions = async () => {
+    if (!selectedPhone) return;
+    setLoadingSuggestions(true);
+    try {
+      const response = await fetch(
+        `/api/whatsapp/inbox/${encodeURIComponent(selectedPhone)}/suggestions`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ customContext: customContext || undefined }),
+        }
+      );
+      const data = (await response.json()) as { suggestions?: string[]; error?: string };
+      if (!response.ok) throw new Error(data.error || "Failed to generate suggestions");
+      setSuggestions(data.suggestions || []);
+    } catch (err) {
+      showToast("error", err instanceof Error ? err.message : "Suggestions failed");
+    } finally {
+      setLoadingSuggestions(false);
+    }
+  };
+
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setAttachedFile(file);
+    if (file.type.startsWith("image/")) {
+      const reader = new FileReader();
+      reader.onload = () => setAttachedPreview(reader.result as string);
+      reader.readAsDataURL(file);
+    } else {
+      setAttachedPreview(null);
     }
   };
 
@@ -260,17 +428,32 @@ export default function InboxPage() {
             </div>
             <h2 className="text-white font-semibold text-lg">Chats</h2>
           </div>
-          <button
-            onClick={refresh}
-            disabled={refreshing}
-            className="p-2 text-white/80 hover:text-white rounded-full hover:bg-white/10 transition-colors"
-            aria-label="Refresh"
-          >
-            <RefreshCw
-              size={18}
-              className={refreshing ? "animate-spin" : ""}
-            />
-          </button>
+          <div className="flex items-center gap-2">
+            {whatsappNumbers.length > 1 && (
+              <select
+                value={selectedNumberId || ""}
+                onChange={(e) => setSelectedNumberId(e.target.value)}
+                className="bg-white/20 text-white text-xs border border-white/30 rounded-md px-2 py-1 outline-none"
+              >
+                {whatsappNumbers.map((n) => (
+                  <option key={n.id} value={n.id} className="text-gray-900">
+                    {n.label} ({n.displayPhone})
+                  </option>
+                ))}
+              </select>
+            )}
+            <button
+              onClick={refresh}
+              disabled={refreshing}
+              className="p-2 text-white/80 hover:text-white rounded-full hover:bg-white/10 transition-colors"
+              aria-label="Refresh"
+            >
+              <RefreshCw
+                size={18}
+                className={refreshing ? "animate-spin" : ""}
+              />
+            </button>
+          </div>
         </div>
 
         {/* Search */}
@@ -345,7 +528,12 @@ export default function InboxPage() {
                       Order #{c.order.codNetworkOrderId} · {c.order.status}
                     </div>
                   )}
-                  {c.isOutboundOnly && !c.order && (
+                  {c.deliveryStatus && (
+                    <div className="mt-0.5">
+                      <DeliveryStatusBadge status={c.deliveryStatus} />
+                    </div>
+                  )}
+                  {c.isOutboundOnly && !c.order && !c.deliveryStatus && (
                     <div className="text-[11px] text-[#667781] mt-0.5 flex items-center gap-1">
                       <Send size={9} />
                       Outbound only
@@ -394,19 +582,6 @@ export default function InboxPage() {
                   {selectedPhone}
                 </div>
               </div>
-              {whatsappNumbers.length > 1 && (
-                <select
-                  value={selectedNumberId || ""}
-                  onChange={(e) => setSelectedNumberId(e.target.value)}
-                  className="bg-white/20 text-white text-xs border border-white/30 rounded-md px-2 py-1 outline-none"
-                >
-                  {whatsappNumbers.map((n) => (
-                    <option key={n.id} value={n.id} className="text-gray-900">
-                      {n.label} ({n.displayPhone})
-                    </option>
-                  ))}
-                </select>
-              )}
               {thread && (
                 <span
                   className={`text-xs px-3 py-1 rounded-full font-medium ${
@@ -454,7 +629,7 @@ export default function InboxPage() {
               <div ref={threadEndRef} />
             </div>
 
-            {/* Reply input */}
+            {/* Reply input area */}
             <div className="bg-[#F0F2F5] px-4 py-3">
               {thread && !thread.inSession && (
                 <p className="text-xs text-amber-700 mb-2 flex items-start gap-1.5 bg-amber-50 rounded-lg px-3 py-2">
@@ -465,7 +640,117 @@ export default function InboxPage() {
                   </span>
                 </p>
               )}
+
+              {/* Suggestions */}
+              {suggestions.length > 0 && (
+                <div className="flex gap-2 mb-2 flex-wrap">
+                  {suggestions.map((s, i) => (
+                    <button
+                      key={i}
+                      onClick={() => {
+                        setReplyText(s);
+                        setSuggestions([]);
+                      }}
+                      className="text-xs bg-white border border-[#E9EDEF] rounded-lg px-3 py-2 text-[#111B21] hover:bg-[#E9EDEF] transition-colors text-left max-w-[200px] truncate shadow-sm"
+                      title={s}
+                    >
+                      {s}
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              {/* Custom context row */}
+              <div className="flex items-center gap-2 mb-2">
+                {showContextInput && (
+                  <input
+                    type="text"
+                    value={customContext}
+                    onChange={(e) => setCustomContext(e.target.value)}
+                    placeholder="Add context for AI suggestions..."
+                    className="flex-1 px-3 py-1.5 bg-white rounded-lg text-xs outline-none text-[#111B21] placeholder-[#667781] border border-[#E9EDEF]"
+                  />
+                )}
+                <button
+                  onClick={() => {
+                    if (!showContextInput) {
+                      setShowContextInput(true);
+                    } else {
+                      handleGenerateSuggestions();
+                    }
+                  }}
+                  disabled={loadingSuggestions}
+                  className="flex items-center gap-1.5 text-xs px-3 py-1.5 bg-purple-50 text-purple-700 rounded-lg hover:bg-purple-100 transition-colors border border-purple-200 disabled:opacity-50 shrink-0"
+                >
+                  <Sparkles size={13} className={loadingSuggestions ? "animate-spin" : ""} />
+                  {loadingSuggestions
+                    ? "Generating..."
+                    : suggestions.length > 0
+                      ? "Regenerate"
+                      : "Generate Replies"}
+                </button>
+                {showContextInput && (
+                  <button
+                    onClick={() => {
+                      setShowContextInput(false);
+                      setCustomContext("");
+                    }}
+                    className="text-[#667781] hover:text-[#111B21] p-1"
+                  >
+                    <X size={14} />
+                  </button>
+                )}
+              </div>
+
+              {/* Attached file preview */}
+              {attachedFile && (
+                <div className="flex items-center gap-2 mb-2 bg-white rounded-lg px-3 py-2 border border-[#E9EDEF]">
+                  {attachedPreview ? (
+                    /* eslint-disable-next-line @next/next/no-img-element */
+                    <img
+                      src={attachedPreview}
+                      alt="Attachment preview"
+                      className="w-12 h-12 object-cover rounded"
+                    />
+                  ) : (
+                    <div className="w-12 h-12 bg-[#F0F2F5] rounded flex items-center justify-center">
+                      <FileText size={20} className="text-[#54656F]" />
+                    </div>
+                  )}
+                  <div className="flex-1 min-w-0">
+                    <p className="text-xs text-[#111B21] truncate">{attachedFile.name}</p>
+                    <p className="text-[11px] text-[#667781]">
+                      {(attachedFile.size / 1024).toFixed(1)} KB
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => {
+                      setAttachedFile(null);
+                      setAttachedPreview(null);
+                      if (fileInputRef.current) fileInputRef.current.value = "";
+                    }}
+                    className="p-1 text-[#667781] hover:text-red-500"
+                  >
+                    <X size={16} />
+                  </button>
+                </div>
+              )}
+
               <div className="flex items-center gap-2">
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/jpeg,image/png,image/webp,video/mp4,audio/ogg,audio/mpeg,audio/mp4"
+                  onChange={handleFileSelect}
+                  className="hidden"
+                />
+                <button
+                  onClick={() => fileInputRef.current?.click()}
+                  className="w-10 h-10 rounded-full text-[#54656F] hover:text-[#008069] flex items-center justify-center hover:bg-white/50 transition-colors shrink-0"
+                  aria-label="Attach file"
+                >
+                  <Paperclip size={20} />
+                </button>
                 <input
                   type="text"
                   value={replyText}
@@ -479,13 +764,15 @@ export default function InboxPage() {
                   placeholder={
                     thread && !thread.inSession
                       ? "Reply window closed — use a template"
-                      : "Type a message"
+                      : attachedFile
+                        ? "Add a caption..."
+                        : "Type a message"
                   }
                   className="flex-1 px-4 py-2.5 bg-white rounded-lg text-sm outline-none text-[#111B21] placeholder-[#667781]"
                 />
                 <button
                   onClick={handleReply}
-                  disabled={sending || !replyText.trim()}
+                  disabled={sending || (!replyText.trim() && !attachedFile)}
                   className="w-10 h-10 rounded-full bg-[#008069] text-white flex items-center justify-center hover:bg-[#017561] disabled:opacity-40 transition-colors shrink-0"
                 >
                   <Send size={18} />
@@ -530,6 +817,75 @@ function InboundBubble({
 }: {
   msg: Extract<ThreadEntry, { kind: "inbound" }>;
 }) {
+  const [fullScreen, setFullScreen] = useState(false);
+
+  const renderMedia = () => {
+    if (!msg.mediaId) return null;
+    const mediaSrc = `/api/whatsapp/media/${msg.mediaId}`;
+
+    switch (msg.type) {
+      case "image":
+        return (
+          <>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={mediaSrc}
+              alt="Image message"
+              className="max-w-full rounded cursor-pointer mb-1"
+              style={{ maxHeight: "300px" }}
+              onClick={() => setFullScreen(true)}
+            />
+            {fullScreen && (
+              <div
+                className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 cursor-pointer"
+                onClick={() => setFullScreen(false)}
+              >
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={mediaSrc}
+                  alt="Full size"
+                  className="max-w-[90vw] max-h-[90vh] object-contain"
+                />
+              </div>
+            )}
+          </>
+        );
+      case "video":
+        return (
+          <video
+            controls
+            src={mediaSrc}
+            className="max-w-full rounded mb-1"
+            style={{ maxHeight: "300px" }}
+          />
+        );
+      case "audio":
+        return <audio controls src={mediaSrc} className="w-full mb-1" />;
+      case "sticker":
+        return (
+          /* eslint-disable-next-line @next/next/no-img-element */
+          <img
+            src={mediaSrc}
+            alt="Sticker"
+            className="max-w-[180px] mb-1"
+          />
+        );
+      case "document":
+        return (
+          <a
+            href={mediaSrc}
+            download
+            className="flex items-center gap-2 text-sm text-[#008069] hover:underline mb-1 bg-[#F0F2F5] rounded px-3 py-2"
+          >
+            <Download size={16} />
+            Download document
+          </a>
+        );
+      default:
+        return null;
+    }
+  };
+
   return (
     <div className="flex justify-start">
       <div className="max-w-[65%] bg-white rounded-lg rounded-tl-none px-3 py-2 shadow-sm relative">
@@ -538,7 +894,8 @@ function InboundBubble({
             {msg.contactName}
           </p>
         )}
-        {msg.type !== "text" && (
+        {renderMedia()}
+        {!msg.mediaId && msg.type !== "text" && (
           <div className="text-[11px] text-[#667781] flex items-center gap-1 mb-1">
             <ImageIcon size={11} />
             {msg.type}
@@ -550,11 +907,11 @@ function InboundBubble({
             className="text-sm text-[#111B21] whitespace-pre-wrap break-words leading-[19px]"
             dir={hasArabic(msg.text) ? "rtl" : "ltr"}
           >{msg.text}</p>
-        ) : (
+        ) : !msg.mediaId ? (
           <p className="text-sm text-[#8696A0] italic">
             ({msg.type} attachment)
           </p>
-        )}
+        ) : null}
         <p className="text-[11px] text-[#667781] mt-1 text-right">
           {formatMessageTime(msg.at)}
         </p>
@@ -631,7 +988,16 @@ function OutboundBubble({
             [Template sent with variables]
           </p>
         ) : null}
-        {msg.errorMessage && (
+        {msg.status === "FAILED" && (
+          <p className="text-xs text-red-600 mt-1 font-medium flex items-center gap-1">
+            <X size={12} />
+            Not Delivered
+            {msg.errorMessage && (
+              <span className="font-normal"> — {msg.errorMessage}</span>
+            )}
+          </p>
+        )}
+        {msg.status !== "FAILED" && msg.errorMessage && (
           <p className="text-xs text-red-600 mt-1">{msg.errorMessage}</p>
         )}
         <p className="text-[11px] text-[#667781] mt-1 flex items-center justify-end gap-1">
