@@ -11,8 +11,8 @@ async function getOpenWAConfig() {
   const map: Record<string, string> = {};
   for (const r of rows) map[r.key] = r.value;
   return {
-    apiUrl: map.openwa_api_url || "",
-    apiKey: map.openwa_api_key || "",
+    apiUrl: map.openwa_api_url || process.env.OPENWA_API_URL || "",
+    apiKey: map.openwa_api_key || process.env.OPENWA_API_KEY || "",
   };
 }
 
