@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback, useRef, useMemo } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { api } from "@/lib/api-client";
 import {
   RefreshCw,
@@ -13,6 +13,13 @@ import {
   X,
   Search,
   Phone,
+  Paperclip,
+  Sparkles,
+  Clock,
+  Film,
+  Mic,
+  FileText,
+  Download,
 } from "lucide-react";
 
 interface Conversation {
@@ -23,6 +30,7 @@ interface Conversation {
   lastType: string;
   totalMessages: number;
   isOutboundOnly?: boolean;
+  deliveryStatus?: string;
   order: {
     id: string;
     codNetworkOrderId: string;
@@ -98,6 +106,44 @@ interface WhatsappNumberOption {
   isDefault: boolean;
 }
 
+function DeliveryStatusBadge({ status }: { status?: string }) {
+  if (!status) return null;
+  switch (status) {
+    case "DELIVERED":
+      return (
+        <span className="flex items-center gap-1 text-[11px] text-green-600">
+          <CheckCheck size={12} /> Delivered
+        </span>
+      );
+    case "READ":
+      return (
+        <span className="flex items-center gap-1 text-[11px] text-[#53BDEB]">
+          <CheckCheck size={12} /> Read
+        </span>
+      );
+    case "SENT":
+      return (
+        <span className="flex items-center gap-1 text-[11px] text-[#667781]">
+          <Check size={12} /> Sent
+        </span>
+      );
+    case "FAILED":
+      return (
+        <span className="flex items-center gap-1 text-[11px] text-red-500 font-medium">
+          <X size={12} /> Not Delivered
+        </span>
+      );
+    case "PENDING":
+      return (
+        <span className="flex items-center gap-1 text-[11px] text-[#667781]">
+          <Clock size={12} /> Pending
+        </span>
+      );
+    default:
+      return null;
+  }
+}
+
 export default function InboxPage() {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [selectedPhone, setSelectedPhone] = useState<string | null>(null);
@@ -117,16 +163,35 @@ export default function InboxPage() {
   const userScrolledUp = useRef(false);
   const prevThreadLength = useRef(0);
 
+  // Suggestions state (Feature 3)
+  const [suggestions, setSuggestions] = useState<string[]>([]);
+  const [customContext, setCustomContext] = useState("");
+  const [loadingSuggestions, setLoadingSuggestions] = useState(false);
+  const [showContextInput, setShowContextInput] = useState(false);
+
+  // Media attachment state (Feature 6)
+  const [attachedFile, setAttachedFile] = useState<File | null>(null);
+  const [attachedPreview, setAttachedPreview] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
   const showToast = useCallback((kind: "error" | "success", text: string) => {
     setToast({ kind, text });
     if (toastTimer.current) clearTimeout(toastTimer.current);
     toastTimer.current = setTimeout(() => setToast(null), 5000);
   }, []);
 
+  // Get the phoneNumberId for the currently selected WhatsApp number
+  const selectedPhoneNumberId = whatsappNumbers.find(
+    (n) => n.id === selectedNumberId
+  )?.phoneNumberId;
+
   const fetchConversations = useCallback(async () => {
     try {
+      const params: Record<string, string> = {};
+      if (selectedPhoneNumberId) params.phoneNumberId = selectedPhoneNumberId;
       const data = await api.get<{ conversations: Conversation[] }>(
-        "/whatsapp/inbox"
+        "/whatsapp/inbox",
+        params
       );
       setConversations(data.conversations);
       setError(null);
@@ -136,27 +201,33 @@ export default function InboxPage() {
       setLoading(false);
       setRefreshing(false);
     }
-  }, []);
+  }, [selectedPhoneNumberId]);
 
-  const fetchThread = useCallback(async (phone: string) => {
-    try {
-      const data = await api.get<ThreadResponse>(
-        `/whatsapp/inbox/${encodeURIComponent(phone)}`
-      );
-      const isNewConversation = prevThreadLength.current === 0;
-      const hasNewMessages = data.thread.length > prevThreadLength.current;
-      setThread(data);
-      prevThreadLength.current = data.thread.length;
+  const fetchThread = useCallback(
+    async (phone: string) => {
+      try {
+        const params: Record<string, string> = {};
+        if (selectedPhoneNumberId) params.phoneNumberId = selectedPhoneNumberId;
+        const data = await api.get<ThreadResponse>(
+          `/whatsapp/inbox/${encodeURIComponent(phone)}`,
+          params
+        );
+        const isNewConversation = prevThreadLength.current === 0;
+        const hasNewMessages = data.thread.length > prevThreadLength.current;
+        setThread(data);
+        prevThreadLength.current = data.thread.length;
 
-      if (isNewConversation || (hasNewMessages && !userScrolledUp.current)) {
-        setTimeout(() => {
-          threadEndRef.current?.scrollIntoView({ behavior: "smooth" });
-        }, 100);
+        if (isNewConversation || (hasNewMessages && !userScrolledUp.current)) {
+          setTimeout(() => {
+            threadEndRef.current?.scrollIntoView({ behavior: "smooth" });
+          }, 100);
+        }
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Failed to load thread");
       }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load thread");
-    }
-  }, []);
+    },
+    [selectedPhoneNumberId]
+  );
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
@@ -177,6 +248,17 @@ export default function InboxPage() {
     loadNumbers();
   }, []);
 
+  // When selected number changes, reset conversation list and thread
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setLoading(true);
+    setSelectedPhone(null);
+    setThread(null);
+    prevThreadLength.current = 0;
+    setSuggestions([]);
+    fetchConversations();
+  }, [selectedPhoneNumberId, fetchConversations]);
+
   useEffect(() => {
     const interval = setInterval(() => {
       fetchConversations();
@@ -190,6 +272,11 @@ export default function InboxPage() {
       prevThreadLength.current = 0;
       userScrolledUp.current = false;
       // eslint-disable-next-line react-hooks/set-state-in-effect
+      setSuggestions([]);
+      setCustomContext("");
+      setShowContextInput(false);
+      setAttachedFile(null);
+      setAttachedPreview(null);
       fetchThread(selectedPhone);
     } else {
       setThread(null);
@@ -198,20 +285,46 @@ export default function InboxPage() {
   }, [selectedPhone, fetchThread]);
 
   const handleReply = async () => {
-    if (!selectedPhone || !replyText.trim()) return;
+    if (!selectedPhone) return;
+    if (!attachedFile && !replyText.trim()) return;
     setSending(true);
     try {
+      const bodyData: Record<string, unknown> = {};
+      if (replyText.trim()) bodyData.text = replyText;
+      if (selectedPhoneNumberId)
+        bodyData.phoneNumberId = selectedPhoneNumberId;
+
+      if (attachedFile) {
+        const arrayBuffer = await attachedFile.arrayBuffer();
+        const base64 = btoa(
+          new Uint8Array(arrayBuffer).reduce(
+            (data, byte) => data + String.fromCharCode(byte),
+            ""
+          )
+        );
+        bodyData.mediaFile = base64;
+        bodyData.mediaMimeType = attachedFile.type;
+        bodyData.mediaFilename = attachedFile.name;
+        // Determine media type from MIME
+        if (attachedFile.type.startsWith("image/")) bodyData.mediaType = "image";
+        else if (attachedFile.type.startsWith("video/")) bodyData.mediaType = "video";
+        else if (attachedFile.type.startsWith("audio/")) bodyData.mediaType = "audio";
+        else bodyData.mediaType = "document";
+      }
+
       const response = await fetch(
         `/api/whatsapp/inbox/${encodeURIComponent(selectedPhone)}`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ text: replyText }),
+          body: JSON.stringify(bodyData),
         }
       );
       const data = (await response.json()) as { error?: string };
       if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
       setReplyText("");
+      setAttachedFile(null);
+      setAttachedPreview(null);
       showToast("success", "Reply sent");
       fetchThread(selectedPhone);
     } catch (err) {
@@ -219,6 +332,55 @@ export default function InboxPage() {
     } finally {
       setSending(false);
     }
+  };
+
+  const handleGenerateSuggestions = async () => {
+    if (!selectedPhone) return;
+    setLoadingSuggestions(true);
+    try {
+      const response = await fetch(
+        `/api/whatsapp/inbox/${encodeURIComponent(selectedPhone)}/suggestions`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            customContext: customContext.trim() || undefined,
+          }),
+        }
+      );
+      const data = (await response.json()) as {
+        suggestions?: string[];
+        error?: string;
+      };
+      if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+      setSuggestions(data.suggestions || []);
+    } catch (err) {
+      showToast(
+        "error",
+        err instanceof Error ? err.message : "Failed to generate suggestions"
+      );
+    } finally {
+      setLoadingSuggestions(false);
+    }
+  };
+
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setAttachedFile(file);
+    if (file.type.startsWith("image/")) {
+      const reader = new FileReader();
+      reader.onload = () => setAttachedPreview(reader.result as string);
+      reader.readAsDataURL(file);
+    } else {
+      setAttachedPreview(null);
+    }
+  };
+
+  const removeAttachment = () => {
+    setAttachedFile(null);
+    setAttachedPreview(null);
+    if (fileInputRef.current) fileInputRef.current.value = "";
   };
 
   const refresh = () => {
@@ -260,17 +422,32 @@ export default function InboxPage() {
             </div>
             <h2 className="text-white font-semibold text-lg">Chats</h2>
           </div>
-          <button
-            onClick={refresh}
-            disabled={refreshing}
-            className="p-2 text-white/80 hover:text-white rounded-full hover:bg-white/10 transition-colors"
-            aria-label="Refresh"
-          >
-            <RefreshCw
-              size={18}
-              className={refreshing ? "animate-spin" : ""}
-            />
-          </button>
+          <div className="flex items-center gap-2">
+            {whatsappNumbers.length > 1 && (
+              <select
+                value={selectedNumberId || ""}
+                onChange={(e) => setSelectedNumberId(e.target.value)}
+                className="bg-white/20 text-white text-xs border border-white/30 rounded-md px-2 py-1 outline-none max-w-[140px]"
+              >
+                {whatsappNumbers.map((n) => (
+                  <option key={n.id} value={n.id} className="text-gray-900">
+                    {n.label}
+                  </option>
+                ))}
+              </select>
+            )}
+            <button
+              onClick={refresh}
+              disabled={refreshing}
+              className="p-2 text-white/80 hover:text-white rounded-full hover:bg-white/10 transition-colors"
+              aria-label="Refresh"
+            >
+              <RefreshCw
+                size={18}
+                className={refreshing ? "animate-spin" : ""}
+              />
+            </button>
+          </div>
         </div>
 
         {/* Search */}
@@ -351,6 +528,11 @@ export default function InboxPage() {
                       Outbound only
                     </div>
                   )}
+                  {c.deliveryStatus && (
+                    <div className="mt-0.5">
+                      <DeliveryStatusBadge status={c.deliveryStatus} />
+                    </div>
+                  )}
                 </div>
               </button>
             );
@@ -394,19 +576,6 @@ export default function InboxPage() {
                   {selectedPhone}
                 </div>
               </div>
-              {whatsappNumbers.length > 1 && (
-                <select
-                  value={selectedNumberId || ""}
-                  onChange={(e) => setSelectedNumberId(e.target.value)}
-                  className="bg-white/20 text-white text-xs border border-white/30 rounded-md px-2 py-1 outline-none"
-                >
-                  {whatsappNumbers.map((n) => (
-                    <option key={n.id} value={n.id} className="text-gray-900">
-                      {n.label} ({n.displayPhone})
-                    </option>
-                  ))}
-                </select>
-              )}
               {thread && (
                 <span
                   className={`text-xs px-3 py-1 rounded-full font-medium ${
@@ -454,7 +623,7 @@ export default function InboxPage() {
               <div ref={threadEndRef} />
             </div>
 
-            {/* Reply input */}
+            {/* Reply input area */}
             <div className="bg-[#F0F2F5] px-4 py-3">
               {thread && !thread.inSession && (
                 <p className="text-xs text-amber-700 mb-2 flex items-start gap-1.5 bg-amber-50 rounded-lg px-3 py-2">
@@ -465,7 +634,113 @@ export default function InboxPage() {
                   </span>
                 </p>
               )}
+
+              {/* Suggestions row */}
+              {suggestions.length > 0 && (
+                <div className="mb-2 flex flex-wrap gap-1.5">
+                  {suggestions.map((s, i) => (
+                    <button
+                      key={i}
+                      onClick={() => setReplyText(s)}
+                      className="text-xs bg-white border border-[#E9EDEF] rounded-lg px-3 py-2 text-[#111B21] hover:bg-[#E9EDEF] transition-colors text-left max-w-[250px] truncate"
+                      title={s}
+                    >
+                      {s}
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              {/* Context input + generate button */}
+              <div className="mb-2 flex items-center gap-2">
+                {showContextInput && (
+                  <input
+                    type="text"
+                    value={customContext}
+                    onChange={(e) => setCustomContext(e.target.value)}
+                    placeholder="Add context for AI suggestions..."
+                    className="flex-1 px-3 py-1.5 bg-white rounded-lg text-xs outline-none text-[#111B21] placeholder-[#667781] border border-[#E9EDEF]"
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        handleGenerateSuggestions();
+                      }
+                    }}
+                  />
+                )}
+                <button
+                  onClick={() => {
+                    if (!showContextInput) {
+                      setShowContextInput(true);
+                    } else {
+                      handleGenerateSuggestions();
+                    }
+                  }}
+                  disabled={loadingSuggestions}
+                  className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg bg-purple-50 text-purple-700 hover:bg-purple-100 border border-purple-200 transition-colors disabled:opacity-50 shrink-0"
+                  title="Generate AI suggested replies"
+                >
+                  <Sparkles size={13} className={loadingSuggestions ? "animate-spin" : ""} />
+                  {suggestions.length > 0 ? "Regenerate" : "Generate Replies"}
+                </button>
+                {showContextInput && (
+                  <button
+                    onClick={() => {
+                      setShowContextInput(false);
+                      setCustomContext("");
+                    }}
+                    className="text-[#667781] hover:text-[#111B21] p-1"
+                  >
+                    <X size={14} />
+                  </button>
+                )}
+              </div>
+
+              {/* Attached file preview */}
+              {attachedFile && (
+                <div className="mb-2 flex items-center gap-2 bg-white rounded-lg px-3 py-2 border border-[#E9EDEF]">
+                  {attachedPreview ? (
+                    /* eslint-disable-next-line @next/next/no-img-element */
+                    <img
+                      src={attachedPreview}
+                      alt="Preview"
+                      className="w-12 h-12 object-cover rounded"
+                    />
+                  ) : attachedFile.type.startsWith("video/") ? (
+                    <Film size={20} className="text-[#667781]" />
+                  ) : attachedFile.type.startsWith("audio/") ? (
+                    <Mic size={20} className="text-[#667781]" />
+                  ) : (
+                    <FileText size={20} className="text-[#667781]" />
+                  )}
+                  <span className="text-xs text-[#111B21] truncate flex-1">
+                    {attachedFile.name}
+                  </span>
+                  <button
+                    onClick={removeAttachment}
+                    className="text-[#667781] hover:text-red-500 p-1"
+                  >
+                    <X size={14} />
+                  </button>
+                </div>
+              )}
+
               <div className="flex items-center gap-2">
+                {/* File attachment button */}
+                <button
+                  onClick={() => fileInputRef.current?.click()}
+                  className="w-10 h-10 rounded-full text-[#54656F] flex items-center justify-center hover:bg-[#E9EDEF] transition-colors shrink-0"
+                  title="Attach file"
+                >
+                  <Paperclip size={20} />
+                </button>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/*,video/mp4,audio/ogg,audio/mp3,audio/m4a,audio/mpeg"
+                  onChange={handleFileSelect}
+                  className="hidden"
+                />
                 <input
                   type="text"
                   value={replyText}
@@ -479,13 +754,15 @@ export default function InboxPage() {
                   placeholder={
                     thread && !thread.inSession
                       ? "Reply window closed — use a template"
-                      : "Type a message"
+                      : attachedFile
+                        ? "Add a caption..."
+                        : "Type a message"
                   }
                   className="flex-1 px-4 py-2.5 bg-white rounded-lg text-sm outline-none text-[#111B21] placeholder-[#667781]"
                 />
                 <button
                   onClick={handleReply}
-                  disabled={sending || !replyText.trim()}
+                  disabled={sending || (!replyText.trim() && !attachedFile)}
                   className="w-10 h-10 rounded-full bg-[#008069] text-white flex items-center justify-center hover:bg-[#017561] disabled:opacity-40 transition-colors shrink-0"
                 >
                   <Send size={18} />
@@ -530,6 +807,77 @@ function InboundBubble({
 }: {
   msg: Extract<ThreadEntry, { kind: "inbound" }>;
 }) {
+  const [fullscreen, setFullscreen] = useState(false);
+
+  const renderMedia = () => {
+    if (!msg.mediaId) return null;
+
+    const mediaUrl = `/api/whatsapp/media/${msg.mediaId}`;
+
+    switch (msg.type) {
+      case "image":
+        return (
+          <>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={mediaUrl}
+              alt="Image"
+              className="max-w-full rounded-lg cursor-pointer mb-1"
+              style={{ maxHeight: 300 }}
+              onClick={() => setFullscreen(true)}
+            />
+            {fullscreen && (
+              <div
+                className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center"
+                onClick={() => setFullscreen(false)}
+              >
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={mediaUrl}
+                  alt="Full size"
+                  className="max-w-[90vw] max-h-[90vh] object-contain"
+                />
+              </div>
+            )}
+          </>
+        );
+      case "video":
+        return (
+          <video
+            controls
+            src={mediaUrl}
+            className="max-w-full rounded-lg mb-1"
+            style={{ maxHeight: 300 }}
+          />
+        );
+      case "audio":
+        return <audio controls src={mediaUrl} className="max-w-full mb-1" />;
+      case "document":
+        return (
+          <a
+            href={mediaUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex items-center gap-2 text-sm text-[#008069] underline mb-1"
+          >
+            <Download size={14} />
+            Download document
+          </a>
+        );
+      case "sticker":
+        return (
+          /* eslint-disable-next-line @next/next/no-img-element */
+          <img
+            src={mediaUrl}
+            alt="Sticker"
+            className="max-w-[150px] mb-1"
+          />
+        );
+      default:
+        return null;
+    }
+  };
+
   return (
     <div className="flex justify-start">
       <div className="max-w-[65%] bg-white rounded-lg rounded-tl-none px-3 py-2 shadow-sm relative">
@@ -538,7 +886,8 @@ function InboundBubble({
             {msg.contactName}
           </p>
         )}
-        {msg.type !== "text" && (
+        {renderMedia()}
+        {!msg.mediaId && msg.type !== "text" && (
           <div className="text-[11px] text-[#667781] flex items-center gap-1 mb-1">
             <ImageIcon size={11} />
             {msg.type}
@@ -550,11 +899,11 @@ function InboundBubble({
             className="text-sm text-[#111B21] whitespace-pre-wrap break-words leading-[19px]"
             dir={hasArabic(msg.text) ? "rtl" : "ltr"}
           >{msg.text}</p>
-        ) : (
+        ) : !msg.mediaId ? (
           <p className="text-sm text-[#8696A0] italic">
             ({msg.type} attachment)
           </p>
-        )}
+        ) : null}
         <p className="text-[11px] text-[#667781] mt-1 text-right">
           {formatMessageTime(msg.at)}
         </p>
@@ -569,6 +918,7 @@ function OutboundBubble({
   msg: Extract<ThreadEntry, { kind: "outbound" }>;
 }) {
   const isText = msg.templateName === "<text>";
+  const isMediaMessage = ["<image>", "<video>", "<audio>", "<document>"].includes(msg.templateName);
   const isAiAgent = msg.sentBy === "ai_agent";
   const statusIcon = (() => {
     switch (msg.status) {
@@ -605,6 +955,11 @@ function OutboundBubble({
             <span className="text-purple-600 font-medium">AI Agent</span>
           ) : isText ? (
             <span>You</span>
+          ) : isMediaMessage ? (
+            <span className="flex items-center gap-1">
+              <Paperclip size={10} />
+              {msg.templateName.replace(/[<>]/g, "")}
+            </span>
           ) : (
             <span>Template: {msg.templateName}</span>
           )}
@@ -626,12 +981,21 @@ function OutboundBubble({
           >
             {displayText}
           </p>
-        ) : !isText ? (
+        ) : !isText && !isMediaMessage ? (
           <p className="text-sm text-[#111B21] italic">
             [Template sent with variables]
           </p>
         ) : null}
-        {msg.errorMessage && (
+        {msg.status === "FAILED" && (
+          <p className="text-xs text-red-600 mt-1 font-medium flex items-center gap-1">
+            <X size={12} />
+            Not Delivered
+            {msg.errorMessage && (
+              <span className="font-normal"> — {msg.errorMessage}</span>
+            )}
+          </p>
+        )}
+        {msg.status !== "FAILED" && msg.errorMessage && (
           <p className="text-xs text-red-600 mt-1">{msg.errorMessage}</p>
         )}
         <p className="text-[11px] text-[#667781] mt-1 flex items-center justify-end gap-1">

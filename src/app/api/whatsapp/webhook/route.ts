@@ -184,6 +184,7 @@ export async function POST(request: NextRequest) {
 
       // Persist inbound messages
       const msgs = value.messages ?? [];
+      const webhookPhoneNumberId = value.metadata?.phone_number_id ?? null;
       console.log("[webhook] processing", msgs.length, "inbound message(s)");
       for (const msg of msgs) {
         if (!msg.id || !msg.from) continue;
@@ -204,6 +205,7 @@ export async function POST(request: NextRequest) {
               mediaMimeType: mimeType ?? null,
               rawPayload: msg as unknown as Prisma.InputJsonValue,
               orderId,
+              toPhoneNumberId: webhookPhoneNumberId,
             },
           });
         } catch (err) {

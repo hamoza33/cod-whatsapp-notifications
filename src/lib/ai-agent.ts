@@ -2,6 +2,21 @@ import { getSetting, SETTING_KEYS } from "./settings";
 import { prisma } from "./prisma";
 import { WhatsAppClient } from "./whatsapp";
 
+/**
+ * Detect whether a text string is primarily Arabic by checking the ratio
+ * of Arabic characters to total alphabetic characters.
+ */
+export function detectArabic(text: string): boolean {
+  if (!text) return false;
+  const arabicChars = text.match(/[\u0600-\u06FF]/g);
+  const latinChars = text.match(/[a-zA-Z]/g);
+  const arabicCount = arabicChars?.length ?? 0;
+  const latinCount = latinChars?.length ?? 0;
+  if (arabicCount === 0) return false;
+  // If Arabic characters make up a significant portion (more than Latin)
+  return arabicCount >= latinCount;
+}
+
 interface OrderContext {
   customerName: string | null;
   productName: string | null;
@@ -50,6 +65,16 @@ export async function handleAiAutoReply(
   let systemPrompt =
     (await getSetting(SETTING_KEYS.AI_AGENT_SYSTEM_PROMPT)) ||
     "You are a helpful customer service agent for a delivery company. Keep responses short for WhatsApp.";
+
+  // Language detection: check if the message is primarily Arabic
+  const isArabic = detectArabic(messageText);
+  if (isArabic) {
+    systemPrompt +=
+      "\n\nIMPORTANT: The customer is writing in Arabic. You MUST respond in Saudi Arabian Arabic dialect (اللهجة السعودية). Use natural Saudi expressions and wording like a real Saudi customer service agent would use. Do NOT use formal/classical Arabic (فصحى). Use words like 'حياك الله', 'ان شاء الله', 'يعطيك العافية', etc.";
+  } else {
+    systemPrompt +=
+      "\n\nIMPORTANT: The customer is writing in English. Respond in clear, natural English.";
+  }
 
   if (order) {
     systemPrompt = systemPrompt

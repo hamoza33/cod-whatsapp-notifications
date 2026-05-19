@@ -9,6 +9,8 @@ import { rateLimit } from "@/lib/rate-limit";
  * Returns a unified, time-ordered thread for a single phone number,
  * combining inbound messages and outbound (template) messages. Used by the
  * Inbox view's right pane.
+ *
+ * Accepts optional `?phoneNumberId=` to filter by which WhatsApp number.
  */
 export async function GET(
   request: NextRequest,
@@ -20,6 +22,7 @@ export async function GET(
   }
   const { phone } = await params;
   const decodedPhone = decodeURIComponent(phone);
+  const phoneNumberId = request.nextUrl.searchParams.get("phoneNumberId");
 
   // Webhook stores inbound phones with "+" prefix, outbound may omit it.
   // Query both variants so messages always match regardless of format.
@@ -28,11 +31,17 @@ export async function GET(
 
   const [inbound, outbound] = await Promise.all([
     prisma.inboundMessage.findMany({
-      where: { fromPhoneNumber: { in: phoneVariants } },
+      where: {
+        fromPhoneNumber: { in: phoneVariants },
+        ...(phoneNumberId ? { toPhoneNumberId: phoneNumberId } : {}),
+      },
       orderBy: { receivedAt: "asc" },
     }),
     prisma.whatsappMessage.findMany({
-      where: { phoneNumber: { in: phoneVariants } },
+      where: {
+        phoneNumber: { in: phoneVariants },
+        ...(phoneNumberId ? { fromPhoneNumberId: phoneNumberId } : {}),
+      },
       orderBy: { createdAt: "asc" },
       select: {
         id: true,
@@ -76,7 +85,7 @@ export async function GET(
       };
 
   // Pre-fetch template bodies and header types for rendering outbound messages
-  const templateNames = [...new Set(outbound.map((m) => m.templateName).filter((n) => n !== "<text>"))];
+  const templateNames = [...new Set(outbound.map((m) => m.templateName).filter((n) => n !== "<text>" && n !== "<image>" && n !== "<video>" && n !== "<audio>" && n !== "<document>"))];
   const templateBodies = new Map<string, string>();
   const templateHeaderTypes = new Map<string, string | null>();
   if (templateNames.length > 0) {
@@ -109,10 +118,16 @@ export async function GET(
   }
   for (const m of outbound) {
     let renderedText: string | null = null;
+    const isMediaTag = ["<image>", "<video>", "<audio>", "<document>"].includes(m.templateName);
     if (m.templateName === "<text>") {
       const vars = m.templateVariablesJson;
       if (vars && typeof vars === "object" && "text" in vars) {
         renderedText = (vars as { text: string }).text;
+      }
+    } else if (isMediaTag) {
+      const vars = m.templateVariablesJson;
+      if (vars && typeof vars === "object" && "caption" in vars) {
+        renderedText = (vars as { caption: string }).caption;
       }
     } else {
       const body = templateBodies.get(m.templateName);
@@ -149,8 +164,7 @@ export async function GET(
   }
   thread.sort((a, b) => a.at.localeCompare(b.at));
 
-  // Compute whether we're inside Meta's 24h customer-service window — we
-  // use this to disable / enable the free-form text reply UI client-side.
+  // Compute whether we're inside Meta's 24h customer-service window
   const lastInboundAt = inbound[inbound.length - 1]?.receivedAt ?? null;
   const inSession =
     lastInboundAt
@@ -166,9 +180,11 @@ export async function GET(
 }
 
 /**
- * Send a free-form text reply. Only valid inside Meta's 24-hour customer
- * service window — if Meta refuses we return a clear error suggesting the
- * user use the Pipeline → Send WhatsApp dialog to send a template instead.
+ * Send a free-form text or media reply. Only valid inside Meta's 24-hour
+ * customer service window.
+ *
+ * Body: { text?: string, phoneNumberId?: string, mediaFile?: string (base64),
+ *         mediaType?: string, mediaMimeType?: string, mediaFilename?: string }
  */
 export async function POST(
   request: NextRequest,
@@ -189,15 +205,24 @@ export async function POST(
 
   const { phone } = await params;
   const decodedPhone = decodeURIComponent(phone);
-  let body: { text?: unknown };
+  let body: {
+    text?: unknown;
+    phoneNumberId?: string;
+    mediaFile?: string;
+    mediaType?: string;
+    mediaMimeType?: string;
+    mediaFilename?: string;
+  };
   try {
-    body = (await request.json()) as { text?: unknown };
+    body = (await request.json()) as typeof body;
   } catch {
     return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
   }
-  if (typeof body.text !== "string" || !body.text.trim()) {
+
+  const hasMedia = body.mediaFile && body.mediaType && body.mediaMimeType;
+  if (!hasMedia && (typeof body.text !== "string" || !body.text.trim())) {
     return NextResponse.json(
-      { error: "text is required and must be a non-empty string" },
+      { error: "text is required (or attach media)" },
       { status: 400 }
     );
   }
@@ -212,7 +237,9 @@ export async function POST(
 
   let client: WhatsAppClient;
   try {
-    client = await WhatsAppClient.fromSettings();
+    client = body.phoneNumberId
+      ? await WhatsAppClient.fromPhoneNumberId(body.phoneNumberId)
+      : await WhatsAppClient.fromSettings();
   } catch (err) {
     return NextResponse.json(
       { error: err instanceof Error ? err.message : "WhatsApp not configured" },
@@ -220,14 +247,54 @@ export async function POST(
     );
   }
 
-  // The Cloud API expects the recipient phone WITHOUT the leading "+"
   const toForApi = decodedPhone.replace(/^\+/, "");
+  const usedPhoneNumberId = client.getPhoneNumberId();
 
   try {
-    const result = await client.sendText(toForApi, body.text);
+    if (hasMedia) {
+      // Upload the media file to Meta, then send as media message
+      const fileBuffer = Buffer.from(body.mediaFile!, "base64");
+      const mimeType = body.mediaMimeType!;
+      const filename = body.mediaFilename || "attachment";
+      const mediaType = body.mediaType as "image" | "video" | "audio" | "document";
 
-    // Always record the outbound text in whatsapp_messages so it shows
-    // in the conversation thread. Link to the order if we have one.
+      const uploadedMediaId = await client.uploadMedia(fileBuffer, mimeType, filename);
+      const caption = typeof body.text === "string" ? body.text.trim() : undefined;
+      const result = await client.sendMedia(toForApi, mediaType, uploadedMediaId, caption || undefined);
+
+      try {
+        await prisma.whatsappMessage.create({
+          data: {
+            orderId: lastInbound?.orderId ?? undefined,
+            phoneNumber: decodedPhone,
+            templateName: `<${mediaType}>`,
+            templateLanguage: "",
+            templateVariablesJson: {
+              mediaId: uploadedMediaId,
+              caption: caption || null,
+              mimeType,
+              filename,
+            },
+            providerMessageId: result.messages?.[0]?.id ?? null,
+            status: "SENT",
+            sentBy: user.email,
+            sentAt: new Date(),
+            fromPhoneNumberId: usedPhoneNumberId,
+          },
+        });
+      } catch {
+        // ignore logging failure
+      }
+
+      return NextResponse.json({
+        success: true,
+        providerMessageId: result.messages?.[0]?.id ?? null,
+      });
+    }
+
+    // Text-only reply
+    const result = await client.sendText(toForApi, body.text as string);
+
     try {
       await prisma.whatsappMessage.create({
         data: {
@@ -235,11 +302,12 @@ export async function POST(
           phoneNumber: decodedPhone,
           templateName: "<text>",
           templateLanguage: "",
-          templateVariablesJson: { text: body.text },
+          templateVariablesJson: { text: String(body.text) },
           providerMessageId: result.messages?.[0]?.id ?? null,
           status: "SENT",
           sentBy: user.email,
           sentAt: new Date(),
+          fromPhoneNumberId: usedPhoneNumberId,
         },
       });
     } catch {
@@ -252,8 +320,6 @@ export async function POST(
     });
   } catch (err) {
     if (err instanceof WhatsAppApiError) {
-      // 131047 / 131051 = re-engagement / 24h window expired. Surface a
-      // friendly message so the UI can suggest sending a template instead.
       const inSessionExpired =
         err.metaCode === 131047 || err.metaCode === 131051;
       return NextResponse.json(

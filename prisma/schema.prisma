@@ -120,12 +120,15 @@ model WhatsappMessage {
   sentBy                String        @default("manual") @map("sent_by")
   sentAt                DateTime?     @map("sent_at")
   createdAt             DateTime      @default(now()) @map("created_at")
+  // Which WhatsApp Business Phone Number ID sent this message (for multi-number filtering)
+  fromPhoneNumberId     String?       @map("from_phone_number_id")
 
   order Order? @relation(fields: [orderId], references: [id])
 
   @@index([orderId])
   @@index([phoneNumber])
   @@index([status])
+  @@index([fromPhoneNumberId])
   @@map("whatsapp_messages")
 }
 
@@ -147,10 +150,14 @@ model InboundMessage {
   receivedAt        DateTime  @default(now()) @map("received_at")
   orderId           String?   @map("order_id")
   order             Order?    @relation(fields: [orderId], references: [id])
+  // Which WhatsApp Business Phone Number ID received this message (from webhook
+  // metadata.phone_number_id). Used for multi-number inbox filtering.
+  toPhoneNumberId   String?   @map("to_phone_number_id")
 
   @@index([fromPhoneNumber])
   @@index([receivedAt])
   @@index([orderId])
+  @@index([toPhoneNumberId])
   @@map("inbound_messages")
 }
 

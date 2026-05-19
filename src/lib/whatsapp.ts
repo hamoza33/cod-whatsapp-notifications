@@ -289,6 +289,99 @@ export class WhatsAppClient {
   }
 
   /**
+   * Send a media message (image, video, audio, document). Only valid inside
+   * Meta's 24-hour customer service window.
+   */
+  async sendMedia(
+    to: string,
+    type: "image" | "video" | "audio" | "document",
+    mediaId: string,
+    caption?: string
+  ): Promise<WhatsAppSendResult> {
+    const url = `https://graph.facebook.com/${this.apiVersion}/${this.phoneNumberId}/messages`;
+    const mediaObj: Record<string, string> = { id: mediaId };
+    if (caption) mediaObj.caption = caption;
+    const body = {
+      messaging_product: "whatsapp",
+      recipient_type: "individual",
+      to,
+      type,
+      [type]: mediaObj,
+    };
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${this.accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(body),
+    });
+    if (!response.ok) {
+      const errorBody = await response.text();
+      throw new WhatsAppApiError(response.status, errorBody);
+    }
+    return response.json();
+  }
+
+  /**
+   * Upload a media file to Meta's Cloud API and return the media ID.
+   */
+  async uploadMedia(
+    file: Buffer,
+    mimeType: string,
+    filename: string
+  ): Promise<string> {
+    const url = `https://graph.facebook.com/${this.apiVersion}/${this.phoneNumberId}/media`;
+    const metaForm = new FormData();
+    metaForm.set("messaging_product", "whatsapp");
+    metaForm.set("type", mimeType);
+    metaForm.set("file", new Blob([new Uint8Array(file)], { type: mimeType }), filename);
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${this.accessToken}` },
+      body: metaForm,
+    });
+    if (!response.ok) {
+      const errorBody = await response.text();
+      throw new WhatsAppApiError(response.status, errorBody);
+    }
+    const data = (await response.json()) as { id?: string };
+    if (!data.id) throw new Error("Media upload returned no ID");
+    return data.id;
+  }
+
+  /** Get the phone number ID this client is configured to use. */
+  getPhoneNumberId(): string {
+    return this.phoneNumberId;
+  }
+
+  /**
+   * Create a client using a specific phone number ID but the access token
+   * from Settings. Used for multi-number inbox switching.
+   */
+  static async fromPhoneNumberId(
+    phoneNumberId: string
+  ): Promise<WhatsAppClient> {
+    const accessToken =
+      (await getSetting(SETTING_KEYS.WHATSAPP_ACCESS_TOKEN)) ||
+      process.env.WHATSAPP_ACCESS_TOKEN ||
+      "";
+    const apiVersion =
+      (await getSetting(SETTING_KEYS.WHATSAPP_API_VERSION)) ||
+      process.env.WHATSAPP_API_VERSION ||
+      "v17.0";
+
+    if (!accessToken) {
+      throw new Error(
+        "WhatsApp Cloud API credentials not configured. Please set them in Settings."
+      );
+    }
+
+    return new WhatsAppClient(phoneNumberId, accessToken, apiVersion);
+  }
+
+  /**
    * Send a one-off test message. Defaults to the user-configured template
    * (so they don't have to maintain a `hello_world` template just for tests),
    * but accepts overrides for ad-hoc verification.
