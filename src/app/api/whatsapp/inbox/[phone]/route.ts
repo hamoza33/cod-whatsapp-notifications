@@ -20,15 +20,19 @@ export async function GET(
   }
   const { phone } = await params;
   const decodedPhone = decodeURIComponent(phone);
+  const phoneNumberId = request.nextUrl.searchParams.get("phoneNumberId");
 
   // Webhook stores inbound phones with "+" prefix, outbound may omit it.
   // Query both variants so messages always match regardless of format.
   const digits = decodedPhone.replace(/[^\d]/g, "");
   const phoneVariants = [...new Set([decodedPhone, digits, `+${digits}`])];
 
+  const inboundWhere: Record<string, unknown> = { fromPhoneNumber: { in: phoneVariants } };
+  if (phoneNumberId) inboundWhere.toPhoneNumberId = phoneNumberId;
+
   const [inbound, outbound] = await Promise.all([
     prisma.inboundMessage.findMany({
-      where: { fromPhoneNumber: { in: phoneVariants } },
+      where: inboundWhere,
       orderBy: { receivedAt: "asc" },
     }),
     prisma.whatsappMessage.findMany({
@@ -189,15 +193,22 @@ export async function POST(
 
   const { phone } = await params;
   const decodedPhone = decodeURIComponent(phone);
-  let body: { text?: unknown };
+  let body: {
+    text?: unknown;
+    phoneNumberId?: string;
+    mediaId?: string;
+    mediaType?: string;
+    mediaMimeType?: string;
+  };
   try {
-    body = (await request.json()) as { text?: unknown };
+    body = (await request.json()) as typeof body;
   } catch {
     return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
   }
-  if (typeof body.text !== "string" || !body.text.trim()) {
+  const hasMedia = typeof body.mediaId === "string" && body.mediaId.length > 0;
+  if (!hasMedia && (typeof body.text !== "string" || !body.text.trim())) {
     return NextResponse.json(
-      { error: "text is required and must be a non-empty string" },
+      { error: "text or mediaId is required" },
       { status: 400 }
     );
   }
@@ -212,7 +223,11 @@ export async function POST(
 
   let client: WhatsAppClient;
   try {
-    client = await WhatsAppClient.fromSettings();
+    if (body.phoneNumberId) {
+      client = await WhatsAppClient.fromPhoneNumberId(body.phoneNumberId);
+    } else {
+      client = await WhatsAppClient.fromSettings();
+    }
   } catch (err) {
     return NextResponse.json(
       { error: err instanceof Error ? err.message : "WhatsApp not configured" },
@@ -224,18 +239,27 @@ export async function POST(
   const toForApi = decodedPhone.replace(/^\+/, "");
 
   try {
-    const result = await client.sendText(toForApi, body.text);
+    let result;
+    if (hasMedia) {
+      const mediaType = (body.mediaType || "image") as "image" | "video" | "audio" | "document";
+      const caption = typeof body.text === "string" ? body.text.trim() || undefined : undefined;
+      result = await client.sendMedia(toForApi, mediaType, body.mediaId!, caption);
+    } else {
+      result = await client.sendText(toForApi, body.text as string);
+    }
 
-    // Always record the outbound text in whatsapp_messages so it shows
+    // Always record the outbound message in whatsapp_messages so it shows
     // in the conversation thread. Link to the order if we have one.
     try {
       await prisma.whatsappMessage.create({
         data: {
           orderId: lastInbound?.orderId ?? undefined,
           phoneNumber: decodedPhone,
-          templateName: "<text>",
+          templateName: hasMedia ? `<${body.mediaType || "media"}>` : "<text>",
           templateLanguage: "",
-          templateVariablesJson: { text: body.text },
+          templateVariablesJson: hasMedia
+            ? { mediaId: body.mediaId as string, mediaType: (body.mediaType || "image") as string, caption: typeof body.text === "string" ? body.text : "" }
+            : { text: String(body.text ?? "") },
           providerMessageId: result.messages?.[0]?.id ?? null,
           status: "SENT",
           sentBy: user.email,
