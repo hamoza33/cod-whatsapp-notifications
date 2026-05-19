@@ -258,7 +258,7 @@ export async function POST(
       const filename = body.mediaFilename || "attachment";
       const mediaType = body.mediaType as "image" | "video" | "audio" | "document";
 
-      const uploadedMediaId = await client.uploadMedia(fileBuffer, mimeType, filename);
+      const uploadedMediaId = await client.uploadMedia(fileBuffer.buffer.slice(fileBuffer.byteOffset, fileBuffer.byteOffset + fileBuffer.byteLength), mimeType, filename);
       const caption = typeof body.text === "string" ? body.text.trim() : undefined;
       const result = await client.sendMedia(toForApi, mediaType, uploadedMediaId, caption || undefined);
 
