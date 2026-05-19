@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback, useRef, useMemo } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { api } from "@/lib/api-client";
 import {
   RefreshCw,
@@ -8,84 +8,57 @@ import {
   AlertCircle,
   MessageSquare,
   Image as ImageIcon,
-  CheckCheck,
   Check,
   X,
   Search,
   Phone,
-  Sparkles,
-  Loader2,
-  Pin,
-  PinOff,
+  QrCode,
+  Wifi,
+  WifiOff,
+  Plus,
+  Trash2,
+  Play,
+  Square,
+  Users,
 } from "lucide-react";
 
-interface Conversation {
-  phoneNumber: string;
-  contactName: string | null;
-  lastReceivedAt: string;
-  lastText: string | null;
-  lastType: string;
-  totalMessages: number;
-  unreadCount: number;
-  isPinned: boolean;
-  isOutboundOnly?: boolean;
-  order: {
-    id: string;
-    codNetworkOrderId: string;
-    customerName: string | null;
-    productName: string | null;
-    status: string;
-  } | null;
+/* Types */
+
+interface OpenWASession {
+  id: string;
+  name: string;
+  status: string;
+  phone: string | null;
+  pushName: string | null;
+  connectedAt: string | null;
+  lastActive: string | null;
+  createdAt: string;
 }
 
-type InboxSort = "recent" | "unread" | "unreplied";
-
-type ThreadEntry =
-  | {
-      kind: "inbound";
-      id: string;
-      at: string;
-      type: string;
-      text: string | null;
-      mediaId: string | null;
-      mediaMimeType: string | null;
-      contactName: string | null;
-    }
-  | {
-      kind: "outbound";
-      id: string;
-      at: string;
-      templateName: string;
-      templateVariables: unknown;
-      renderedText: string | null;
-      headerImageUrl: string | null;
-      sentBy: string | null;
-      status: string;
-      providerMessageId: string | null;
-      errorMessage: string | null;
-    };
-
-interface ThreadResponse {
-  phoneNumber: string;
-  thread: ThreadEntry[];
-  inSession: boolean;
-  lastInboundAt: string | null;
+interface OpenWAMessage {
+  id: string;
+  waMessageId: string | null;
+  sessionId: string;
+  chatId: string;
+  from: string;
+  to: string;
+  body: string | null;
+  type: string;
+  direction: string;
+  status: string;
+  timestamp: number | null;
+  createdAt: string;
 }
 
-function formatTime(dateStr: string) {
-  const d = new Date(dateStr);
-  const now = new Date();
-  const isToday = d.toDateString() === now.toDateString();
-  const yesterday = new Date(now);
-  yesterday.setDate(yesterday.getDate() - 1);
-  const isYesterday = d.toDateString() === yesterday.toDateString();
-
-  if (isToday) {
-    return d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
-  }
-  if (isYesterday) return "Yesterday";
-  return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+interface OpenWAContact {
+  id: string;
+  name: string | null;
+  pushname: string | null;
+  isGroup: boolean;
+  isMyContact: boolean;
 }
+
+/* Helpers */
 
 function formatMessageTime(dateStr: string) {
   return new Date(dateStr).toLocaleTimeString(undefined, {
@@ -98,247 +71,329 @@ function hasArabic(text: string): boolean {
   return /[\u0600-\u06FF]/.test(text);
 }
 
-interface WhatsappNumberOption {
-  id: string;
-  label: string;
-  phoneNumberId: string;
-  displayPhone: string;
-  isDefault: boolean;
+function chatIdToDisplay(chatId: string): string {
+  return chatId.replace(/@c\.us$|@g\.us$/, "");
 }
 
+/* Main Component */
+
 export default function InboxPage() {
-  const [conversations, setConversations] = useState<Conversation[]>([]);
-  const [selectedPhone, setSelectedPhone] = useState<string | null>(() => {
-    if (typeof window === "undefined") return null;
-    return sessionStorage.getItem("inbox_selected_phone") || null;
-  });
-  const [thread, setThread] = useState<ThreadResponse | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
-  const [replyText, setReplyText] = useState(() => {
-    if (typeof window === "undefined") return "";
-    return sessionStorage.getItem("inbox_draft_text") || "";
-  });
-  const [sending, setSending] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [toast, setToast] = useState<{ kind: "error" | "success"; text: string } | null>(null);
+  const [sessions, setSessions] = useState<OpenWASession[]>([]);
+  const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
+  const [sessionsLoading, setSessionsLoading] = useState(true);
+
+  const [contacts, setContacts] = useState<OpenWAContact[]>([]);
+  const [selectedChatId, setSelectedChatId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
-  const [whatsappNumbers, setWhatsappNumbers] = useState<WhatsappNumberOption[]>([]);
-  const [selectedNumberId, setSelectedNumberId] = useState<string | null>(null);
-  const [aiSuggestions, setAiSuggestions] = useState<string[]>([]);
-  const [aiSuggestionsLoading, setAiSuggestionsLoading] = useState(false);
-  const [sortMode, setSortMode] = useState<InboxSort>("recent");
+
+  const [messages, setMessages] = useState<OpenWAMessage[]>([]);
+  const [messagesLoading, setMessagesLoading] = useState(false);
+
+  const [replyText, setReplyText] = useState("");
+  const [sending, setSending] = useState(false);
+
+  const [qrCode, setQrCode] = useState<string | null>(null);
+  const [showQrModal, setShowQrModal] = useState(false);
+
+  const [showNewSession, setShowNewSession] = useState(false);
+  const [newSessionName, setNewSessionName] = useState("");
+  const [creatingSession, setCreatingSession] = useState(false);
+
+  const [error, setError] = useState<string | null>(null);
+  const [toast, setToast] = useState<{
+    kind: "error" | "success";
+    text: string;
+  } | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const [configMissing, setConfigMissing] = useState(false);
+
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const threadEndRef = useRef<HTMLDivElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const userScrolledUp = useRef(false);
-  const prevThreadLength = useRef(0);
+  const prevMsgCount = useRef(0);
 
-  const showToast = useCallback((kind: "error" | "success", text: string) => {
-    setToast({ kind, text });
-    if (toastTimer.current) clearTimeout(toastTimer.current);
-    toastTimer.current = setTimeout(() => setToast(null), 5000);
-  }, []);
+  const showToast = useCallback(
+    (kind: "error" | "success", text: string) => {
+      setToast({ kind, text });
+      if (toastTimer.current) clearTimeout(toastTimer.current);
+      toastTimer.current = setTimeout(() => setToast(null), 5000);
+    },
+    []
+  );
 
-  const fetchConversations = useCallback(async () => {
+  const activeSession = sessions.find((s) => s.id === activeSessionId);
+
+  /* Data Fetching */
+
+  const fetchSessions = useCallback(async () => {
     try {
-      const data = await api.get<{ conversations: Conversation[] }>(
-        "/whatsapp/inbox"
-      );
-      setConversations(data.conversations);
-      setError(null);
+      const data = await api.get<OpenWASession[]>("/openwa/sessions");
+      setSessions(Array.isArray(data) ? data : []);
+      setConfigMissing(false);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load inbox");
-    } finally {
-      setLoading(false);
-      setRefreshing(false);
-    }
-  }, []);
-
-  const fetchThread = useCallback(async (phone: string) => {
-    try {
-      const data = await api.get<ThreadResponse>(
-        `/whatsapp/inbox/${encodeURIComponent(phone)}`
-      );
-      const isNewConversation = prevThreadLength.current === 0;
-      const hasNewMessages = data.thread.length > prevThreadLength.current;
-      setThread(data);
-      prevThreadLength.current = data.thread.length;
-
-      if (isNewConversation || (hasNewMessages && !userScrolledUp.current)) {
-        setTimeout(() => {
-          threadEndRef.current?.scrollIntoView({ behavior: "smooth" });
-        }, 100);
+      const msg = err instanceof Error ? err.message : "Failed to load sessions";
+      if (msg.includes("not configured")) {
+        setConfigMissing(true);
+      } else {
+        setError(msg);
       }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load thread");
+    } finally {
+      setSessionsLoading(false);
     }
   }, []);
 
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    fetchConversations();
-  }, [fetchConversations]);
+    if (activeSessionId || sessions.length === 0) return;
+    const ready = sessions.find((s) => s.status === "ready");
+    setActiveSessionId(ready ? ready.id : sessions[0].id);
+  }, [sessions, activeSessionId]);
 
-  useEffect(() => {
-    async function loadNumbers() {
+  const fetchContacts = useCallback(async () => {
+    if (!activeSessionId) return;
+    try {
+      const data = await api.get<OpenWAContact[]>(
+        `/openwa/sessions/${activeSessionId}/contacts`
+      );
+      if (Array.isArray(data)) setContacts(data);
+    } catch {
+      // Session may not be ready yet
+    }
+  }, [activeSessionId]);
+
+  const fetchMessages = useCallback(
+    async (chatId: string) => {
+      if (!activeSessionId) return;
+      setMessagesLoading(true);
       try {
-        const data = await api.get<{ numbers: WhatsappNumberOption[] }>("/whatsapp/numbers");
-        setWhatsappNumbers(data.numbers);
-        const def = data.numbers.find((n) => n.isDefault);
-        if (def) setSelectedNumberId(def.id);
+        const data = await api.get<{
+          messages: OpenWAMessage[];
+          total: number;
+        }>(`/openwa/sessions/${activeSessionId}/messages`, {
+          chatId,
+          limit: "100",
+        });
+        const msgs = data.messages || [];
+        msgs.sort(
+          (a, b) =>
+            new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+        );
+        const isNew = prevMsgCount.current === 0;
+        const hasNew = msgs.length > prevMsgCount.current;
+        setMessages(msgs);
+        prevMsgCount.current = msgs.length;
+
+        if (isNew || (hasNew && !userScrolledUp.current)) {
+          setTimeout(() => {
+            threadEndRef.current?.scrollIntoView({ behavior: "smooth" });
+          }, 100);
+        }
       } catch {
         // ignore
+      } finally {
+        setMessagesLoading(false);
       }
+    },
+    [activeSessionId]
+  );
+
+  /* Effects */
+
+  useEffect(() => {
+    fetchSessions();
+  }, [fetchSessions]);
+
+  useEffect(() => {
+    if (activeSessionId && activeSession?.status === "ready") {
+      fetchContacts();
     }
-    loadNumbers();
-  }, []);
+  }, [activeSessionId, activeSession?.status, fetchContacts]);
+
+  useEffect(() => {
+    if (selectedChatId && activeSessionId) {
+      prevMsgCount.current = 0;
+      userScrolledUp.current = false;
+      fetchMessages(selectedChatId);
+    } else {
+      setMessages([]);
+      prevMsgCount.current = 0;
+    }
+  }, [selectedChatId, activeSessionId, fetchMessages]);
 
   useEffect(() => {
     const interval = setInterval(() => {
-      fetchConversations();
-      if (selectedPhone) fetchThread(selectedPhone);
+      fetchSessions();
+      if (activeSessionId && activeSession?.status === "ready") {
+        fetchContacts();
+      }
+      if (selectedChatId) fetchMessages(selectedChatId);
     }, 5000);
     return () => clearInterval(interval);
-  }, [fetchConversations, fetchThread, selectedPhone]);
+  }, [
+    fetchSessions,
+    fetchContacts,
+    fetchMessages,
+    activeSessionId,
+    activeSession?.status,
+    selectedChatId,
+  ]);
 
-  // Persist selected phone and draft text to sessionStorage so they survive
-  // page refreshes without polluting the URL.
-  useEffect(() => {
-    if (selectedPhone) {
-      sessionStorage.setItem("inbox_selected_phone", selectedPhone);
-    } else {
-      sessionStorage.removeItem("inbox_selected_phone");
+  /* Actions */
+
+  const handleCreateSession = async () => {
+    if (!newSessionName.trim()) return;
+    setCreatingSession(true);
+    try {
+      const session = await api.post<OpenWASession>("/openwa/sessions", {
+        name: newSessionName.trim(),
+      });
+      setSessions((prev) => [...prev, session]);
+      setActiveSessionId(session.id);
+      setNewSessionName("");
+      setShowNewSession(false);
+      showToast("success", `Session "${session.name}" created`);
+    } catch (err) {
+      showToast(
+        "error",
+        err instanceof Error ? err.message : "Failed to create session"
+      );
+    } finally {
+      setCreatingSession(false);
     }
-  }, [selectedPhone]);
+  };
 
-  useEffect(() => {
-    if (replyText) {
-      sessionStorage.setItem("inbox_draft_text", replyText);
-    } else {
-      sessionStorage.removeItem("inbox_draft_text");
+  const handleStartSession = async (id: string) => {
+    try {
+      await api.post(`/openwa/sessions/${id}/start`);
+      showToast("success", "Session starting...");
+      fetchSessions();
+    } catch (err) {
+      showToast(
+        "error",
+        err instanceof Error ? err.message : "Failed to start session"
+      );
     }
-  }, [replyText]);
+  };
 
-  useEffect(() => {
-    if (selectedPhone) {
-      prevThreadLength.current = 0;
-      userScrolledUp.current = false;
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      fetchThread(selectedPhone);
-    } else {
-      setThread(null);
-      prevThreadLength.current = 0;
+  const handleStopSession = async (id: string) => {
+    try {
+      await api.post(`/openwa/sessions/${id}/stop`);
+      showToast("success", "Session stopped");
+      fetchSessions();
+    } catch (err) {
+      showToast(
+        "error",
+        err instanceof Error ? err.message : "Failed to stop session"
+      );
     }
-  }, [selectedPhone, fetchThread]);
+  };
 
-  const handleReply = async () => {
-    if (!selectedPhone || !replyText.trim()) return;
+  const handleDeleteSession = async (id: string) => {
+    if (!confirm("Delete this session? This cannot be undone.")) return;
+    try {
+      await api.del(`/openwa/sessions/${id}`);
+      setSessions((prev) => prev.filter((s) => s.id !== id));
+      if (activeSessionId === id) {
+        setActiveSessionId(null);
+        setSelectedChatId(null);
+      }
+      showToast("success", "Session deleted");
+    } catch (err) {
+      showToast(
+        "error",
+        err instanceof Error ? err.message : "Failed to delete session"
+      );
+    }
+  };
+
+  const handleGetQR = async (id: string) => {
+    try {
+      const data = await api.get<{ qr: string }>(
+        `/openwa/sessions/${id}/qr`
+      );
+      setQrCode(data.qr);
+      setShowQrModal(true);
+    } catch (err) {
+      showToast(
+        "error",
+        err instanceof Error
+          ? err.message
+          : "QR not ready. Start the session first."
+      );
+    }
+  };
+
+  const handleSendMessage = async () => {
+    if (!selectedChatId || !replyText.trim() || !activeSessionId) return;
     setSending(true);
     try {
-      const response = await fetch(
-        `/api/whatsapp/inbox/${encodeURIComponent(selectedPhone)}`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ text: replyText }),
-        }
+      await api.post(
+        `/openwa/sessions/${activeSessionId}/messages/send-text`,
+        { chatId: selectedChatId, text: replyText.trim() }
       );
-      const data = (await response.json()) as { error?: string };
-      if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
       setReplyText("");
-      showToast("success", "Reply sent");
-      fetchThread(selectedPhone);
+      showToast("success", "Message sent");
+      fetchMessages(selectedChatId);
     } catch (err) {
-      showToast("error", err instanceof Error ? err.message : "Reply failed");
+      showToast(
+        "error",
+        err instanceof Error ? err.message : "Send failed"
+      );
     } finally {
       setSending(false);
     }
   };
 
-  const fetchAiSuggestions = async () => {
-    if (!selectedPhone) return;
-    setAiSuggestionsLoading(true);
-    setAiSuggestions([]);
-    try {
-      const response = await fetch(
-        `/api/whatsapp/inbox/${encodeURIComponent(selectedPhone)}/suggestions`,
-        { method: "POST" }
-      );
-      const data = (await response.json()) as {
-        suggestions?: string[];
-        error?: string;
-      };
-      if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
-      setAiSuggestions(data.suggestions || []);
-    } catch (err) {
-      showToast(
-        "error",
-        err instanceof Error ? err.message : "Failed to get AI suggestions"
-      );
-    } finally {
-      setAiSuggestionsLoading(false);
-    }
-  };
-
   const refresh = () => {
     setRefreshing(true);
-    fetchConversations();
-    if (selectedPhone) fetchThread(selectedPhone);
+    fetchSessions();
+    if (activeSessionId && activeSession?.status === "ready") fetchContacts();
+    if (selectedChatId) fetchMessages(selectedChatId);
+    setTimeout(() => setRefreshing(false), 1000);
   };
 
-  const togglePin = async (phone: string, currentlyPinned: boolean) => {
-    if (currentlyPinned) {
-      await fetch(`/api/whatsapp/inbox/pin?phoneNumber=${encodeURIComponent(phone)}`, { method: "DELETE" });
-    } else {
-      await fetch("/api/whatsapp/inbox/pin", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ phoneNumber: phone }),
-      });
-    }
-    setConversations((prev) =>
-      prev.map((c) => c.phoneNumber === phone ? { ...c, isPinned: !currentlyPinned } : c)
+  /* Filtered contacts */
+
+  const filteredContacts = contacts.filter((c) => {
+    if (!searchQuery.trim()) return true;
+    const q = searchQuery.toLowerCase();
+    return (
+      c.name?.toLowerCase().includes(q) ||
+      c.pushname?.toLowerCase().includes(q) ||
+      c.id.toLowerCase().includes(q)
     );
-  };
+  });
 
-  const filteredConversations = useMemo(() => {
-    let list = conversations.filter((c) => {
-      if (!searchQuery.trim()) return true;
-      const q = searchQuery.toLowerCase();
-      return (
-        (c.contactName?.toLowerCase().includes(q)) ||
-        c.phoneNumber.includes(q) ||
-        (c.order?.customerName?.toLowerCase().includes(q)) ||
-        (c.lastText?.toLowerCase().includes(q))
-      );
-    });
+  const selectedContact = contacts.find((c) => c.id === selectedChatId);
 
-    // Sort: pinned first, then by sort mode
-    list = [...list].sort((a, b) => {
-      if (a.isPinned && !b.isPinned) return -1;
-      if (!a.isPinned && b.isPinned) return 1;
+  /* Config missing */
 
-      if (sortMode === "unread") {
-        if (a.unreadCount > 0 && b.unreadCount === 0) return -1;
-        if (a.unreadCount === 0 && b.unreadCount > 0) return 1;
-      }
-      if (sortMode === "unreplied") {
-        const aUnreplied = a.unreadCount > 0 && !a.isOutboundOnly;
-        const bUnreplied = b.unreadCount > 0 && !b.isOutboundOnly;
-        if (aUnreplied && !bUnreplied) return -1;
-        if (!aUnreplied && bUnreplied) return 1;
-      }
+  if (configMissing) {
+    return (
+      <div className="flex items-center justify-center h-[calc(100vh-2rem)]">
+        <div className="text-center max-w-md p-8 bg-white rounded-lg shadow-lg border">
+          <div className="w-16 h-16 rounded-full bg-amber-100 flex items-center justify-center mx-auto mb-4">
+            <AlertCircle size={32} className="text-amber-600" />
+          </div>
+          <h3 className="text-xl font-semibold text-gray-900 mb-2">
+            OpenWA Not Configured
+          </h3>
+          <p className="text-sm text-gray-600 mb-4">
+            The OpenWA API URL is not set. Go to{" "}
+            <a
+              href="/settings#openwa"
+              className="text-blue-600 hover:underline font-medium"
+            >
+              Settings &rarr; OpenWA
+            </a>{" "}
+            to configure the connection.
+          </p>
+        </div>
+      </div>
+    );
+  }
 
-      return new Date(b.lastReceivedAt).getTime() - new Date(a.lastReceivedAt).getTime();
-    });
-
-    return list;
-  }, [conversations, searchQuery, sortMode]);
-
-  const selectedConvo = conversations.find((c) => c.phoneNumber === selectedPhone);
-
-  if (loading) {
+  if (sessionsLoading) {
     return (
       <div className="flex items-center justify-center h-64">
         <RefreshCw className="animate-spin text-[#25D366]" size={24} />
@@ -346,9 +401,11 @@ export default function InboxPage() {
     );
   }
 
+  /* Render */
+
   return (
     <div className="flex h-[calc(100vh-2rem)] rounded-lg overflow-hidden shadow-lg border border-gray-200">
-      {/* Left panel - conversation list */}
+      {/* Left panel */}
       <div className="w-[380px] flex flex-col bg-white border-r border-gray-200">
         {/* Header */}
         <div className="px-4 py-3 bg-[#008069] flex items-center justify-between">
@@ -356,163 +413,249 @@ export default function InboxPage() {
             <div className="w-10 h-10 rounded-full bg-[#DFE5E7] flex items-center justify-center">
               <MessageSquare size={20} className="text-[#54656F]" />
             </div>
-            <h2 className="text-white font-semibold text-lg">Chats</h2>
+            <h2 className="text-white font-semibold text-lg">WhatsApp</h2>
           </div>
-          <button
-            onClick={refresh}
-            disabled={refreshing}
-            className="p-2 text-white/80 hover:text-white rounded-full hover:bg-white/10 transition-colors"
-            aria-label="Refresh"
-          >
-            <RefreshCw
-              size={18}
-              className={refreshing ? "animate-spin" : ""}
-            />
-          </button>
+          <div className="flex items-center gap-1">
+            <button
+              onClick={() => setShowNewSession(true)}
+              className="p-2 text-white/80 hover:text-white rounded-full hover:bg-white/10 transition-colors"
+              title="New Session"
+            >
+              <Plus size={18} />
+            </button>
+            <button
+              onClick={refresh}
+              disabled={refreshing}
+              className="p-2 text-white/80 hover:text-white rounded-full hover:bg-white/10 transition-colors"
+              title="Refresh"
+            >
+              <RefreshCw
+                size={18}
+                className={refreshing ? "animate-spin" : ""}
+              />
+            </button>
+          </div>
         </div>
 
-        {/* Search + Sort */}
-        <div className="px-3 py-2 bg-[#F0F2F5] space-y-1.5">
+        {/* Session selector */}
+        {sessions.length > 0 && (
+          <div className="px-3 py-2 bg-[#F0F2F5] border-b border-[#E9EDEF]">
+            <div className="flex items-center gap-2">
+              <select
+                value={activeSessionId || ""}
+                onChange={(e) => {
+                  setActiveSessionId(e.target.value);
+                  setSelectedChatId(null);
+                  setContacts([]);
+                  setMessages([]);
+                }}
+                className="flex-1 text-sm bg-white border border-gray-300 rounded-lg px-3 py-1.5 outline-none text-[#111B21]"
+              >
+                {sessions.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.name} ({s.status}){s.phone ? ` - ${s.phone}` : ""}
+                  </option>
+                ))}
+              </select>
+              {activeSession && (
+                <div className="flex items-center gap-1 shrink-0">
+                  {activeSession.status === "ready" ? (
+                    <Wifi size={16} className="text-[#25D366]" />
+                  ) : activeSession.status === "qr_ready" ? (
+                    <button
+                      onClick={() => handleGetQR(activeSession.id)}
+                      className="p-1.5 bg-[#25D366] text-white rounded-md hover:bg-[#1da851] transition-colors"
+                      title="Scan QR Code"
+                    >
+                      <QrCode size={14} />
+                    </button>
+                  ) : (
+                    <WifiOff size={16} className="text-[#667781]" />
+                  )}
+                  {(activeSession.status === "created" ||
+                    activeSession.status === "idle" ||
+                    activeSession.status === "disconnected") && (
+                    <button
+                      onClick={() => handleStartSession(activeSession.id)}
+                      className="p-1.5 bg-[#25D366] text-white rounded-md hover:bg-[#1da851] transition-colors"
+                      title="Start Session"
+                    >
+                      <Play size={14} />
+                    </button>
+                  )}
+                  {(activeSession.status === "ready" ||
+                    activeSession.status === "connecting" ||
+                    activeSession.status === "qr_ready") && (
+                    <button
+                      onClick={() => handleStopSession(activeSession.id)}
+                      className="p-1.5 bg-gray-200 text-gray-600 rounded-md hover:bg-gray-300 transition-colors"
+                      title="Stop Session"
+                    >
+                      <Square size={14} />
+                    </button>
+                  )}
+                  <button
+                    onClick={() => handleDeleteSession(activeSession.id)}
+                    className="p-1.5 bg-gray-200 text-red-500 rounded-md hover:bg-red-100 transition-colors"
+                    title="Delete Session"
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Search */}
+        <div className="px-3 py-2 bg-[#F0F2F5]">
           <div className="flex items-center gap-3 bg-white rounded-lg px-3 py-1.5">
             <Search size={16} className="text-[#54656F]" />
             <input
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Search or start new chat"
+              placeholder="Search contacts..."
               className="flex-1 text-sm bg-transparent outline-none placeholder-[#667781] text-[#111B21]"
             />
           </div>
-          <div className="flex items-center gap-1">
-            {(["recent", "unread", "unreplied"] as InboxSort[]).map((mode) => (
-              <button
-                key={mode}
-                onClick={() => setSortMode(mode)}
-                className={`px-2.5 py-1 rounded-full text-[11px] font-medium transition-colors ${
-                  sortMode === mode
-                    ? "bg-[#008069] text-white"
-                    : "bg-white text-[#54656F] hover:bg-gray-100"
-                }`}
-              >
-                {mode === "recent" ? "Recent" : mode === "unread" ? "Unread" : "Unreplied"}
-              </button>
-            ))}
-          </div>
         </div>
 
-        {/* Conversation list */}
+        {/* Contact list */}
         <div className="flex-1 overflow-y-auto bg-white">
-          {filteredConversations.length === 0 && (
+          {sessions.length === 0 && (
             <div className="p-8 text-center">
               <div className="w-16 h-16 rounded-full bg-[#25D366]/10 flex items-center justify-center mx-auto mb-3">
-                <MessageSquare size={28} className="text-[#25D366]" />
+                <Plus size={28} className="text-[#25D366]" />
               </div>
-              <p className="text-sm text-[#667781]">
-                {searchQuery ? "No matching conversations" : "No inbound messages yet"}
-              </p>
-              {!searchQuery && (
-                <p className="mt-2 text-xs text-[#8696A0]">
-                  Wire up the webhook in Meta App → WhatsApp → Configuration
-                  pointing at <code className="bg-[#F0F2F5] px-1 rounded">/api/whatsapp/webhook</code>
-                </p>
-              )}
+              <p className="text-sm text-[#667781] mb-2">No sessions yet</p>
+              <button
+                onClick={() => setShowNewSession(true)}
+                className="px-4 py-2 bg-[#25D366] text-white rounded-lg text-sm hover:bg-[#1da851] transition-colors"
+              >
+                Create Session
+              </button>
             </div>
           )}
-          {filteredConversations.map((c) => {
-            const active = selectedPhone === c.phoneNumber;
-            return (
-              <div
-                key={c.phoneNumber}
-                className={`w-full text-left px-3 py-3 flex items-center gap-3 hover:bg-[#F0F2F5] transition-colors border-b border-[#E9EDEF] cursor-pointer ${
-                  active ? "bg-[#F0F2F5]" : ""
-                }`}
-                onClick={() => {
-                  setSelectedPhone(c.phoneNumber);
-                  setAiSuggestions([]);
-                  // Mark conversation as read (WhatsApp-style)
-                  if (c.unreadCount > 0) {
-                    setConversations((prev) =>
-                      prev.map((conv) =>
-                        conv.phoneNumber === c.phoneNumber
-                          ? { ...conv, unreadCount: 0 }
-                          : conv
-                      )
-                    );
-                    api.post("/whatsapp/inbox/read", { phoneNumber: c.phoneNumber }).catch(() => {});
-                  }
-                }}
-              >
-                {/* Avatar */}
-                <div className="w-12 h-12 rounded-full bg-[#DFE5E7] flex items-center justify-center shrink-0 relative">
-                  <Phone size={20} className="text-[#54656F]" />
-                  {c.isPinned && (
-                    <div className="absolute -top-0.5 -right-0.5 w-4 h-4 bg-[#008069] rounded-full flex items-center justify-center">
-                      <Pin size={9} className="text-white" />
-                    </div>
+
+          {activeSession &&
+            activeSession.status !== "ready" &&
+            sessions.length > 0 && (
+              <div className="p-8 text-center">
+                <div className="w-16 h-16 rounded-full bg-amber-100 flex items-center justify-center mx-auto mb-3">
+                  {activeSession.status === "qr_ready" ? (
+                    <QrCode size={28} className="text-amber-600" />
+                  ) : activeSession.status === "connecting" ||
+                    activeSession.status === "initializing" ? (
+                    <RefreshCw
+                      size={28}
+                      className="text-amber-600 animate-spin"
+                    />
+                  ) : (
+                    <WifiOff size={28} className="text-amber-600" />
                   )}
                 </div>
+                <p className="text-sm font-medium text-[#111B21] mb-1">
+                  Session: {activeSession.status}
+                </p>
+                {activeSession.status === "qr_ready" && (
+                  <>
+                    <p className="text-xs text-[#667781] mb-3">
+                      Scan the QR code with your WhatsApp to connect
+                    </p>
+                    <button
+                      onClick={() => handleGetQR(activeSession.id)}
+                      className="px-4 py-2 bg-[#25D366] text-white rounded-lg text-sm hover:bg-[#1da851] transition-colors"
+                    >
+                      Show QR Code
+                    </button>
+                  </>
+                )}
+                {(activeSession.status === "created" ||
+                  activeSession.status === "idle" ||
+                  activeSession.status === "disconnected") && (
+                  <>
+                    <p className="text-xs text-[#667781] mb-3">
+                      Start the session to connect to WhatsApp
+                    </p>
+                    <button
+                      onClick={() => handleStartSession(activeSession.id)}
+                      className="px-4 py-2 bg-[#25D366] text-white rounded-lg text-sm hover:bg-[#1da851] transition-colors"
+                    >
+                      Start Session
+                    </button>
+                  </>
+                )}
+                {(activeSession.status === "connecting" ||
+                  activeSession.status === "initializing") && (
+                  <p className="text-xs text-[#667781]">
+                    Connecting to WhatsApp...
+                  </p>
+                )}
+              </div>
+            )}
 
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center justify-between gap-2">
-                    <span className={`text-[15px] truncate ${c.unreadCount > 0 ? "font-bold text-[#111B21]" : "font-medium text-[#111B21]"}`}>
-                      {c.contactName || c.order?.customerName || c.phoneNumber}
-                    </span>
-                    <div className="flex items-center gap-1.5 shrink-0">
-                      <span className={`text-xs ${c.unreadCount > 0 ? "text-[#25D366] font-medium" : "text-[#667781]"}`}>
-                        {formatTime(c.lastReceivedAt)}
-                      </span>
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          togglePin(c.phoneNumber, c.isPinned);
-                        }}
-                        className="p-0.5 rounded hover:bg-gray-200 transition-colors"
-                        title={c.isPinned ? "Unpin" : "Pin"}
-                      >
-                        {c.isPinned ? (
-                          <PinOff size={12} className="text-[#008069]" />
-                        ) : (
-                          <Pin size={12} className="text-[#8696A0]" />
-                        )}
-                      </button>
-                    </div>
-                  </div>
-                  <div className="flex items-center justify-between gap-2 mt-0.5">
-                    <span className={`text-sm truncate ${c.unreadCount > 0 ? "text-[#111B21] font-medium" : "text-[#667781]"}`}>
-                      {c.lastType !== "text" ? `📎 ${c.lastType}` : ""}
-                      {c.lastText || ""}
-                    </span>
-                    {c.unreadCount > 0 && (
-                      <span className="bg-[#25D366] text-white text-[11px] font-medium rounded-full min-w-[20px] h-5 flex items-center justify-center px-1.5 shrink-0">
-                        {c.unreadCount}
-                      </span>
+          {activeSession?.status === "ready" &&
+            filteredContacts.length === 0 && (
+              <div className="p-8 text-center">
+                <div className="w-16 h-16 rounded-full bg-[#25D366]/10 flex items-center justify-center mx-auto mb-3">
+                  <MessageSquare size={28} className="text-[#25D366]" />
+                </div>
+                <p className="text-sm text-[#667781]">
+                  {searchQuery
+                    ? "No matching contacts"
+                    : "No contacts found"}
+                </p>
+              </div>
+            )}
+
+          {activeSession?.status === "ready" &&
+            filteredContacts.map((c) => {
+              const active = selectedChatId === c.id;
+              return (
+                <button
+                  key={c.id}
+                  onClick={() => setSelectedChatId(c.id)}
+                  className={`w-full text-left px-3 py-3 flex items-center gap-3 hover:bg-[#F0F2F5] transition-colors border-b border-[#E9EDEF] ${
+                    active ? "bg-[#F0F2F5]" : ""
+                  }`}
+                >
+                  <div className="w-12 h-12 rounded-full bg-[#DFE5E7] flex items-center justify-center shrink-0">
+                    {c.isGroup ? (
+                      <Users size={20} className="text-[#54656F]" />
+                    ) : (
+                      <Phone size={20} className="text-[#54656F]" />
                     )}
                   </div>
-                  {c.order && (
-                    <div className="text-[11px] text-[#008069] mt-0.5 truncate font-medium">
-                      Order #{c.order.codNetworkOrderId} · {c.order.status}
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-medium text-[#111B21] text-[15px] truncate">
+                        {c.name || c.pushname || chatIdToDisplay(c.id)}
+                      </span>
+                      {c.isGroup && (
+                        <span className="text-[10px] bg-[#E7F8E9] text-[#008069] px-1.5 py-0.5 rounded-full shrink-0">
+                          Group
+                        </span>
+                      )}
                     </div>
-                  )}
-                  {c.isOutboundOnly && !c.order && (
-                    <div className="text-[11px] text-[#667781] mt-0.5 flex items-center gap-1">
-                      <Send size={9} />
-                      Outbound only
-                    </div>
-                  )}
-                </div>
-              </div>
-            );
-          })}
+                    <p className="text-xs text-[#667781] truncate mt-0.5">
+                      {chatIdToDisplay(c.id)}
+                    </p>
+                  </div>
+                </button>
+              );
+            })}
         </div>
       </div>
 
       {/* Right panel - chat thread */}
       <div className="flex-1 flex flex-col">
-        {!selectedPhone ? (
+        {!selectedChatId || !activeSession ? (
           <div
             className="flex-1 flex items-center justify-center"
             style={{
-              background: "linear-gradient(180deg, #008069 127px, #F0F2F5 127px)",
+              background:
+                "linear-gradient(180deg, #008069 127px, #F0F2F5 127px)",
             }}
           >
             <div className="text-center bg-white rounded-lg shadow-sm p-10 max-w-md">
@@ -523,7 +666,11 @@ export default function InboxPage() {
                 WhatsApp Inbox
               </h3>
               <p className="text-sm text-[#667781]">
-                Select a conversation to view messages and reply to customers
+                {sessions.length === 0
+                  ? "Create a session and scan the QR code to get started"
+                  : activeSession?.status !== "ready"
+                  ? "Connect your session to start chatting"
+                  : "Select a contact to view messages"}
               </p>
             </div>
           </div>
@@ -532,42 +679,33 @@ export default function InboxPage() {
             {/* Chat header */}
             <div className="px-4 py-2.5 bg-[#008069] flex items-center gap-3">
               <div className="w-10 h-10 rounded-full bg-[#DFE5E7] flex items-center justify-center shrink-0">
-                <Phone size={18} className="text-[#54656F]" />
+                {selectedContact?.isGroup ? (
+                  <Users size={18} className="text-[#54656F]" />
+                ) : (
+                  <Phone size={18} className="text-[#54656F]" />
+                )}
               </div>
               <div className="flex-1 min-w-0">
                 <div className="text-white font-medium text-[15px]">
-                  {selectedConvo?.contactName || selectedConvo?.order?.customerName || selectedPhone}
+                  {selectedContact?.name ||
+                    selectedContact?.pushname ||
+                    chatIdToDisplay(selectedChatId)}
                 </div>
                 <div className="text-white/70 text-xs font-mono">
-                  {selectedPhone}
+                  {chatIdToDisplay(selectedChatId)}
                 </div>
               </div>
-              {whatsappNumbers.length > 1 && (
-                <select
-                  value={selectedNumberId || ""}
-                  onChange={(e) => setSelectedNumberId(e.target.value)}
-                  className="bg-white/20 text-white text-xs border border-white/30 rounded-md px-2 py-1 outline-none"
-                >
-                  {whatsappNumbers.map((n) => (
-                    <option key={n.id} value={n.id} className="text-gray-900">
-                      {n.label} ({n.displayPhone})
-                    </option>
-                  ))}
-                </select>
-              )}
-              {thread && (
-                <span
-                  className={`text-xs px-3 py-1 rounded-full font-medium ${
-                    thread.inSession
-                      ? "bg-[#25D366] text-white"
-                      : "bg-white/20 text-white"
-                  }`}
-                >
-                  {thread.inSession
-                    ? "24h window active"
-                    : "Window expired"}
-                </span>
-              )}
+              <span
+                className={`text-xs px-3 py-1 rounded-full font-medium ${
+                  activeSession.status === "ready"
+                    ? "bg-[#25D366] text-white"
+                    : "bg-white/20 text-white"
+                }`}
+              >
+                {activeSession.status === "ready"
+                  ? "Connected"
+                  : activeSession.status}
+              </span>
             </div>
 
             {/* Messages area */}
@@ -576,8 +714,9 @@ export default function InboxPage() {
               onScroll={() => {
                 const el = messagesContainerRef.current;
                 if (!el) return;
-                const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-                userScrolledUp.current = distanceFromBottom > 100;
+                const dist =
+                  el.scrollHeight - el.scrollTop - el.clientHeight;
+                userScrolledUp.current = dist > 100;
               }}
               className="flex-1 overflow-y-auto px-16 py-4 space-y-1"
               style={{
@@ -585,15 +724,25 @@ export default function InboxPage() {
                 backgroundImage: `url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cg fill='%23D4CFC6' fill-opacity='0.3'%3E%3Cpath d='M36 34v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zm0-30V0h-2v4h-4v2h4v4h2V6h4V4h-4zM6 34v-4H4v4H0v2h4v4h2v-4h4v-2H6zM6 4V0H4v4H0v2h4v4h2V6h4V4H6z'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E")`,
               }}
             >
-              {thread?.thread.length === 0 && (
+              {messagesLoading && messages.length === 0 && (
+                <div className="flex justify-center py-8">
+                  <RefreshCw
+                    size={20}
+                    className="animate-spin text-[#667781]"
+                  />
+                </div>
+              )}
+
+              {!messagesLoading && messages.length === 0 && (
                 <div className="flex justify-center py-8">
                   <span className="bg-white/90 text-[#54656F] text-xs px-4 py-2 rounded-lg shadow-sm">
-                    No messages yet
+                    No messages yet &mdash; send the first message below
                   </span>
                 </div>
               )}
-              {thread?.thread.map((m) =>
-                m.kind === "inbound" ? (
+
+              {messages.map((m) =>
+                m.direction === "incoming" ? (
                   <InboundBubble key={m.id} msg={m} />
                 ) : (
                   <OutboundBubble key={m.id} msg={m} />
@@ -604,45 +753,7 @@ export default function InboxPage() {
 
             {/* Reply input */}
             <div className="bg-[#F0F2F5] px-4 py-3">
-              {thread && !thread.inSession && (
-                <p className="text-xs text-amber-700 mb-2 flex items-start gap-1.5 bg-amber-50 rounded-lg px-3 py-2">
-                  <AlertCircle size={13} className="mt-0.5 shrink-0" />
-                  <span>
-                    The 24-hour reply window has expired. Use the Pipeline → Send
-                    WhatsApp dialog to send an approved template instead.
-                  </span>
-                </p>
-              )}
-              {/* AI Suggestions */}
-              {aiSuggestions.length > 0 && (
-                <div className="flex flex-wrap gap-1.5 mb-2">
-                  {aiSuggestions.map((suggestion, i) => (
-                    <button
-                      key={i}
-                      onClick={() => {
-                        setReplyText(suggestion);
-                        setAiSuggestions([]);
-                      }}
-                      className="px-3 py-1.5 bg-white rounded-lg text-sm text-[#111B21] border border-[#25D366]/30 hover:bg-[#25D366]/10 hover:border-[#25D366] transition-colors text-left max-w-full"
-                    >
-                      <span className="line-clamp-2">{suggestion}</span>
-                    </button>
-                  ))}
-                </div>
-              )}
               <div className="flex items-center gap-2">
-                <button
-                  onClick={fetchAiSuggestions}
-                  disabled={aiSuggestionsLoading}
-                  className="w-10 h-10 rounded-full bg-purple-100 text-purple-600 flex items-center justify-center hover:bg-purple-200 disabled:opacity-40 transition-colors shrink-0"
-                  title="Get AI reply suggestions"
-                >
-                  {aiSuggestionsLoading ? (
-                    <Loader2 size={18} className="animate-spin" />
-                  ) : (
-                    <Sparkles size={18} />
-                  )}
-                </button>
                 <input
                   type="text"
                   value={replyText}
@@ -650,18 +761,14 @@ export default function InboxPage() {
                   onKeyDown={(e) => {
                     if (e.key === "Enter" && !e.shiftKey) {
                       e.preventDefault();
-                      handleReply();
+                      handleSendMessage();
                     }
                   }}
-                  placeholder={
-                    thread && !thread.inSession
-                      ? "Reply window closed — use a template"
-                      : "Type a message"
-                  }
+                  placeholder="Type a message"
                   className="flex-1 px-4 py-2.5 bg-white rounded-lg text-sm outline-none text-[#111B21] placeholder-[#667781]"
                 />
                 <button
-                  onClick={handleReply}
+                  onClick={handleSendMessage}
                   disabled={sending || !replyText.trim()}
                   className="w-10 h-10 rounded-full bg-[#008069] text-white flex items-center justify-center hover:bg-[#017561] disabled:opacity-40 transition-colors shrink-0"
                 >
@@ -673,11 +780,89 @@ export default function InboxPage() {
         )}
       </div>
 
+      {/* QR Code Modal */}
+      {showQrModal && qrCode && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-xl p-6 max-w-sm w-full mx-4 shadow-2xl">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-semibold text-[#111B21]">
+                Scan QR Code
+              </h3>
+              <button
+                onClick={() => setShowQrModal(false)}
+                className="p-1 hover:bg-gray-100 rounded-full transition-colors"
+              >
+                <X size={20} className="text-[#54656F]" />
+              </button>
+            </div>
+            <div className="bg-white p-4 rounded-lg border flex items-center justify-center">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={`https://api.qrserver.com/v1/create-qr-code/?size=256x256&data=${encodeURIComponent(qrCode)}`}
+                alt="WhatsApp QR Code"
+                className="w-64 h-64"
+              />
+            </div>
+            <p className="text-xs text-[#667781] text-center mt-3">
+              Open WhatsApp on your phone &rarr; Settings &rarr; Linked
+              Devices &rarr; Link a Device
+            </p>
+            <button
+              onClick={() => handleGetQR(activeSessionId!)}
+              className="w-full mt-3 px-4 py-2 bg-[#25D366] text-white rounded-lg text-sm hover:bg-[#1da851] transition-colors"
+            >
+              Refresh QR Code
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* New Session Modal */}
+      {showNewSession && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-xl p-6 max-w-sm w-full mx-4 shadow-2xl">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-semibold text-[#111B21]">
+                New Session
+              </h3>
+              <button
+                onClick={() => setShowNewSession(false)}
+                className="p-1 hover:bg-gray-100 rounded-full transition-colors"
+              >
+                <X size={20} className="text-[#54656F]" />
+              </button>
+            </div>
+            <input
+              type="text"
+              value={newSessionName}
+              onChange={(e) => setNewSessionName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") handleCreateSession();
+              }}
+              placeholder="Session name (e.g. My WhatsApp)"
+              className="w-full px-4 py-2.5 bg-[#F0F2F5] rounded-lg text-sm outline-none text-[#111B21] placeholder-[#667781] mb-4"
+              autoFocus
+            />
+            <button
+              onClick={handleCreateSession}
+              disabled={creatingSession || !newSessionName.trim()}
+              className="w-full px-4 py-2.5 bg-[#25D366] text-white rounded-lg text-sm font-medium hover:bg-[#1da851] disabled:opacity-40 transition-colors"
+            >
+              {creatingSession ? "Creating..." : "Create Session"}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Toasts */}
       {error && (
         <div className="fixed top-6 right-6 px-4 py-3 rounded-lg shadow-lg border bg-red-50 text-red-800 border-red-200 text-sm flex items-start gap-2 max-w-md z-50">
           <AlertCircle size={16} className="mt-0.5 shrink-0" />
           <span>{error}</span>
-          <button onClick={() => setError(null)} className="ml-2 opacity-60 hover:opacity-100">
+          <button
+            onClick={() => setError(null)}
+            className="ml-2 opacity-60 hover:opacity-100"
+          >
             <X size={14} />
           </button>
         </div>
@@ -702,117 +887,79 @@ export default function InboxPage() {
   );
 }
 
-function InboundBubble({
-  msg,
-}: {
-  msg: Extract<ThreadEntry, { kind: "inbound" }>;
-}) {
+/* Bubble Components */
+
+function InboundBubble({ msg }: { msg: OpenWAMessage }) {
   return (
     <div className="flex justify-start">
-      <div className="max-w-[65%] bg-white rounded-lg rounded-tl-none px-3 py-2 shadow-sm relative">
-        {msg.contactName && (
-          <p className="text-[13px] font-medium text-[#1FA855] mb-0.5">
-            {msg.contactName}
-          </p>
-        )}
-        {msg.type !== "text" && (
+      <div className="max-w-[65%] bg-white rounded-lg rounded-tl-none px-3 py-2 shadow-sm">
+        <p className="text-[13px] font-medium text-[#1FA855] mb-0.5">
+          {chatIdToDisplay(msg.from)}
+        </p>
+        {msg.type !== "text" && msg.type !== "chat" && (
           <div className="text-[11px] text-[#667781] flex items-center gap-1 mb-1">
             <ImageIcon size={11} />
             {msg.type}
-            {msg.mediaMimeType && ` · ${msg.mediaMimeType}`}
           </div>
         )}
-        {msg.text ? (
+        {msg.body ? (
           <p
             className="text-sm text-[#111B21] whitespace-pre-wrap break-words leading-[19px]"
-            dir={hasArabic(msg.text) ? "rtl" : "ltr"}
-          >{msg.text}</p>
+            dir={hasArabic(msg.body) ? "rtl" : "ltr"}
+          >
+            {msg.body}
+          </p>
         ) : (
           <p className="text-sm text-[#8696A0] italic">
             ({msg.type} attachment)
           </p>
         )}
         <p className="text-[11px] text-[#667781] mt-1 text-right">
-          {formatMessageTime(msg.at)}
+          {formatMessageTime(msg.createdAt)}
         </p>
       </div>
     </div>
   );
 }
 
-function OutboundBubble({
-  msg,
-}: {
-  msg: Extract<ThreadEntry, { kind: "outbound" }>;
-}) {
-  const isText = msg.templateName === "<text>";
-  const isAiAgent = msg.sentBy === "ai_agent";
+function OutboundBubble({ msg }: { msg: OpenWAMessage }) {
   const statusIcon = (() => {
     switch (msg.status) {
-      case "READ":
-        return (
-          <CheckCheck size={16} className="text-[#53BDEB]" aria-label="Read" />
-        );
-      case "DELIVERED":
-        return (
-          <CheckCheck size={16} className="text-[#667781]" aria-label="Delivered" />
-        );
-      case "SENT":
-        return <Check size={16} className="text-[#667781]" aria-label="Sent" />;
-      case "FAILED":
-        return <AlertCircle size={14} className="text-red-500" aria-label="Failed" />;
+      case "read":
+        return <Check size={16} className="text-[#53BDEB]" />;
+      case "delivered":
+        return <Check size={16} className="text-[#667781]" />;
+      case "sent":
+        return <Check size={16} className="text-[#667781]" />;
+      case "failed":
+        return <AlertCircle size={14} className="text-red-500" />;
       default:
         return null;
     }
   })();
 
-  const displayText = msg.renderedText;
-
   return (
     <div className="flex justify-end">
       <div
         className={`max-w-[65%] rounded-lg rounded-tr-none px-3 py-2 shadow-sm ${
-          msg.status === "FAILED"
+          msg.status === "failed"
             ? "bg-red-50 border border-red-200"
             : "bg-[#D9FDD3]"
         }`}
       >
-        <div className="text-[11px] text-[#667781] mb-0.5 flex items-center gap-1">
-          {isAiAgent ? (
-            <span className="text-purple-600 font-medium">AI Agent</span>
-          ) : isText ? (
-            <span>You</span>
-          ) : (
-            <span>Template: {msg.templateName}</span>
-          )}
-        </div>
-        {msg.headerImageUrl && (
-          <div className="mb-1.5 -mx-1 rounded overflow-hidden">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              src={msg.headerImageUrl}
-              alt="Template header"
-              className="w-full max-h-48 object-cover rounded"
-            />
-          </div>
-        )}
-        {displayText ? (
+        <div className="text-[11px] text-[#667781] mb-0.5">You</div>
+        {msg.body ? (
           <p
             className="text-sm text-[#111B21] whitespace-pre-wrap break-words leading-[19px]"
-            dir={hasArabic(displayText) ? "rtl" : "ltr"}
+            dir={hasArabic(msg.body) ? "rtl" : "ltr"}
           >
-            {displayText}
+            {msg.body}
           </p>
-        ) : !isText ? (
-          <p className="text-sm text-[#111B21] italic">
-            [Template sent with variables]
-          </p>
+        ) : msg.type !== "text" && msg.type !== "chat" ? (
+          <p className="text-sm text-[#8696A0] italic">[{msg.type} sent]</p>
         ) : null}
-        {msg.errorMessage && (
-          <p className="text-xs text-red-600 mt-1">{msg.errorMessage}</p>
-        )}
         <p className="text-[11px] text-[#667781] mt-1 flex items-center justify-end gap-1">
-          {formatMessageTime(msg.at)}
+          {formatMessageTime(msg.createdAt)}
           {statusIcon}
         </p>
       </div>

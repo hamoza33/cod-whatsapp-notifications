@@ -19,6 +19,7 @@ const TABS = [
   { id: "automation", label: "Automation" },
   { id: "ai", label: "AI Agent" },
   { id: "voice", label: "Voice Agent" },
+  { id: "openwa", label: "OpenWA" },
 ] as const;
 
 const TRACKING_REFRESH_OPTIONS = [
@@ -941,6 +942,42 @@ export default function SettingsPage() {
       )}
 
       {activeTab === "wa_numbers" && <WhatsappNumbersManager />}
+
+      {/* OpenWA */}
+      {activeTab === "openwa" && (
+        <SettingsSection
+          title="OpenWA Gateway"
+          description="Connect to your OpenWA WhatsApp Web gateway. The inbox uses this API to manage WhatsApp sessions, send and receive messages via WhatsApp Web (QR code based)."
+          onSave={() =>
+            handleSave("OpenWA", [
+              "openwa_api_url",
+              "openwa_api_key",
+            ])
+          }
+          saving={saving}
+        >
+          <SettingsField
+            label="OpenWA API URL"
+            value={settings.openwa_api_url || ""}
+            onChange={(v) => updateSetting("openwa_api_url", v)}
+            placeholder="https://openwa-gateway.fly.dev"
+            help="The base URL of your OpenWA gateway (e.g. https://openwa-gateway.fly.dev). The inbox page communicates with this service to manage WhatsApp sessions."
+          />
+          <SettingsField
+            label="API Key (optional)"
+            value={settings.openwa_api_key || ""}
+            onChange={(v) => updateSetting("openwa_api_key", v)}
+            type="password"
+            configuredPreview={sensitivePreviews.openwa_api_key}
+            placeholder={
+              configuredSecrets.has("openwa_api_key")
+                ? "Currently configured — enter a new value to replace"
+                : "Optional API key for OpenWA authentication"
+            }
+            help="If your OpenWA gateway requires an API key, enter it here. Sent as x-api-key header on every request."
+          />
+        </SettingsSection>
+      )}
     </div>
   );
 }

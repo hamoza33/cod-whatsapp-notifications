@@ -88,6 +88,9 @@ export const SETTING_KEYS = {
   // Automation auto-run — when enabled, automations trigger automatically
   // without needing to click "Run now"
   AUTOMATION_AUTO_RUN: "automation_auto_run",
+  // OpenWA gateway settings
+  OPENWA_API_URL: "openwa_api_url",
+  OPENWA_API_KEY: "openwa_api_key",
 } as const;
 
 export const SENSITIVE_SETTING_KEYS: readonly string[] = [
@@ -101,6 +104,7 @@ export const SENSITIVE_SETTING_KEYS: readonly string[] = [
   SETTING_KEYS.VOICE_AGENT_API_KEY,
   SETTING_KEYS.VOICE_AGENT_LLM_API_KEY,
   SETTING_KEYS.CAPTCHA_API_KEY,
+  SETTING_KEYS.OPENWA_API_KEY,
 ];
 
 /**
