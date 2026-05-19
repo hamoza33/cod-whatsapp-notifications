@@ -244,8 +244,9 @@ export default function InboxPage() {
     if (!newSessionName.trim()) return;
     setCreatingSession(true);
     try {
+      const safeName = newSessionName.trim().toLowerCase().replace(/[^a-z0-9-]/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "");
       const session = await api.post<OpenWASession>("/openwa/sessions", {
-        name: newSessionName.trim(),
+        name: safeName,
       });
       setSessions((prev) => [...prev, session]);
       setActiveSessionId(session.id);
@@ -308,10 +309,10 @@ export default function InboxPage() {
 
   const handleGetQR = async (id: string) => {
     try {
-      const data = await api.get<{ qr: string }>(
+      const data = await api.get<{ qrCode: string; status: string }>(
         `/openwa/sessions/${id}/qr`
       );
-      setQrCode(data.qr);
+      setQrCode(data.qrCode);
       setShowQrModal(true);
     } catch (err) {
       showToast(
@@ -798,7 +799,7 @@ export default function InboxPage() {
             <div className="bg-white p-4 rounded-lg border flex items-center justify-center">
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
-                src={`https://api.qrserver.com/v1/create-qr-code/?size=256x256&data=${encodeURIComponent(qrCode)}`}
+                src={qrCode}
                 alt="WhatsApp QR Code"
                 className="w-64 h-64"
               />
