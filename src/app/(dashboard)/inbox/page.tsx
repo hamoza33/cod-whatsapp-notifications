@@ -17,6 +17,10 @@ import {
   Loader2,
   Pin,
   PinOff,
+  FileText,
+  Film,
+  Mic,
+  Download,
 } from "lucide-react";
 
 interface Conversation {
@@ -702,11 +706,112 @@ export default function InboxPage() {
   );
 }
 
+function MediaContent({
+  mediaId,
+  mimeType,
+  type,
+}: {
+  mediaId: string;
+  mimeType: string | null;
+  type: string;
+}) {
+  const proxyUrl = `/api/whatsapp/media/${encodeURIComponent(mediaId)}`;
+  const mime = mimeType || "";
+
+  if (type === "image" || mime.startsWith("image/")) {
+    return (
+      <div className="mb-1.5 -mx-1 rounded overflow-hidden">
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src={proxyUrl}
+          alt="Image from customer"
+          className="w-full max-h-64 object-contain rounded cursor-pointer"
+          loading="lazy"
+          onClick={() => window.open(proxyUrl, "_blank")}
+        />
+      </div>
+    );
+  }
+
+  if (type === "video" || mime.startsWith("video/")) {
+    return (
+      <div className="mb-1.5 -mx-1 rounded overflow-hidden">
+        <video
+          src={proxyUrl}
+          controls
+          preload="metadata"
+          className="w-full max-h-64 rounded"
+        />
+      </div>
+    );
+  }
+
+  if (type === "audio" || type === "voice" || mime.startsWith("audio/")) {
+    return (
+      <div className="mb-1.5">
+        <audio src={proxyUrl} controls preload="metadata" className="w-full" />
+      </div>
+    );
+  }
+
+  if (type === "sticker") {
+    return (
+      <div className="mb-1.5 -mx-1">
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src={proxyUrl}
+          alt="Sticker"
+          className="w-32 h-32 object-contain"
+          loading="lazy"
+        />
+      </div>
+    );
+  }
+
+  if (type === "document" || mime.startsWith("application/")) {
+    return (
+      <a
+        href={proxyUrl}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="mb-1.5 flex items-center gap-2 bg-[#F0F2F5] rounded-lg px-3 py-2 hover:bg-[#E9EDEF] transition-colors"
+      >
+        <FileText size={20} className="text-[#54656F] shrink-0" />
+        <span className="text-sm text-[#111B21] truncate flex-1">
+          {mime || "Document"}
+        </span>
+        <Download size={16} className="text-[#54656F] shrink-0" />
+      </a>
+    );
+  }
+
+  return null;
+}
+
+function mediaTypeIcon(type: string) {
+  switch (type) {
+    case "image":
+    case "sticker":
+      return <ImageIcon size={11} />;
+    case "video":
+      return <Film size={11} />;
+    case "audio":
+    case "voice":
+      return <Mic size={11} />;
+    case "document":
+      return <FileText size={11} />;
+    default:
+      return <ImageIcon size={11} />;
+  }
+}
+
 function InboundBubble({
   msg,
 }: {
   msg: Extract<ThreadEntry, { kind: "inbound" }>;
 }) {
+  const hasMedia = msg.mediaId && msg.type !== "text";
+
   return (
     <div className="flex justify-start">
       <div className="max-w-[65%] bg-white rounded-lg rounded-tl-none px-3 py-2 shadow-sm relative">
@@ -715,9 +820,16 @@ function InboundBubble({
             {msg.contactName}
           </p>
         )}
-        {msg.type !== "text" && (
+        {hasMedia && (
+          <MediaContent
+            mediaId={msg.mediaId!}
+            mimeType={msg.mediaMimeType}
+            type={msg.type}
+          />
+        )}
+        {!hasMedia && msg.type !== "text" && (
           <div className="text-[11px] text-[#667781] flex items-center gap-1 mb-1">
-            <ImageIcon size={11} />
+            {mediaTypeIcon(msg.type)}
             {msg.type}
             {msg.mediaMimeType && ` · ${msg.mediaMimeType}`}
           </div>
@@ -727,11 +839,11 @@ function InboundBubble({
             className="text-sm text-[#111B21] whitespace-pre-wrap break-words leading-[19px]"
             dir={hasArabic(msg.text) ? "rtl" : "ltr"}
           >{msg.text}</p>
-        ) : (
+        ) : !hasMedia ? (
           <p className="text-sm text-[#8696A0] italic">
             ({msg.type} attachment)
           </p>
-        )}
+        ) : null}
         <p className="text-[11px] text-[#667781] mt-1 text-right">
           {formatMessageTime(msg.at)}
         </p>
