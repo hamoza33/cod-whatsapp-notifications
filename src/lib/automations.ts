@@ -1,4 +1,4 @@
-import { Prisma, OrderStatus, Automation, Order } from "@prisma/client";
+import { OrderStatus, Automation, Order } from "@prisma/client";
 import { prisma } from "./prisma";
 import { WhatsAppClient } from "./whatsapp";
 import { normalizePhoneNumber } from "./phone";
@@ -16,6 +16,12 @@ export interface AutomationTriggerOptions {
    * the dry-run preview to only show the impact of a single rule.
    */
   automationIds?: string[];
+  /**
+   * When true, only automations with `autoRun=true` will execute. Set to true
+   * when triggering from sync/webhook/tracking (automatic triggers). When
+   * false (manual "Run now"), all enabled automations run regardless.
+   */
+  autoTriggered?: boolean;
 }
 
 export interface AutomationRunSummary {
@@ -39,9 +45,26 @@ export function matchesAutomation(
     | "whenStatusEquals"
     | "andProductContains"
     | "andProductDoesNotContain"
+    | "andPhoneStartsWith"
+    | "andTrackingCondition"
+    | "andCityContains"
+    | "andCustomerNameContains"
+    | "andMinPrice"
+    | "andMaxPrice"
+    | "andTrackingStatusContains"
     | "isEnabled"
   >,
-  order: Pick<Order, "status" | "productName">
+  order: Pick<
+    Order,
+    | "status"
+    | "productName"
+    | "customerPhone"
+    | "trackingNumber"
+    | "customerCity"
+    | "customerName"
+    | "productPrice"
+  >,
+  context?: { latestTrackingEvent?: string | null }
 ): boolean {
   if (!automation.isEnabled) return false;
 
@@ -64,6 +87,69 @@ export function matchesAutomation(
       return false;
     }
   }
+
+  // Advanced condition: phone starts with
+  if (automation.andPhoneStartsWith) {
+    const phone = (order.customerPhone ?? "").replace(/\s+/g, "");
+    const prefix = automation.andPhoneStartsWith.replace(/\s+/g, "");
+    if (!phone.startsWith(prefix) && !phone.replace(/^\+/, "").startsWith(prefix.replace(/^\+/, ""))) {
+      return false;
+    }
+  }
+
+  // Advanced condition: tracking number exists / not exists
+  if (automation.andTrackingCondition) {
+    const hasTracking = !!(order.trackingNumber && order.trackingNumber.trim());
+    if (automation.andTrackingCondition === "exists" && !hasTracking) {
+      return false;
+    }
+    if (automation.andTrackingCondition === "not_exists" && hasTracking) {
+      return false;
+    }
+  }
+
+  // Advanced condition: city contains
+  if (automation.andCityContains) {
+    const city = (order.customerCity ?? "").toLowerCase();
+    if (!city.includes(automation.andCityContains.toLowerCase())) {
+      return false;
+    }
+  }
+
+  // Advanced condition: customer name contains
+  if (automation.andCustomerNameContains) {
+    const name = (order.customerName ?? "").toLowerCase();
+    if (!name.includes(automation.andCustomerNameContains.toLowerCase())) {
+      return false;
+    }
+  }
+
+  // Advanced condition: min price
+  if (automation.andMinPrice) {
+    const price = parseFloat(order.productPrice ?? "0");
+    const min = parseFloat(automation.andMinPrice);
+    if (!isNaN(min) && (isNaN(price) || price < min)) {
+      return false;
+    }
+  }
+
+  // Advanced condition: max price
+  if (automation.andMaxPrice) {
+    const price = parseFloat(order.productPrice ?? "0");
+    const max = parseFloat(automation.andMaxPrice);
+    if (!isNaN(max) && (isNaN(price) || price > max)) {
+      return false;
+    }
+  }
+
+  // Advanced condition: tracking status contains
+  if (automation.andTrackingStatusContains) {
+    const trackingEvent = (context?.latestTrackingEvent ?? "").toLowerCase();
+    if (!trackingEvent.includes(automation.andTrackingStatusContains.toLowerCase())) {
+      return false;
+    }
+  }
+
   return true;
 }
 
@@ -83,6 +169,7 @@ const ORDER_VARIABLE_TOKENS = [
   "{order_id}",
   "{lead_id}",
   "{delivery_company}",
+  "{tracking_status}",
 ] as const;
 
 export type AutomationVariableToken = (typeof ORDER_VARIABLE_TOKENS)[number];
@@ -90,7 +177,7 @@ export type AutomationVariableToken = (typeof ORDER_VARIABLE_TOKENS)[number];
 export const AVAILABLE_AUTOMATION_TOKENS: ReadonlyArray<AutomationVariableToken> =
   ORDER_VARIABLE_TOKENS;
 
-function resolveVariableToken(token: string, order: Order): string {
+function resolveVariableToken(token: string, order: Order, ctx?: { trackingStatus?: string }): string {
   switch (token) {
     case "{customer_name}":
       return order.customerName || "Customer";
@@ -112,6 +199,8 @@ function resolveVariableToken(token: string, order: Order): string {
       return order.codNetworkLeadId || "";
     case "{delivery_company}":
       return order.deliveryCompany || "";
+    case "{tracking_status}":
+      return ctx?.trackingStatus || "";
     default:
       return token;
   }
@@ -124,7 +213,7 @@ function resolveVariableToken(token: string, order: Order): string {
  * in the Pipeline → Send dialog so operators can match the order of values
  * to their template's body text.
  */
-function buildVariablesForOrder(automation: Automation, order: Order): string[] {
+function buildVariablesForOrder(automation: Automation, order: Order, ctx?: { trackingStatus?: string }): string[] {
   // If the operator configured explicit variable slots, resolve any
   // `{token}` placeholders against the order. Each non-token slot is passed
   // through verbatim (operators can mix literals + tokens, e.g.
@@ -141,7 +230,7 @@ function buildVariablesForOrder(automation: Automation, order: Order): string[] 
       let out = slot;
       for (const t of ORDER_VARIABLE_TOKENS) {
         if (out.includes(t)) {
-          out = out.split(t).join(resolveVariableToken(t, order));
+          out = out.split(t).join(resolveVariableToken(t, order, ctx));
         }
       }
       return out;
@@ -171,19 +260,32 @@ export async function runAutomationsForOrder(
   const order = await prisma.order.findUnique({ where: { id: orderId } });
   if (!order) return [];
 
+  // Fetch the latest tracking event for this order so tracking-status
+  // conditions and the {tracking_status} template variable work.
+  const latestTracking = await prisma.trackingOrder.findFirst({
+    where: { orderId },
+    orderBy: { updatedAt: "desc" },
+    select: { latestEvent: true },
+  });
+  const trackingCtx = {
+    latestTrackingEvent: latestTracking?.latestEvent ?? null,
+    trackingStatus: latestTracking?.latestEvent ?? undefined,
+  };
+
   const automations = await prisma.automation.findMany({
     where: {
       isEnabled: true,
       ...(options.automationIds && options.automationIds.length > 0
         ? { id: { in: options.automationIds } }
         : {}),
+      ...(options.autoTriggered ? { autoRun: true } : {}),
     },
   });
 
   const summaries: AutomationRunSummary[] = [];
 
   for (const automation of automations) {
-    if (!matchesAutomation(automation, order)) {
+    if (!matchesAutomation(automation, order, trackingCtx)) {
       summaries.push({
         automationId: automation.id,
         automationName: automation.name,
@@ -194,8 +296,8 @@ export async function runAutomationsForOrder(
       continue;
     }
 
-    // De-dupe: if `thenSendOnce` is on and we already have a successful run
-    // for this (automation, order) pair, skip silently.
+    // De-dupe: if `thenSendOnce` is on and we already have a *successful* run
+    // for this (automation, order) pair, skip. Failed runs do NOT block retries.
     if (automation.thenSendOnce) {
       const existingRun = await prisma.automationRun.findUnique({
         where: {
@@ -205,13 +307,13 @@ export async function runAutomationsForOrder(
           },
         },
       });
-      if (existingRun) {
+      if (existingRun && existingRun.status === "success") {
         summaries.push({
           automationId: automation.id,
           automationName: automation.name,
           orderId: order.id,
           status: "skipped",
-          reason: `already ran on ${existingRun.createdAt.toISOString()}`,
+          reason: `already ran successfully on ${existingRun.createdAt.toISOString()}`,
         });
         continue;
       }
@@ -243,14 +345,28 @@ export async function runAutomationsForOrder(
 
       if (automation.thenSendTemplateName && order.customerPhone) {
         if (!options.dryRun) {
-          await sendAutomationTemplate(automation, order);
+          await sendAutomationTemplate(automation, order, trackingCtx);
         }
         sentMessage = true;
       }
 
       if (!options.dryRun) {
-        await prisma.automationRun.create({
-          data: {
+        await prisma.automationRun.upsert({
+          where: {
+            automationId_orderId: {
+              automationId: automation.id,
+              orderId: order.id,
+            },
+          },
+          update: {
+            status: "success",
+            movedFromStatus,
+            movedToStatus: movedToStatus ?? null,
+            sentMessage,
+            errorMessage: null,
+            createdAt: new Date(),
+          },
+          create: {
             automationId: automation.id,
             orderId: order.id,
             status: "success",
@@ -279,12 +395,28 @@ export async function runAutomationsForOrder(
       });
     } catch (err) {
       errorMessage = err instanceof Error ? err.message : String(err);
+      console.error(
+        `[automations] automation "${automation.name}" failed for order ${order.codNetworkOrderId}:`,
+        errorMessage
+      );
       if (!options.dryRun) {
-        // Record the failed attempt so we don't infinitely retry on the next
-        // status flip. `thenSendOnce` will treat any existing row as "ran".
         try {
-          await prisma.automationRun.create({
-            data: {
+          await prisma.automationRun.upsert({
+            where: {
+              automationId_orderId: {
+                automationId: automation.id,
+                orderId: order.id,
+              },
+            },
+            update: {
+              status: "failed",
+              movedFromStatus,
+              movedToStatus: movedToStatus ?? null,
+              sentMessage,
+              errorMessage,
+              createdAt: new Date(),
+            },
+            create: {
               automationId: automation.id,
               orderId: order.id,
               status: "failed",
@@ -295,16 +427,7 @@ export async function runAutomationsForOrder(
             },
           });
         } catch (logErr) {
-          // P2002 unique violation = a previous failed run already exists.
-          // That's fine — fall through.
-          if (
-            !(
-              logErr instanceof Prisma.PrismaClientKnownRequestError &&
-              logErr.code === "P2002"
-            )
-          ) {
-            console.error("[automations] failed to record run", logErr);
-          }
+          console.error("[automations] failed to record run", logErr);
         }
       }
       summaries.push({
@@ -325,7 +448,8 @@ export async function runAutomationsForOrder(
 
 async function sendAutomationTemplate(
   automation: Automation,
-  order: Order
+  order: Order,
+  ctx?: { trackingStatus?: string }
 ): Promise<void> {
   if (!automation.thenSendTemplateName) return;
   if (!order.customerPhone) {
@@ -340,7 +464,7 @@ async function sendAutomationTemplate(
     (await getSetting(SETTING_KEYS.DEFAULT_COUNTRY_CODE)) || "212";
 
   const client = await WhatsAppClient.fromSettings();
-  const variables = buildVariablesForOrder(automation, order);
+  const variables = buildVariablesForOrder(automation, order, ctx);
   let normalizedPhone: string;
   try {
     normalizedPhone = normalizePhoneNumber(order.customerPhone, defaultCountryCode);
@@ -365,17 +489,69 @@ async function sendAutomationTemplate(
       : undefined
   );
 
-  await prisma.whatsappMessage.create({
-    data: {
-      orderId: order.id,
-      phoneNumber: normalizedPhone,
-      templateName: automation.thenSendTemplateName,
-      templateLanguage,
-      templateVariablesJson: variables,
-      providerMessageId: result.messages?.[0]?.id ?? null,
-      status: "SENT",
-      sentBy: `automation:${automation.id}`,
-      sentAt: new Date(),
+  const storedPhone = normalizedPhone.startsWith("+") ? normalizedPhone : `+${normalizedPhone}`;
+  try {
+    await prisma.whatsappMessage.create({
+      data: {
+        orderId: order.id,
+        phoneNumber: storedPhone,
+        templateName: automation.thenSendTemplateName,
+        templateLanguage,
+        templateVariablesJson: variables,
+        headerImageUrl: headerImage || null,
+        providerMessageId: result.messages?.[0]?.id ?? null,
+        status: "SENT",
+        sentBy: `automation:${automation.id}`,
+        sentAt: new Date(),
+      },
+    });
+    console.log(
+      `[automations] recorded outbound message for ${storedPhone} template=${automation.thenSendTemplateName}`
+    );
+  } catch (dbErr) {
+    console.error(
+      `[automations] failed to record outbound message for ${storedPhone}:`,
+      dbErr instanceof Error ? dbErr.message : dbErr
+    );
+  }
+}
+
+/**
+ * Auto-expire orders that have been PENDING or in transit for >25 days.
+ * Moves them to EXPIRED status. Called periodically (e.g., during sync).
+ */
+export async function autoExpireOrders(): Promise<number> {
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - 25);
+
+  const result = await prisma.order.updateMany({
+    where: {
+      status: {
+        in: [
+          OrderStatus.PENDING,
+          OrderStatus.CONFIRMED,
+          OrderStatus.PROCESSING,
+          OrderStatus.SHIPPED,
+          OrderStatus.OUT_FOR_DELIVERY,
+          OrderStatus.NEW,
+          OrderStatus.NO_REPLY,
+          OrderStatus.CALL_LATER,
+        ],
+      },
+      codCreatedAt: { lt: cutoff },
     },
+    data: { status: OrderStatus.EXPIRED },
   });
+
+  return result.count;
+}
+
+/**
+ * @deprecated Use per-automation `autoRun` field instead.
+ * Kept for backward compatibility — now always returns true so
+ * callers fall through to the per-automation filter in
+ * runAutomationsForOrder({ autoTriggered: true }).
+ */
+export async function isAutoRunEnabled(): Promise<boolean> {
+  return true;
 }

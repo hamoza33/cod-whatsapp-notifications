@@ -620,6 +620,9 @@ export default function SettingsPage() {
               "ai_agent_system_prompt",
               "ai_agent_max_tokens",
               "ai_agent_product_types",
+              "ai_suggestions_enabled",
+              "ai_suggestions_count",
+              "ai_suggestions_system_prompt",
             ])
           }
           saving={saving}
@@ -721,6 +724,62 @@ export default function SettingsPage() {
             <p className="mt-1 text-xs text-gray-500">
               Comma-separated list of product types. AI agent will only auto-respond for orders matching these types. Leave empty to respond to all products.
             </p>
+          </div>
+
+          <div className="border-t border-gray-200 pt-4 mt-4">
+            <h3 className="text-base font-semibold text-gray-900 mb-3">AI Reply Suggestions</h3>
+            <p className="text-sm text-gray-500 mb-4">
+              Generate AI-powered reply suggestions in the Inbox chat. Click the sparkle button to get suggested replies based on conversation history and order details.
+            </p>
+            <div className="flex items-center gap-3 mb-4">
+              <label className="text-sm font-medium text-gray-700">
+                Enable AI Suggestions
+              </label>
+              <button
+                onClick={() =>
+                  updateSetting(
+                    "ai_suggestions_enabled",
+                    settings.ai_suggestions_enabled === "true" ? "false" : "true"
+                  )
+                }
+                className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                  settings.ai_suggestions_enabled === "true"
+                    ? "bg-blue-600"
+                    : "bg-gray-300"
+                }`}
+              >
+                <span
+                  className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                    settings.ai_suggestions_enabled === "true"
+                      ? "translate-x-6"
+                      : "translate-x-1"
+                  }`}
+                />
+              </button>
+            </div>
+            <SettingsField
+              label="Number of Suggestions"
+              value={settings.ai_suggestions_count || "3"}
+              onChange={(v) => updateSetting("ai_suggestions_count", v)}
+              type="number"
+              placeholder="3"
+              help="How many reply suggestions to generate (1-5)."
+            />
+            <div className="mb-4">
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Suggestions System Prompt
+              </label>
+              <textarea
+                value={settings.ai_suggestions_system_prompt || ""}
+                onChange={(e) => updateSetting("ai_suggestions_system_prompt", e.target.value)}
+                rows={4}
+                placeholder="You are a helpful customer service agent for a COD company. Generate short, professional WhatsApp reply suggestions. Keep each suggestion concise (1-2 sentences max). Reply in the same language as the customer."
+                className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+              <p className="mt-1 text-xs text-gray-500">
+                Custom instructions for generating reply suggestions. Leave empty for default behavior.
+              </p>
+            </div>
           </div>
         </SettingsSection>
       )}

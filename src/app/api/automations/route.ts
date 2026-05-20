@@ -24,9 +24,17 @@ export async function GET(request: NextRequest) {
 interface CreateAutomationBody {
   name?: string;
   isEnabled?: boolean;
+  autoRun?: boolean;
   whenStatusEquals?: string | null;
   andProductContains?: string | null;
   andProductDoesNotContain?: string | null;
+  andPhoneStartsWith?: string | null;
+  andTrackingCondition?: string | null;
+  andCityContains?: string | null;
+  andCustomerNameContains?: string | null;
+  andMinPrice?: string | null;
+  andMaxPrice?: string | null;
+  andTrackingStatusContains?: string | null;
   thenMoveToStatus?: string | null;
   thenSendTemplateName?: string | null;
   thenSendTemplateLanguage?: string | null;
@@ -60,13 +68,22 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "name is required" }, { status: 400 });
   }
 
-  // Validate at least one trigger and one action are present — otherwise the
-  // rule does nothing.
-  if (!body.whenStatusEquals && !body.andProductContains) {
+  // Validate at least one trigger condition is present.
+  const hasTrigger =
+    body.whenStatusEquals ||
+    body.andProductContains ||
+    body.andPhoneStartsWith ||
+    body.andTrackingCondition ||
+    body.andCityContains ||
+    body.andCustomerNameContains ||
+    body.andMinPrice ||
+    body.andMaxPrice ||
+    body.andTrackingStatusContains;
+  if (!hasTrigger) {
     return NextResponse.json(
       {
         error:
-          "Set at least one trigger (whenStatusEquals or andProductContains)",
+          "Set at least one trigger condition",
       },
       { status: 400 }
     );
@@ -84,6 +101,7 @@ export async function POST(request: NextRequest) {
     data: {
       name: body.name.trim(),
       isEnabled: body.isEnabled ?? false,
+      autoRun: body.autoRun ?? false,
       whenStatusEquals: asStatus(body.whenStatusEquals),
       andProductContains: body.andProductContains?.trim() || null,
       andProductDoesNotContain: body.andProductDoesNotContain?.trim() || null,
@@ -97,6 +115,13 @@ export async function POST(request: NextRequest) {
           : Prisma.JsonNull,
       thenSendHeaderImageUrl: body.thenSendHeaderImageUrl?.trim() || null,
       thenSendOnce: body.thenSendOnce ?? true,
+      andPhoneStartsWith: body.andPhoneStartsWith?.trim() || null,
+      andTrackingCondition: body.andTrackingCondition?.trim() || null,
+      andCityContains: body.andCityContains?.trim() || null,
+      andCustomerNameContains: body.andCustomerNameContains?.trim() || null,
+      andMinPrice: body.andMinPrice?.trim() || null,
+      andMaxPrice: body.andMaxPrice?.trim() || null,
+      andTrackingStatusContains: body.andTrackingStatusContains?.trim() || null,
     },
   });
 

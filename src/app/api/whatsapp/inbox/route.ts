@@ -35,6 +35,10 @@ export async function GET(request: NextRequest) {
       (
         SELECT COUNT(*) FROM inbound_messages im2
         WHERE im2.from_phone_number = inbound_messages.from_phone_number
+      ) + (
+        SELECT COUNT(*) FROM whatsapp_messages wm2
+        WHERE REGEXP_REPLACE(wm2.phone_number, '\\D', '', 'g')
+            = REGEXP_REPLACE(inbound_messages.from_phone_number, '\\D', '', 'g')
       ) AS total_messages,
       text AS last_text,
       type AS last_type,
@@ -78,11 +82,75 @@ export async function GET(request: NextRequest) {
     inboundRows.map((r) => r.from_phone_number.replace(/\D/g, ""))
   );
 
+  // 3. Latest outbound message per phone (for conversations that also have
+  //    inbound messages). Used to show the most recent activity regardless of
+  //    direction — so automation-sent templates appear as the last message.
+  const inboundPhoneDigits = inboundRows.map((r) =>
+    r.from_phone_number.replace(/\D/g, "")
+  );
+  const latestOutboundPerPhone =
+    inboundPhoneDigits.length > 0
+      ? await prisma.$queryRaw<
+          Array<{
+            phone_digits: string;
+            last_sent_at: Date;
+            template_name: string;
+            order_id: string | null;
+          }>
+        >`
+          SELECT DISTINCT ON (REGEXP_REPLACE(wm.phone_number, '\\D', '', 'g'))
+            REGEXP_REPLACE(wm.phone_number, '\\D', '', 'g') AS phone_digits,
+            COALESCE(wm.sent_at, wm.created_at) AS last_sent_at,
+            wm.template_name,
+            wm.order_id
+          FROM whatsapp_messages wm
+          WHERE REGEXP_REPLACE(wm.phone_number, '\\D', '', 'g') = ANY(${inboundPhoneDigits})
+          ORDER BY REGEXP_REPLACE(wm.phone_number, '\\D', '', 'g'),
+                   COALESCE(wm.sent_at, wm.created_at) DESC
+        `
+      : [];
+  const outboundByDigits = new Map(
+    latestOutboundPerPhone.map((r) => [r.phone_digits, r])
+  );
+
+  // Load pinned conversations
+  const pinnedRows = await prisma.pinnedConversation.findMany();
+  const pinnedSet = new Set(pinnedRows.map((p) => p.phoneNumber));
+
+  // Count unread inbound messages (messages received after lastReadAt).
+  // If no read state exists, all inbound messages are unread.
+  const unreadCounts = await prisma.$queryRaw<
+    Array<{ from_phone_number: string; unread_count: bigint }>
+  >`
+    SELECT im.from_phone_number, COUNT(*) AS unread_count
+    FROM inbound_messages im
+    WHERE im.received_at > COALESCE(
+      (SELECT crs.last_read_at
+       FROM conversation_read_states crs
+       WHERE crs.phone_number = im.from_phone_number),
+      '1970-01-01'::timestamp
+    )
+    GROUP BY im.from_phone_number
+  `;
+  const unreadMap = new Map(
+    unreadCounts.map((r) => [r.from_phone_number, Number(r.unread_count)])
+  );
+
   const conversations = await Promise.all([
     ...inboundRows.map(async (row) => {
-      const order = row.order_id
+      const digits = row.from_phone_number.replace(/\D/g, "");
+      const latestOut = outboundByDigits.get(digits);
+      const outboundIsNewer =
+        latestOut &&
+        new Date(latestOut.last_sent_at).getTime() >
+          new Date(row.last_received_at).getTime();
+
+      const effectiveOrderId = outboundIsNewer
+        ? latestOut.order_id ?? row.order_id
+        : row.order_id;
+      const order = effectiveOrderId
         ? await prisma.order.findUnique({
-            where: { id: row.order_id },
+            where: { id: effectiveOrderId },
             select: {
               id: true,
               codNetworkOrderId: true,
@@ -95,10 +163,18 @@ export async function GET(request: NextRequest) {
       return {
         phoneNumber: row.from_phone_number,
         contactName: row.contact_name,
-        lastReceivedAt: row.last_received_at,
-        lastText: row.last_text,
-        lastType: row.last_type,
+        lastReceivedAt: outboundIsNewer
+          ? latestOut.last_sent_at
+          : row.last_received_at,
+        lastText: outboundIsNewer
+          ? latestOut.template_name === "<text>"
+            ? "You: (text message)"
+            : `You: Template ${latestOut.template_name}`
+          : row.last_text,
+        lastType: outboundIsNewer ? "template" : row.last_type,
         totalMessages: Number(row.total_messages),
+        unreadCount: unreadMap.get(row.from_phone_number) ?? 0,
+        isPinned: pinnedSet.has(row.from_phone_number),
         order,
         isOutboundOnly: false,
       };
@@ -125,6 +201,8 @@ export async function GET(request: NextRequest) {
           lastText: `Template: ${row.last_template}`,
           lastType: "template",
           totalMessages: Number(row.total_messages),
+          unreadCount: 0,
+          isPinned: pinnedSet.has(row.phone_number),
           order,
           isOutboundOnly: true,
         };

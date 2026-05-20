@@ -227,18 +227,38 @@ export async function POST(request: NextRequest) {
         const text = extractText(msg);
         if (!text) continue;
         const orderId = await findOrderByPhone(msg.from);
-        const order = orderId
+        const rawOrder = orderId
           ? await prisma.order.findUnique({
               where: { id: orderId },
               select: {
                 customerName: true,
                 productName: true,
+                productPrice: true,
                 status: true,
                 trackingNumber: true,
                 customerCity: true,
                 codNetworkOrderId: true,
+                deliveryCompany: true,
               },
             })
+          : null;
+        let latestTrackingEvent: string | null = null;
+        if (rawOrder) {
+          const latestEvent = await prisma.trackingEvent.findFirst({
+            where: {
+              trackingOrder: { orderId },
+            },
+            orderBy: { occurredAt: "desc" },
+            select: { description: true },
+          });
+          latestTrackingEvent = latestEvent?.description ?? null;
+        }
+        const order = rawOrder
+          ? {
+              ...rawOrder,
+              productPrice: rawOrder.productPrice?.toString() ?? null,
+              latestTrackingEvent,
+            }
           : null;
         handleAiAutoReply(fromPhone, text, order).catch((err) =>
           console.error("[webhook] AI auto-reply error:", err)
