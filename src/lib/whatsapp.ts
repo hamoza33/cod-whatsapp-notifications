@@ -169,8 +169,19 @@ export class WhatsAppClient {
     this.apiVersion = apiVersion;
   }
 
-  static async fromSettings(): Promise<WhatsAppClient> {
+  /**
+   * Build a client from settings. Pass `phoneNumberIdOverride` to send from
+   * a specific WABA (used by the multi-account inbox — the operator picks
+   * a number from the dropdown and we route their send through that PNI
+   * instead of the global default).
+   */
+  static async fromSettings(
+    opts?: { phoneNumberIdOverride?: string | null }
+  ): Promise<WhatsAppClient> {
+    const overrideRaw = opts?.phoneNumberIdOverride;
+    const override = overrideRaw && overrideRaw.trim() ? overrideRaw.trim() : null;
     const phoneNumberId =
+      override ||
       (await getSetting(SETTING_KEYS.WHATSAPP_PHONE_NUMBER_ID)) ||
       process.env.WHATSAPP_PHONE_NUMBER_ID ||
       "";
@@ -196,6 +207,11 @@ export class WhatsAppClient {
     }
 
     return new WhatsAppClient(phoneNumberId, accessToken, apiVersion);
+  }
+
+  /** Expose the WABA Phone Number ID this client is sending from. */
+  getPhoneNumberId(): string {
+    return this.phoneNumberId;
   }
 
   async sendTemplate(
@@ -272,6 +288,53 @@ export class WhatsAppClient {
       to,
       type: "text",
       text: { preview_url: false, body: text },
+    };
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${this.accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(body),
+    });
+    if (!response.ok) {
+      const errorBody = await response.text();
+      throw new WhatsAppApiError(response.status, errorBody);
+    }
+    return response.json();
+  }
+
+  /**
+   * Send a media message (image, video, audio, document, or sticker) using
+   * a media_id previously uploaded via /media. Only valid inside Meta's
+   * 24-hour customer service window — the recipient must have messaged us
+   * in the last 24 hours.
+   *
+   * `mediaType` must be one of: "image", "video", "audio", "document",
+   * "sticker". `caption` is supported on image/video/document only (Meta
+   * silently drops it for audio/sticker). `filename` is required by Meta
+   * for documents.
+   */
+  async sendMedia(
+    to: string,
+    mediaType: "image" | "video" | "audio" | "document" | "sticker",
+    mediaId: string,
+    opts?: { caption?: string; filename?: string }
+  ): Promise<WhatsAppSendResult> {
+    const url = `https://graph.facebook.com/${this.apiVersion}/${this.phoneNumberId}/messages`;
+    const mediaPayload: Record<string, unknown> = { id: mediaId };
+    if (opts?.caption && (mediaType === "image" || mediaType === "video" || mediaType === "document")) {
+      mediaPayload.caption = opts.caption;
+    }
+    if (opts?.filename && mediaType === "document") {
+      mediaPayload.filename = opts.filename;
+    }
+    const body = {
+      messaging_product: "whatsapp",
+      recipient_type: "individual",
+      to,
+      type: mediaType,
+      [mediaType]: mediaPayload,
     };
     const response = await fetch(url, {
       method: "POST",

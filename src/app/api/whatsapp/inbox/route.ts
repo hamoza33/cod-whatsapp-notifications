@@ -17,65 +17,152 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
+  // Optional account filter: `?numberId=<whatsappNumber.id>` restricts the
+  // conversation list to the rows associated with that WhatsApp account
+  // (matched against Meta Phone Number ID). Pre-migration rows have a
+  // null `phone_number_id` — those are included regardless so legacy
+  // conversations don't suddenly disappear when the user picks an account.
+  const url = new URL(request.url);
+  const numberIdParam = url.searchParams.get("numberId");
+  let pniFilter: string | null = null;
+  if (numberIdParam) {
+    const row = await prisma.whatsappNumber.findUnique({
+      where: { id: numberIdParam },
+    });
+    if (row) {
+      pniFilter = row.phoneNumberId;
+    } else if (/^\d{6,20}$/.test(numberIdParam)) {
+      pniFilter = numberIdParam;
+    }
+  }
+
   // 1. Inbound conversations grouped by phone
-  const inboundRows = await prisma.$queryRaw<
-    Array<{
-      from_phone_number: string;
-      last_received_at: Date;
-      total_messages: bigint;
-      last_text: string | null;
-      last_type: string;
-      contact_name: string | null;
-      order_id: string | null;
-    }>
-  >`
-    SELECT DISTINCT ON (from_phone_number)
-      from_phone_number,
-      received_at AS last_received_at,
-      (
-        SELECT COUNT(*) FROM inbound_messages im2
-        WHERE im2.from_phone_number = inbound_messages.from_phone_number
-      ) + (
-        SELECT COUNT(*) FROM whatsapp_messages wm2
-        WHERE REGEXP_REPLACE(wm2.phone_number, '\\D', '', 'g')
-            = REGEXP_REPLACE(inbound_messages.from_phone_number, '\\D', '', 'g')
-      ) AS total_messages,
-      text AS last_text,
-      type AS last_type,
-      contact_name,
-      order_id
-    FROM inbound_messages
-    ORDER BY from_phone_number, received_at DESC
-  `;
+  const inboundRows = pniFilter
+    ? await prisma.$queryRaw<
+        Array<{
+          from_phone_number: string;
+          last_received_at: Date;
+          total_messages: bigint;
+          last_text: string | null;
+          last_type: string;
+          contact_name: string | null;
+          order_id: string | null;
+        }>
+      >`
+        SELECT DISTINCT ON (from_phone_number)
+          from_phone_number,
+          received_at AS last_received_at,
+          (
+            SELECT COUNT(*) FROM inbound_messages im2
+            WHERE im2.from_phone_number = inbound_messages.from_phone_number
+          ) + (
+            SELECT COUNT(*) FROM whatsapp_messages wm2
+            WHERE REGEXP_REPLACE(wm2.phone_number, '\\D', '', 'g')
+                = REGEXP_REPLACE(inbound_messages.from_phone_number, '\\D', '', 'g')
+          ) AS total_messages,
+          text AS last_text,
+          type AS last_type,
+          contact_name,
+          order_id
+        FROM inbound_messages
+        WHERE phone_number_id IS NULL OR phone_number_id = ${pniFilter}
+        ORDER BY from_phone_number, received_at DESC
+      `
+    : await prisma.$queryRaw<
+        Array<{
+          from_phone_number: string;
+          last_received_at: Date;
+          total_messages: bigint;
+          last_text: string | null;
+          last_type: string;
+          contact_name: string | null;
+          order_id: string | null;
+        }>
+      >`
+        SELECT DISTINCT ON (from_phone_number)
+          from_phone_number,
+          received_at AS last_received_at,
+          (
+            SELECT COUNT(*) FROM inbound_messages im2
+            WHERE im2.from_phone_number = inbound_messages.from_phone_number
+          ) + (
+            SELECT COUNT(*) FROM whatsapp_messages wm2
+            WHERE REGEXP_REPLACE(wm2.phone_number, '\\D', '', 'g')
+                = REGEXP_REPLACE(inbound_messages.from_phone_number, '\\D', '', 'g')
+          ) AS total_messages,
+          text AS last_text,
+          type AS last_type,
+          contact_name,
+          order_id
+        FROM inbound_messages
+        ORDER BY from_phone_number, received_at DESC
+      `;
 
   // 2. Outbound-only conversations: phones that have outbound messages
-  //    but NO inbound messages
-  const outboundRows = await prisma.$queryRaw<
-    Array<{
-      phone_number: string;
-      last_sent_at: Date;
-      total_messages: bigint;
-      last_template: string;
-      order_id: string | null;
-    }>
-  >`
-    SELECT DISTINCT ON (wm.phone_number)
-      wm.phone_number,
-      COALESCE(wm.sent_at, wm.created_at) AS last_sent_at,
-      (
-        SELECT COUNT(*) FROM whatsapp_messages wm2
-        WHERE wm2.phone_number = wm.phone_number
-      ) AS total_messages,
-      wm.template_name AS last_template,
-      wm.order_id
-    FROM whatsapp_messages wm
-    WHERE NOT EXISTS (
-      SELECT 1 FROM inbound_messages im
-      WHERE REGEXP_REPLACE(im.from_phone_number, '\\D', '', 'g')
-          = REGEXP_REPLACE(wm.phone_number, '\\D', '', 'g')
-    )
-    ORDER BY wm.phone_number, COALESCE(wm.sent_at, wm.created_at) DESC
-  `;
+  //    but NO inbound messages. Same null-fallback as inbound so legacy
+  //    rows without a stored phone_number_id continue to show.
+  const outboundRows = pniFilter
+    ? await prisma.$queryRaw<
+        Array<{
+          phone_number: string;
+          last_sent_at: Date;
+          total_messages: bigint;
+          last_template: string;
+          order_id: string | null;
+          last_status: string;
+          last_error_message: string | null;
+        }>
+      >`
+        SELECT DISTINCT ON (wm.phone_number)
+          wm.phone_number,
+          COALESCE(wm.sent_at, wm.created_at) AS last_sent_at,
+          (
+            SELECT COUNT(*) FROM whatsapp_messages wm2
+            WHERE wm2.phone_number = wm.phone_number
+          ) AS total_messages,
+          wm.template_name AS last_template,
+          wm.order_id,
+          wm.status::text AS last_status,
+          wm.error_message AS last_error_message
+        FROM whatsapp_messages wm
+        WHERE (wm.phone_number_id IS NULL OR wm.phone_number_id = ${pniFilter})
+          AND NOT EXISTS (
+            SELECT 1 FROM inbound_messages im
+            WHERE REGEXP_REPLACE(im.from_phone_number, '\\D', '', 'g')
+                = REGEXP_REPLACE(wm.phone_number, '\\D', '', 'g')
+          )
+        ORDER BY wm.phone_number, COALESCE(wm.sent_at, wm.created_at) DESC
+      `
+    : await prisma.$queryRaw<
+        Array<{
+          phone_number: string;
+          last_sent_at: Date;
+          total_messages: bigint;
+          last_template: string;
+          order_id: string | null;
+          last_status: string;
+          last_error_message: string | null;
+        }>
+      >`
+        SELECT DISTINCT ON (wm.phone_number)
+          wm.phone_number,
+          COALESCE(wm.sent_at, wm.created_at) AS last_sent_at,
+          (
+            SELECT COUNT(*) FROM whatsapp_messages wm2
+            WHERE wm2.phone_number = wm.phone_number
+          ) AS total_messages,
+          wm.template_name AS last_template,
+          wm.order_id,
+          wm.status::text AS last_status,
+          wm.error_message AS last_error_message
+        FROM whatsapp_messages wm
+        WHERE NOT EXISTS (
+          SELECT 1 FROM inbound_messages im
+          WHERE REGEXP_REPLACE(im.from_phone_number, '\\D', '', 'g')
+              = REGEXP_REPLACE(wm.phone_number, '\\D', '', 'g')
+        )
+        ORDER BY wm.phone_number, COALESCE(wm.sent_at, wm.created_at) DESC
+      `;
 
   // Normalize to digits-only for comparison (webhook stores +prefix, outbound may not)
   const inboundDigits = new Set(
@@ -96,13 +183,17 @@ export async function GET(request: NextRequest) {
             last_sent_at: Date;
             template_name: string;
             order_id: string | null;
+            last_status: string;
+            last_error_message: string | null;
           }>
         >`
           SELECT DISTINCT ON (REGEXP_REPLACE(wm.phone_number, '\\D', '', 'g'))
             REGEXP_REPLACE(wm.phone_number, '\\D', '', 'g') AS phone_digits,
             COALESCE(wm.sent_at, wm.created_at) AS last_sent_at,
             wm.template_name,
-            wm.order_id
+            wm.order_id,
+            wm.status::text AS last_status,
+            wm.error_message AS last_error_message
           FROM whatsapp_messages wm
           WHERE REGEXP_REPLACE(wm.phone_number, '\\D', '', 'g') = ANY(${inboundPhoneDigits})
           ORDER BY REGEXP_REPLACE(wm.phone_number, '\\D', '', 'g'),
@@ -175,6 +266,8 @@ export async function GET(request: NextRequest) {
         totalMessages: Number(row.total_messages),
         unreadCount: unreadMap.get(row.from_phone_number) ?? 0,
         isPinned: pinnedSet.has(row.from_phone_number),
+        lastOutboundStatus: latestOut?.last_status ?? null,
+        lastOutboundError: latestOut?.last_error_message ?? null,
         order,
         isOutboundOnly: false,
       };
@@ -203,6 +296,8 @@ export async function GET(request: NextRequest) {
           totalMessages: Number(row.total_messages),
           unreadCount: 0,
           isPinned: pinnedSet.has(row.phone_number),
+          lastOutboundStatus: row.last_status ?? null,
+          lastOutboundError: row.last_error_message ?? null,
           order,
           isOutboundOnly: true,
         };

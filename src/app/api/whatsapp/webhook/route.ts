@@ -184,7 +184,13 @@ export async function POST(request: NextRequest) {
 
       // Persist inbound messages
       const msgs = value.messages ?? [];
-      console.log("[webhook] processing", msgs.length, "inbound message(s)");
+      const receivedOnPhoneNumberId = value.metadata?.phone_number_id ?? null;
+      console.log(
+        "[webhook] processing",
+        msgs.length,
+        "inbound message(s)",
+        receivedOnPhoneNumberId ? `on pni=${receivedOnPhoneNumberId}` : ""
+      );
       for (const msg of msgs) {
         if (!msg.id || !msg.from) continue;
         const fromPhone = normalizePhone(msg.from);
@@ -202,6 +208,7 @@ export async function POST(request: NextRequest) {
               text,
               mediaId: mediaId ?? null,
               mediaMimeType: mimeType ?? null,
+              phoneNumberId: receivedOnPhoneNumberId,
               rawPayload: msg as unknown as Prisma.InputJsonValue,
               orderId,
             },

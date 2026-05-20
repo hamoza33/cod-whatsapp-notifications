@@ -20,6 +20,22 @@ export async function POST(
   const { phone } = await params;
   const decodedPhone = decodeURIComponent(phone);
 
+  // Accept an optional `customContext` string — typed by the operator before
+  // hitting "Generate with context". When provided we pass it to the model
+  // as additional grounding information (delays, custom updates, special
+  // offers, etc.).
+  let customContext = "";
+  if (request.headers.get("content-length") && request.headers.get("content-length") !== "0") {
+    try {
+      const body = (await request.json()) as { customContext?: unknown };
+      if (typeof body.customContext === "string") {
+        customContext = body.customContext.trim().slice(0, 1000);
+      }
+    } catch {
+      // ignore malformed JSON — treat as no custom context
+    }
+  }
+
   const enabled = await getSetting(SETTING_KEYS.AI_SUGGESTIONS_ENABLED);
   if (enabled !== "true") {
     return NextResponse.json(
@@ -50,6 +66,12 @@ export async function POST(
   let systemPrompt =
     (await getSetting(SETTING_KEYS.AI_SUGGESTIONS_SYSTEM_PROMPT)) ||
     "You are a helpful customer service agent for a COD (cash on delivery) company. Generate short, professional WhatsApp reply suggestions. Keep each suggestion concise (1-2 sentences max). Reply in the same language as the customer.";
+
+  // Build the conversation-language hint. We look at the most recent inbound
+  // messages first (what the customer actually wrote); if they used Arabic
+  // characters we force Saudi dialect responses, otherwise we force English.
+  // This is appended to the system prompt so the language rule wins over any
+  // generic guidance baked into the operator-configured prompt.
 
   // Find matched order for this phone number
   const order = await prisma.order.findFirst({
@@ -121,6 +143,35 @@ export async function POST(
     history.push({ role: "assistant", content: text, at: m.createdAt });
   }
   history.sort((a, b) => a.at.getTime() - b.at.getTime());
+
+  // Language detection — scan the customer's most-recent inbound text.
+  // Arabic Unicode block: U+0600..U+06FF. We bias toward what the customer
+  // most recently wrote so the operator's English custom-context input
+  // never accidentally forces an English reply when the chat is Arabic.
+  const ARABIC_RE = /[\u0600-\u06FF]/;
+  const recentCustomerTexts = inbound
+    .map((m) => m.text)
+    .filter((t): t is string => !!t && t.trim().length > 0);
+  const detectedArabic = recentCustomerTexts.some((t) => ARABIC_RE.test(t));
+  if (detectedArabic) {
+    systemPrompt +=
+      "\n\nLANGUAGE RULE (highest priority — overrides everything else):" +
+      "\n- The customer is writing in Arabic. Reply in SAUDI ARABIC DIALECT (اللهجة السعودية / لهجة سعودية)." +
+      "\n- Use natural Saudi everyday expressions, e.g. 'هلا والله', 'حياك الله', 'وش الأخبار', 'إن شاء الله', 'تمام', 'يعطيك العافية', 'تكفى', 'أبشر', 'يسعد صباحك / مساك'." +
+      "\n- DO NOT use formal Modern Standard Arabic (الفصحى) — sound like a real Saudi customer-service rep, not a textbook." +
+      "\n- DO NOT use Egyptian / Levantine / Moroccan dialect words.";
+  } else {
+    systemPrompt +=
+      "\n\nLANGUAGE RULE (highest priority — overrides everything else):" +
+      "\n- The customer is writing in English. Reply in clear, professional English.";
+  }
+
+  if (customContext) {
+    systemPrompt +=
+      "\n\nOperator's extra context for THIS reply (treat as ground truth — incorporate into the suggestions):" +
+      `\n"""\n${customContext}\n"""` +
+      "\n\nIMPORTANT: even though the operator may have written this context in English, the LANGUAGE RULE above still applies — the suggestions you generate must follow the customer's language.";
+  }
 
   const messages: Array<{ role: string; content: string }> = [
     { role: "system", content: systemPrompt },
