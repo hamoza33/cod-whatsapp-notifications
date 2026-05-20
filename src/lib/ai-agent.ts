@@ -66,6 +66,19 @@ export async function handleAiAutoReply(
     ? `\n\nCustomer order context:\n- Name: ${order.customerName || "Unknown"}\n- Product: ${order.productName || "Unknown"}\n- Price: ${order.productPrice || "N/A"}\n- Status: ${order.status}\n- Tracking: ${order.trackingNumber || "N/A"}\n- Latest tracking update: ${order.latestTrackingEvent || "N/A"}\n- Carrier: ${order.deliveryCompany || "N/A"}\n- City: ${order.customerCity || "N/A"}\n- Order ID: ${order.codNetworkOrderId}`
     : "";
 
+  // Language detection — Arabic customer => Saudi dialect, English => English.
+  // Same rule as the suggestions endpoint; kept inline here so the auto-reply
+  // path doesn't depend on the suggestions module.
+  const ARABIC_RE = /[\u0600-\u06FF]/;
+  const detectedArabic = ARABIC_RE.test(messageText || "");
+  const languageRule = detectedArabic
+    ? "\n\nLANGUAGE RULE (highest priority — overrides everything else):" +
+      "\n- The customer is writing in Arabic. Reply in SAUDI ARABIC DIALECT (اللهجة السعودية)." +
+      "\n- Use natural Saudi everyday expressions (e.g. 'هلا والله', 'حياك الله', 'إن شاء الله', 'تمام', 'يعطيك العافية', 'أبشر')." +
+      "\n- DO NOT use formal Modern Standard Arabic (الفصحى) or Egyptian / Levantine / Moroccan dialect words."
+    : "\n\nLANGUAGE RULE (highest priority — overrides everything else):" +
+      "\n- The customer is writing in English. Reply in clear, professional English.";
+
   // Fetch recent conversation history for context
   const recentInbound = await prisma.inboundMessage.findMany({
     where: { fromPhoneNumber: fromPhone },
@@ -81,7 +94,7 @@ export async function handleAiAutoReply(
   });
 
   const messages: Array<{ role: string; content: string }> = [
-    { role: "system", content: systemPrompt + orderContext },
+    { role: "system", content: systemPrompt + orderContext + languageRule },
   ];
 
   // Build conversation history

@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { Prisma } from "@prisma/client";
 import { getAuthUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 
@@ -16,6 +17,50 @@ export async function GET(request: NextRequest) {
   if (!user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
+
+  // Optional account filter: `?numberId=<whatsappNumber.id>` restricts the
+  // conversation list to the rows associated with that WhatsApp account
+  // (matched against Meta Phone Number ID).
+  //
+  // Isolation rule: each WhatsApp account has its own thread. The DEFAULT
+  // account additionally inherits all pre-migration legacy rows (which have
+  // a null `phone_number_id`) so old conversations stay visible there. Any
+  // non-default account sees ONLY its own PNI rows — switching to a newly
+  // added account therefore starts with an empty inbox.
+  const url = new URL(request.url);
+  const numberIdParam = url.searchParams.get("numberId");
+  let pniFilter: string | null = null;
+  let includeLegacy = false;
+  if (numberIdParam) {
+    const row = await prisma.whatsappNumber.findUnique({
+      where: { id: numberIdParam },
+    });
+    if (row) {
+      pniFilter = row.phoneNumberId;
+      includeLegacy = row.isDefault;
+    } else if (/^\d{6,20}$/.test(numberIdParam)) {
+      pniFilter = numberIdParam;
+      // Raw PNI passed without a DB row — check whether it's the default.
+      const defaultRow = await prisma.whatsappNumber.findFirst({
+        where: { isDefault: true },
+      });
+      includeLegacy = defaultRow?.phoneNumberId === pniFilter;
+    }
+  }
+
+  // Reusable WHERE-fragment that limits a query to the selected account.
+  // For the default account we OR in the legacy null rows; for any other
+  // account we strictly match the PNI so the inbox is truly isolated.
+  const inboundAccountFilter = pniFilter
+    ? includeLegacy
+      ? Prisma.sql`(phone_number_id IS NULL OR phone_number_id = ${pniFilter})`
+      : Prisma.sql`phone_number_id = ${pniFilter}`
+    : null;
+  const outboundAccountFilter = pniFilter
+    ? includeLegacy
+      ? Prisma.sql`(wm.phone_number_id IS NULL OR wm.phone_number_id = ${pniFilter})`
+      : Prisma.sql`wm.phone_number_id = ${pniFilter}`
+    : null;
 
   // 1. Inbound conversations grouped by phone
   const inboundRows = await prisma.$queryRaw<
@@ -45,11 +90,13 @@ export async function GET(request: NextRequest) {
       contact_name,
       order_id
     FROM inbound_messages
+    ${inboundAccountFilter ? Prisma.sql`WHERE ${inboundAccountFilter}` : Prisma.empty}
     ORDER BY from_phone_number, received_at DESC
   `;
 
   // 2. Outbound-only conversations: phones that have outbound messages
-  //    but NO inbound messages
+  //    but NO inbound messages. Same isolation rule as inbound — default
+  //    account inherits legacy null rows; non-default sees only its own.
   const outboundRows = await prisma.$queryRaw<
     Array<{
       phone_number: string;
@@ -57,6 +104,8 @@ export async function GET(request: NextRequest) {
       total_messages: bigint;
       last_template: string;
       order_id: string | null;
+      last_status: string;
+      last_error_message: string | null;
     }>
   >`
     SELECT DISTINCT ON (wm.phone_number)
@@ -67,13 +116,16 @@ export async function GET(request: NextRequest) {
         WHERE wm2.phone_number = wm.phone_number
       ) AS total_messages,
       wm.template_name AS last_template,
-      wm.order_id
+      wm.order_id,
+      wm.status::text AS last_status,
+      wm.error_message AS last_error_message
     FROM whatsapp_messages wm
     WHERE NOT EXISTS (
       SELECT 1 FROM inbound_messages im
       WHERE REGEXP_REPLACE(im.from_phone_number, '\\D', '', 'g')
           = REGEXP_REPLACE(wm.phone_number, '\\D', '', 'g')
     )
+    ${outboundAccountFilter ? Prisma.sql`AND ${outboundAccountFilter}` : Prisma.empty}
     ORDER BY wm.phone_number, COALESCE(wm.sent_at, wm.created_at) DESC
   `;
 
@@ -96,15 +148,20 @@ export async function GET(request: NextRequest) {
             last_sent_at: Date;
             template_name: string;
             order_id: string | null;
+            last_status: string;
+            last_error_message: string | null;
           }>
         >`
           SELECT DISTINCT ON (REGEXP_REPLACE(wm.phone_number, '\\D', '', 'g'))
             REGEXP_REPLACE(wm.phone_number, '\\D', '', 'g') AS phone_digits,
             COALESCE(wm.sent_at, wm.created_at) AS last_sent_at,
             wm.template_name,
-            wm.order_id
+            wm.order_id,
+            wm.status::text AS last_status,
+            wm.error_message AS last_error_message
           FROM whatsapp_messages wm
           WHERE REGEXP_REPLACE(wm.phone_number, '\\D', '', 'g') = ANY(${inboundPhoneDigits})
+            ${outboundAccountFilter ? Prisma.sql`AND ${outboundAccountFilter}` : Prisma.empty}
           ORDER BY REGEXP_REPLACE(wm.phone_number, '\\D', '', 'g'),
                    COALESCE(wm.sent_at, wm.created_at) DESC
         `
@@ -175,6 +232,8 @@ export async function GET(request: NextRequest) {
         totalMessages: Number(row.total_messages),
         unreadCount: unreadMap.get(row.from_phone_number) ?? 0,
         isPinned: pinnedSet.has(row.from_phone_number),
+        lastOutboundStatus: latestOut?.last_status ?? null,
+        lastOutboundError: latestOut?.last_error_message ?? null,
         order,
         isOutboundOnly: false,
       };
@@ -203,6 +262,8 @@ export async function GET(request: NextRequest) {
           totalMessages: Number(row.total_messages),
           unreadCount: 0,
           isPinned: pinnedSet.has(row.phone_number),
+          lastOutboundStatus: row.last_status ?? null,
+          lastOutboundError: row.last_error_message ?? null,
           order,
           isOutboundOnly: true,
         };

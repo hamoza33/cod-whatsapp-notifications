@@ -17,6 +17,8 @@ import {
   Loader2,
   Pin,
   PinOff,
+  Paperclip,
+  Wand2,
 } from "lucide-react";
 
 interface Conversation {
@@ -29,6 +31,9 @@ interface Conversation {
   unreadCount: number;
   isPinned: boolean;
   isOutboundOnly?: boolean;
+  /** Status of the most recent outbound message: SENT/DELIVERED/READ/FAILED/PENDING. */
+  lastOutboundStatus?: string | null;
+  lastOutboundError?: string | null;
   order: {
     id: string;
     codNetworkOrderId: string;
@@ -39,6 +44,7 @@ interface Conversation {
 }
 
 type InboxSort = "recent" | "unread" | "unreplied";
+type DeliveryFilter = "all" | "delivered" | "not_delivered";
 
 type ThreadEntry =
   | {
@@ -59,6 +65,13 @@ type ThreadEntry =
       templateVariables: unknown;
       renderedText: string | null;
       headerImageUrl: string | null;
+      outboundMedia: {
+        mediaType: string;
+        mediaId: string;
+        mime: string | null;
+        filename: string | null;
+        caption: string | null;
+      } | null;
       sentBy: string | null;
       status: string;
       providerMessageId: string | null;
@@ -127,7 +140,12 @@ export default function InboxPage() {
   const [selectedNumberId, setSelectedNumberId] = useState<string | null>(null);
   const [aiSuggestions, setAiSuggestions] = useState<string[]>([]);
   const [aiSuggestionsLoading, setAiSuggestionsLoading] = useState(false);
+  const [showCustomContext, setShowCustomContext] = useState(false);
+  const [customContext, setCustomContext] = useState("");
+  const [mediaUploading, setMediaUploading] = useState(false);
+  const mediaFileInputRef = useRef<HTMLInputElement>(null);
   const [sortMode, setSortMode] = useState<InboxSort>("recent");
+  const [deliveryFilter, setDeliveryFilter] = useState<DeliveryFilter>("all");
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const threadEndRef = useRef<HTMLDivElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
@@ -142,9 +160,10 @@ export default function InboxPage() {
 
   const fetchConversations = useCallback(async () => {
     try {
-      const data = await api.get<{ conversations: Conversation[] }>(
-        "/whatsapp/inbox"
-      );
+      const path = selectedNumberId
+        ? `/whatsapp/inbox?numberId=${encodeURIComponent(selectedNumberId)}`
+        : "/whatsapp/inbox";
+      const data = await api.get<{ conversations: Conversation[] }>(path);
       setConversations(data.conversations);
       setError(null);
     } catch (err) {
@@ -153,27 +172,33 @@ export default function InboxPage() {
       setLoading(false);
       setRefreshing(false);
     }
-  }, []);
+  }, [selectedNumberId]);
 
-  const fetchThread = useCallback(async (phone: string) => {
-    try {
-      const data = await api.get<ThreadResponse>(
-        `/whatsapp/inbox/${encodeURIComponent(phone)}`
-      );
-      const isNewConversation = prevThreadLength.current === 0;
-      const hasNewMessages = data.thread.length > prevThreadLength.current;
-      setThread(data);
-      prevThreadLength.current = data.thread.length;
+  const fetchThread = useCallback(
+    async (phone: string) => {
+      try {
+        const qs = selectedNumberId
+          ? `?numberId=${encodeURIComponent(selectedNumberId)}`
+          : "";
+        const data = await api.get<ThreadResponse>(
+          `/whatsapp/inbox/${encodeURIComponent(phone)}${qs}`
+        );
+        const isNewConversation = prevThreadLength.current === 0;
+        const hasNewMessages = data.thread.length > prevThreadLength.current;
+        setThread(data);
+        prevThreadLength.current = data.thread.length;
 
-      if (isNewConversation || (hasNewMessages && !userScrolledUp.current)) {
-        setTimeout(() => {
-          threadEndRef.current?.scrollIntoView({ behavior: "smooth" });
-        }, 100);
+        if (isNewConversation || (hasNewMessages && !userScrolledUp.current)) {
+          setTimeout(() => {
+            threadEndRef.current?.scrollIntoView({ behavior: "smooth" });
+          }, 100);
+        }
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Failed to load thread");
       }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load thread");
-    }
-  }, []);
+    },
+    [selectedNumberId]
+  );
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
@@ -193,6 +218,22 @@ export default function InboxPage() {
     }
     loadNumbers();
   }, []);
+
+  // Reset the right pane when the operator switches accounts so we don't keep
+  // showing a conversation that belongs to a different WhatsApp number. The
+  // very first assignment (initial load → default account) is skipped so the
+  // persisted session selection survives a page refresh.
+  const initialAccountSetRef = useRef(false);
+  useEffect(() => {
+    if (!selectedNumberId) return;
+    if (!initialAccountSetRef.current) {
+      initialAccountSetRef.current = true;
+      return;
+    }
+    setSelectedPhone(null);
+    setThread(null);
+    prevThreadLength.current = 0;
+  }, [selectedNumberId]);
 
   useEffect(() => {
     const interval = setInterval(() => {
@@ -241,7 +282,10 @@ export default function InboxPage() {
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ text: replyText }),
+          body: JSON.stringify({
+            text: replyText,
+            ...(selectedNumberId ? { numberId: selectedNumberId } : {}),
+          }),
         }
       );
       const data = (await response.json()) as { error?: string };
@@ -256,14 +300,45 @@ export default function InboxPage() {
     }
   };
 
-  const fetchAiSuggestions = async () => {
+  const handleSendMedia = async (file: File) => {
+    if (!selectedPhone) return;
+    setMediaUploading(true);
+    try {
+      const form = new FormData();
+      form.set("file", file);
+      if (selectedNumberId) form.set("numberId", selectedNumberId);
+      const response = await fetch(
+        `/api/whatsapp/inbox/${encodeURIComponent(selectedPhone)}/media`,
+        { method: "POST", body: form }
+      );
+      const data = (await response.json()) as { error?: string };
+      if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+      showToast("success", `Sent ${file.name}`);
+      fetchThread(selectedPhone);
+      fetchConversations();
+    } catch (err) {
+      showToast("error", err instanceof Error ? err.message : "Media send failed");
+    } finally {
+      setMediaUploading(false);
+    }
+  };
+
+  const fetchAiSuggestions = async (customContext?: string) => {
     if (!selectedPhone) return;
     setAiSuggestionsLoading(true);
     setAiSuggestions([]);
     try {
       const response = await fetch(
         `/api/whatsapp/inbox/${encodeURIComponent(selectedPhone)}/suggestions`,
-        { method: "POST" }
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(
+            customContext && customContext.trim()
+              ? { customContext: customContext.trim() }
+              : {}
+          ),
+        }
       );
       const data = (await response.json()) as {
         suggestions?: string[];
@@ -314,6 +389,21 @@ export default function InboxPage() {
       );
     });
 
+    if (deliveryFilter === "delivered") {
+      list = list.filter(
+        (c) =>
+          c.lastOutboundStatus === "DELIVERED" ||
+          c.lastOutboundStatus === "READ"
+      );
+    } else if (deliveryFilter === "not_delivered") {
+      list = list.filter(
+        (c) =>
+          c.lastOutboundStatus === "FAILED" ||
+          c.lastOutboundStatus === "PENDING" ||
+          c.lastOutboundStatus === "SENT"
+      );
+    }
+
     // Sort: pinned first, then by sort mode
     list = [...list].sort((a, b) => {
       if (a.isPinned && !b.isPinned) return -1;
@@ -334,7 +424,7 @@ export default function InboxPage() {
     });
 
     return list;
-  }, [conversations, searchQuery, sortMode]);
+  }, [conversations, searchQuery, sortMode, deliveryFilter]);
 
   const selectedConvo = conversations.find((c) => c.phoneNumber === selectedPhone);
 
@@ -351,24 +441,41 @@ export default function InboxPage() {
       {/* Left panel - conversation list */}
       <div className="w-[380px] flex flex-col bg-white border-r border-gray-200">
         {/* Header */}
-        <div className="px-4 py-3 bg-[#008069] flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-full bg-[#DFE5E7] flex items-center justify-center">
+        <div className="px-4 py-3 bg-[#008069] flex items-center justify-between gap-2">
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="w-10 h-10 rounded-full bg-[#DFE5E7] flex items-center justify-center shrink-0">
               <MessageSquare size={20} className="text-[#54656F]" />
             </div>
-            <h2 className="text-white font-semibold text-lg">Chats</h2>
+            <h2 className="text-white font-semibold text-lg truncate">Chats</h2>
           </div>
-          <button
-            onClick={refresh}
-            disabled={refreshing}
-            className="p-2 text-white/80 hover:text-white rounded-full hover:bg-white/10 transition-colors"
-            aria-label="Refresh"
-          >
-            <RefreshCw
-              size={18}
-              className={refreshing ? "animate-spin" : ""}
-            />
-          </button>
+          <div className="flex items-center gap-1">
+            {whatsappNumbers.length > 0 && (
+              <select
+                value={selectedNumberId || ""}
+                onChange={(e) => setSelectedNumberId(e.target.value || null)}
+                className="bg-white/20 text-white text-xs border border-white/30 rounded-md px-2 py-1 outline-none max-w-[140px]"
+                title="Switch WhatsApp account"
+              >
+                <option value="" className="text-gray-900">All accounts</option>
+                {whatsappNumbers.map((n) => (
+                  <option key={n.id} value={n.id} className="text-gray-900">
+                    {n.label} ({n.displayPhone})
+                  </option>
+                ))}
+              </select>
+            )}
+            <button
+              onClick={refresh}
+              disabled={refreshing}
+              className="p-2 text-white/80 hover:text-white rounded-full hover:bg-white/10 transition-colors"
+              aria-label="Refresh"
+            >
+              <RefreshCw
+                size={18}
+                className={refreshing ? "animate-spin" : ""}
+              />
+            </button>
+          </div>
         </div>
 
         {/* Search + Sort */}
@@ -395,6 +502,27 @@ export default function InboxPage() {
                 }`}
               >
                 {mode === "recent" ? "Recent" : mode === "unread" ? "Unread" : "Unreplied"}
+              </button>
+            ))}
+          </div>
+          <div className="flex items-center gap-1">
+            {([
+              { value: "all", label: "All" },
+              { value: "delivered", label: "Delivered" },
+              { value: "not_delivered", label: "Not delivered" },
+            ] as Array<{ value: DeliveryFilter; label: string }>).map((opt) => (
+              <button
+                key={opt.value}
+                onClick={() => setDeliveryFilter(opt.value)}
+                className={`px-2.5 py-1 rounded-full text-[11px] font-medium transition-colors ${
+                  deliveryFilter === opt.value
+                    ? opt.value === "not_delivered"
+                      ? "bg-red-600 text-white"
+                      : "bg-[#008069] text-white"
+                    : "bg-white text-[#54656F] hover:bg-gray-100"
+                }`}
+              >
+                {opt.label}
               </button>
             ))}
           </div>
@@ -499,6 +627,14 @@ export default function InboxPage() {
                       Outbound only
                     </div>
                   )}
+                  {c.lastOutboundStatus && (
+                    <div className="mt-0.5">
+                      <DeliveryBadge
+                        status={c.lastOutboundStatus}
+                        error={c.lastOutboundError ?? null}
+                      />
+                    </div>
+                  )}
                 </div>
               </div>
             );
@@ -545,9 +681,11 @@ export default function InboxPage() {
               {whatsappNumbers.length > 1 && (
                 <select
                   value={selectedNumberId || ""}
-                  onChange={(e) => setSelectedNumberId(e.target.value)}
+                  onChange={(e) => setSelectedNumberId(e.target.value || null)}
                   className="bg-white/20 text-white text-xs border border-white/30 rounded-md px-2 py-1 outline-none"
+                  title="Send from WhatsApp account"
                 >
+                  <option value="" className="text-gray-900">Default account</option>
                   {whatsappNumbers.map((n) => (
                     <option key={n.id} value={n.id} className="text-gray-900">
                       {n.label} ({n.displayPhone})
@@ -624,24 +762,82 @@ export default function InboxPage() {
                         setAiSuggestions([]);
                       }}
                       className="px-3 py-1.5 bg-white rounded-lg text-sm text-[#111B21] border border-[#25D366]/30 hover:bg-[#25D366]/10 hover:border-[#25D366] transition-colors text-left max-w-full"
+                      dir={hasArabic(suggestion) ? "rtl" : "ltr"}
                     >
                       <span className="line-clamp-2">{suggestion}</span>
                     </button>
                   ))}
                 </div>
               )}
+              {/* Custom-context input — appears when the operator clicks the
+                  Wand button. They type extra information (delays, special
+                  offers, etc.) and we feed it to the AI so the 3 suggestions
+                  are tailored to that situation. */}
+              {showCustomContext && (
+                <div className="mb-2 bg-white rounded-lg border border-purple-300 p-2 flex flex-col gap-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] font-medium text-purple-700 flex items-center gap-1">
+                      <Wand2 size={11} />
+                      Generate with custom context
+                    </span>
+                    <button
+                      onClick={() => {
+                        setShowCustomContext(false);
+                        setCustomContext("");
+                      }}
+                      className="text-[#667781] hover:text-[#111B21]"
+                      title="Close"
+                    >
+                      <X size={12} />
+                    </button>
+                  </div>
+                  <textarea
+                    value={customContext}
+                    onChange={(e) => setCustomContext(e.target.value)}
+                    rows={2}
+                    placeholder={`Extra context for the reply, e.g. "The order will be sent tomorrow because of a delay." (Output stays in the customer's language — Saudi dialect when they write in Arabic.)`}
+                    className="w-full px-3 py-2 bg-[#F0F2F5] rounded text-sm outline-none text-[#111B21] placeholder-[#667781] resize-none"
+                  />
+                  <div className="flex justify-end">
+                    <button
+                      onClick={() => fetchAiSuggestions(customContext)}
+                      disabled={aiSuggestionsLoading || !customContext.trim()}
+                      className="px-3 py-1.5 bg-purple-600 text-white rounded-md text-xs font-medium hover:bg-purple-700 disabled:opacity-40 inline-flex items-center gap-1.5"
+                    >
+                      {aiSuggestionsLoading ? (
+                        <Loader2 size={12} className="animate-spin" />
+                      ) : (
+                        <Wand2 size={12} />
+                      )}
+                      Generate 3 with context
+                    </button>
+                  </div>
+                </div>
+              )}
               <div className="flex items-center gap-2">
                 <button
-                  onClick={fetchAiSuggestions}
+                  onClick={() => fetchAiSuggestions()}
                   disabled={aiSuggestionsLoading}
                   className="w-10 h-10 rounded-full bg-purple-100 text-purple-600 flex items-center justify-center hover:bg-purple-200 disabled:opacity-40 transition-colors shrink-0"
-                  title="Get AI reply suggestions"
+                  title="Get 3 AI reply suggestions"
                 >
-                  {aiSuggestionsLoading ? (
+                  {aiSuggestionsLoading && !showCustomContext ? (
                     <Loader2 size={18} className="animate-spin" />
                   ) : (
                     <Sparkles size={18} />
                   )}
+                </button>
+                <button
+                  onClick={() => setShowCustomContext((v) => !v)}
+                  disabled={aiSuggestionsLoading}
+                  className={`w-10 h-10 rounded-full flex items-center justify-center transition-colors shrink-0 ${
+                    showCustomContext
+                      ? "bg-purple-600 text-white hover:bg-purple-700"
+                      : "bg-purple-50 text-purple-600 hover:bg-purple-100"
+                  } disabled:opacity-40`}
+                  title="Generate 3 suggestions with custom context"
+                >
+                  <Wand2 size={18} />
                 </button>
                 <input
                   type="text"
@@ -659,7 +855,37 @@ export default function InboxPage() {
                       : "Type a message"
                   }
                   className="flex-1 px-4 py-2.5 bg-white rounded-lg text-sm outline-none text-[#111B21] placeholder-[#667781]"
+                  dir={hasArabic(replyText) ? "rtl" : "ltr"}
                 />
+                <input
+                  ref={mediaFileInputRef}
+                  type="file"
+                  accept="image/*,video/*,audio/*,application/pdf"
+                  className="hidden"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (file) {
+                      handleSendMedia(file);
+                      e.target.value = "";
+                    }
+                  }}
+                />
+                <button
+                  onClick={() => mediaFileInputRef.current?.click()}
+                  disabled={sending || !thread || !thread.inSession}
+                  className="w-10 h-10 rounded-full bg-[#F0F2F5] text-[#54656F] flex items-center justify-center hover:bg-[#E9EDEF] disabled:opacity-40 transition-colors shrink-0"
+                  title={
+                    thread && !thread.inSession
+                      ? "Reply window closed — can't attach media"
+                      : "Attach image / video / audio / document"
+                  }
+                >
+                  {mediaUploading ? (
+                    <Loader2 size={18} className="animate-spin" />
+                  ) : (
+                    <Paperclip size={18} />
+                  )}
+                </button>
                 <button
                   onClick={handleReply}
                   disabled={sending || !replyText.trim()}
@@ -702,11 +928,69 @@ export default function InboxPage() {
   );
 }
 
+function DeliveryBadge({
+  status,
+  error,
+}: {
+  status: string;
+  error: string | null;
+}) {
+  const upper = status.toUpperCase();
+  const tone =
+    upper === "READ"
+      ? "bg-[#53BDEB]/15 text-[#0884b1] border-[#53BDEB]/40"
+      : upper === "DELIVERED"
+        ? "bg-[#25D366]/15 text-[#017561] border-[#25D366]/40"
+        : upper === "FAILED"
+          ? "bg-red-100 text-red-700 border-red-300"
+          : upper === "SENT"
+            ? "bg-gray-100 text-gray-700 border-gray-300"
+            : "bg-amber-100 text-amber-800 border-amber-300";
+  const label =
+    upper === "READ"
+      ? "Read"
+      : upper === "DELIVERED"
+        ? "Delivered"
+        : upper === "FAILED"
+          ? "Not delivered"
+          : upper === "SENT"
+            ? "Sent (not yet delivered)"
+            : upper === "PENDING"
+              ? "Pending"
+              : upper;
+  return (
+    <span
+      className={`inline-flex items-center gap-1 text-[10px] font-medium px-1.5 py-0.5 rounded-full border ${tone}`}
+      title={error ?? undefined}
+    >
+      {upper === "READ" || upper === "DELIVERED" ? (
+        <CheckCheck size={9} />
+      ) : upper === "SENT" ? (
+        <Check size={9} />
+      ) : upper === "FAILED" ? (
+        <AlertCircle size={9} />
+      ) : null}
+      {label}
+    </span>
+  );
+}
+
 function InboundBubble({
   msg,
 }: {
   msg: Extract<ThreadEntry, { kind: "inbound" }>;
 }) {
+  const mediaUrl = msg.mediaId
+    ? `/api/whatsapp/inbox/media/${encodeURIComponent(msg.mediaId)}`
+    : null;
+  const mime = msg.mediaMimeType || "";
+  const isImage =
+    !!mediaUrl && (msg.type === "image" || msg.type === "sticker" || mime.startsWith("image/"));
+  const isVideo = !!mediaUrl && (msg.type === "video" || mime.startsWith("video/"));
+  const isAudio =
+    !!mediaUrl && (msg.type === "audio" || msg.type === "voice" || mime.startsWith("audio/"));
+  const isDocument = !!mediaUrl && (msg.type === "document" || (!isImage && !isVideo && !isAudio));
+
   return (
     <div className="flex justify-start">
       <div className="max-w-[65%] bg-white rounded-lg rounded-tl-none px-3 py-2 shadow-sm relative">
@@ -715,7 +999,47 @@ function InboundBubble({
             {msg.contactName}
           </p>
         )}
-        {msg.type !== "text" && (
+        {isImage && mediaUrl && (
+          <div className="mb-1.5 -mx-1 rounded overflow-hidden">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <a href={mediaUrl} target="_blank" rel="noopener noreferrer">
+              <img
+                src={mediaUrl}
+                alt={msg.type}
+                className="max-w-full max-h-[360px] object-contain rounded bg-[#F0F2F5]"
+                loading="lazy"
+              />
+            </a>
+          </div>
+        )}
+        {isVideo && mediaUrl && (
+          <div className="mb-1.5 -mx-1 rounded overflow-hidden">
+            <video
+              src={mediaUrl}
+              controls
+              playsInline
+              className="max-w-full max-h-[360px] rounded bg-black"
+            />
+          </div>
+        )}
+        {isAudio && mediaUrl && (
+          <div className="mb-1.5">
+            <audio src={mediaUrl} controls className="max-w-full" />
+          </div>
+        )}
+        {isDocument && mediaUrl && !isImage && !isVideo && !isAudio && (
+          <a
+            href={mediaUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            download
+            className="mb-1.5 inline-flex items-center gap-2 bg-[#F0F2F5] hover:bg-[#E9EDEF] rounded px-2 py-1 text-xs text-[#111B21]"
+          >
+            <ImageIcon size={12} />
+            Download {mime || msg.type}
+          </a>
+        )}
+        {msg.type !== "text" && !mediaUrl && (
           <div className="text-[11px] text-[#667781] flex items-center gap-1 mb-1">
             <ImageIcon size={11} />
             {msg.type}
@@ -727,11 +1051,11 @@ function InboundBubble({
             className="text-sm text-[#111B21] whitespace-pre-wrap break-words leading-[19px]"
             dir={hasArabic(msg.text) ? "rtl" : "ltr"}
           >{msg.text}</p>
-        ) : (
+        ) : !mediaUrl ? (
           <p className="text-sm text-[#8696A0] italic">
             ({msg.type} attachment)
           </p>
-        )}
+        ) : null}
         <p className="text-[11px] text-[#667781] mt-1 text-right">
           {formatMessageTime(msg.at)}
         </p>
@@ -746,7 +1070,11 @@ function OutboundBubble({
   msg: Extract<ThreadEntry, { kind: "outbound" }>;
 }) {
   const isText = msg.templateName === "<text>";
+  const isMedia = msg.templateName === "<media>" && !!msg.outboundMedia;
   const isAiAgent = msg.sentBy === "ai_agent";
+  const outboundMediaUrl = msg.outboundMedia
+    ? `/api/whatsapp/inbox/media/${encodeURIComponent(msg.outboundMedia.mediaId)}`
+    : null;
   const statusIcon = (() => {
     switch (msg.status) {
       case "READ":
@@ -782,6 +1110,8 @@ function OutboundBubble({
             <span className="text-purple-600 font-medium">AI Agent</span>
           ) : isText ? (
             <span>You</span>
+          ) : isMedia ? (
+            <span>You · {msg.outboundMedia?.mediaType ?? "media"}</span>
           ) : (
             <span>Template: {msg.templateName}</span>
           )}
@@ -796,6 +1126,41 @@ function OutboundBubble({
             />
           </div>
         )}
+        {isMedia && outboundMediaUrl && msg.outboundMedia && (
+          <div className="mb-1.5 -mx-1 rounded overflow-hidden">
+            {msg.outboundMedia.mediaType === "image" ? (
+              /* eslint-disable-next-line @next/next/no-img-element */
+              <a href={outboundMediaUrl} target="_blank" rel="noopener noreferrer">
+                <img
+                  src={outboundMediaUrl}
+                  alt="sent image"
+                  className="max-w-full max-h-[320px] object-contain rounded bg-white/40"
+                  loading="lazy"
+                />
+              </a>
+            ) : msg.outboundMedia.mediaType === "video" ? (
+              <video
+                src={outboundMediaUrl}
+                controls
+                playsInline
+                className="max-w-full max-h-[320px] rounded bg-black"
+              />
+            ) : msg.outboundMedia.mediaType === "audio" ? (
+              <audio src={outboundMediaUrl} controls className="max-w-full" />
+            ) : (
+              <a
+                href={outboundMediaUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                download={msg.outboundMedia.filename ?? undefined}
+                className="inline-flex items-center gap-2 bg-white/60 hover:bg-white rounded px-2 py-1 text-xs text-[#111B21]"
+              >
+                <ImageIcon size={12} />
+                {msg.outboundMedia.filename || "Document"}
+              </a>
+            )}
+          </div>
+        )}
         {displayText ? (
           <p
             className="text-sm text-[#111B21] whitespace-pre-wrap break-words leading-[19px]"
@@ -803,7 +1168,7 @@ function OutboundBubble({
           >
             {displayText}
           </p>
-        ) : !isText ? (
+        ) : !isText && !isMedia ? (
           <p className="text-sm text-[#111B21] italic">
             [Template sent with variables]
           </p>

@@ -76,9 +76,21 @@ export async function POST(request: NextRequest) {
   }
 
   const fileType = file.type || "image/jpeg";
-  if (!/^image\//.test(fileType)) {
+  // Accept anything Meta's Cloud API accepts: image/*, video/*, audio/*, and
+  // common document types. PDFs go up via /document; everything else maps
+  // 1:1 to the matching message type. The endpoint just uploads — the
+  // sender chooses the actual message type when calling /messages.
+  if (
+    !/^image\//.test(fileType) &&
+    !/^video\//.test(fileType) &&
+    !/^audio\//.test(fileType) &&
+    !/^application\/(pdf|msword|vnd\.openxmlformats|vnd\.ms-excel|vnd\.ms-powerpoint|zip|x-zip-compressed)$/.test(
+      fileType
+    ) &&
+    !/^text\/(plain|csv)$/.test(fileType)
+  ) {
     return NextResponse.json(
-      { error: `Unsupported media type ${fileType}. Only image/* is allowed.` },
+      { error: `Unsupported media type ${fileType}. Allowed: image/*, video/*, audio/*, application/pdf, document files.` },
       { status: 400 }
     );
   }

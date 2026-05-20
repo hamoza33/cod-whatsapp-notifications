@@ -117,6 +117,10 @@ model WhatsappMessage {
   id                    String        @id @default(cuid())
   orderId               String?       @map("order_id")
   phoneNumber           String        @map("phone_number")
+  // Meta Phone Number ID (the WABA the message was sent FROM). Nullable so
+  // historical rows from before multi-account support remain valid; null
+  // means "sent from the default settings-level WABA".
+  phoneNumberId         String?       @map("phone_number_id")
   templateName          String        @map("template_name")
   templateLanguage      String        @default("en") @map("template_language")
   templateVariablesJson Json?         @map("template_variables_json")
@@ -133,6 +137,7 @@ model WhatsappMessage {
   @@index([orderId])
   @@index([phoneNumber])
   @@index([status])
+  @@index([phoneNumberId])
   @@map("whatsapp_messages")
 }
 
@@ -150,6 +155,10 @@ model InboundMessage {
   text              String?
   mediaId           String?   @map("media_id")
   mediaMimeType     String?   @map("media_mime_type")
+  // Meta Phone Number ID (the WABA the message was received ON). Nullable
+  // because pre-existing inbound rows didn't store it; the inbox filter
+  // treats null as "matches every account" for backward compatibility.
+  phoneNumberId     String?   @map("phone_number_id")
   rawPayload        Json      @map("raw_payload")
   receivedAt        DateTime  @default(now()) @map("received_at")
   orderId           String?   @map("order_id")
@@ -158,6 +167,7 @@ model InboundMessage {
   @@index([fromPhoneNumber])
   @@index([receivedAt])
   @@index([orderId])
+  @@index([phoneNumberId])
   @@map("inbound_messages")
 }
 
