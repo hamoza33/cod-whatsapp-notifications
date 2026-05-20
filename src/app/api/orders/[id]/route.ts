@@ -142,3 +142,34 @@ export async function PATCH(
 
   return NextResponse.json({ order });
 }
+
+export async function DELETE(
+  request: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  const user = getAuthUser(request);
+  if (!user) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+  const { id } = await params;
+
+  const order = await prisma.order.findUnique({
+    where: { id },
+    select: { id: true },
+  });
+  if (!order) {
+    return NextResponse.json({ error: "Order not found" }, { status: 404 });
+  }
+
+  // Delete related tracking orders (and their events via cascade)
+  await prisma.trackingOrder.deleteMany({ where: { orderId: id } });
+  // Delete related messages
+  await prisma.whatsappMessage.deleteMany({ where: { orderId: id } });
+  await prisma.inboundMessage.deleteMany({ where: { orderId: id } });
+  // Delete automation runs
+  await prisma.automationRun.deleteMany({ where: { orderId: id } });
+  // Delete the order itself
+  await prisma.order.delete({ where: { id } });
+
+  return NextResponse.json({ success: true });
+}

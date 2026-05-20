@@ -18,9 +18,11 @@ import {
   ChevronRight,
   Filter,
   Settings,
+  Copy,
+  Check,
 } from "lucide-react";
 
-type TrackingCarrier = "IMILE" | "INJAZ" | "JTE" | "JDW" | "OTHER";
+type TrackingCarrier = "IMILE" | "INJAZ" | "JTE" | "JDW" | "NAQEL" | "OTHER";
 type TrackingStatus =
   | "PENDING"
   | "IN_TRANSIT"
@@ -161,6 +163,7 @@ function carrierLabel(order: TrackingOrder): string {
   if (order.carrier === "INJAZ") return "Injaz Express";
   if (order.carrier === "JTE") return "JT Express";
   if (order.carrier === "JDW") return "JD Logistics";
+  if (order.carrier === "NAQEL") return "Naqel Express";
   return "Other";
 }
 
@@ -175,7 +178,10 @@ function trackingUrl(
     return "https://injaz-express.com/track_order.php";
   }
   if (carrier === "JTE") {
-    return `https://www.jtexpress.me/KSA?orderNo=${encodeURIComponent(trackingNumber)}`;
+    return `https://www.jtexpress.me/KSA/trajectoryQuery?waybillNo=${encodeURIComponent(trackingNumber)}&type=0`;
+  }
+  if (carrier === "NAQEL") {
+    return `https://www.naqelexpress.com/en/sa/tracking/?trackingNo=${encodeURIComponent(trackingNumber)}`;
   }
   if (carrier === "JDW") {
     return `https://www.jingdonglogistics.com/Tracking`;
@@ -190,6 +196,7 @@ function carrierIcon(carrier: TrackingCarrier): string {
   if (carrier === "INJAZ") return "bg-orange-100 text-orange-600";
   if (carrier === "JTE") return "bg-red-100 text-red-600";
   if (carrier === "JDW") return "bg-purple-100 text-purple-600";
+  if (carrier === "NAQEL") return "bg-teal-100 text-teal-600";
   return "bg-gray-100 text-gray-600";
 }
 
@@ -979,10 +986,15 @@ function TrackingCard({
   const errorInfo = errorPill(order.latestError);
   const [refreshing, setRefreshing] = useState(false);
   const url = trackingUrl(order.carrier, order.trackingNumber);
-  const isJteManual =
-    order.carrier === "JTE" || order.latestError === "jte_manual_only";
-  const jteUrl = `https://www.jtexpress.me/KSA?orderNo=${encodeURIComponent(order.trackingNumber)}`;
-  const canRefresh = order.carrier !== "OTHER" && !isJteManual;
+  const canRefresh = order.carrier !== "OTHER";
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    navigator.clipboard.writeText(order.trackingNumber).catch(() => {});
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
+  };
   const hasUrl = url !== null;
 
   const handleRefresh = async () => {
@@ -1011,6 +1023,17 @@ function TrackingCard({
             <span className="font-mono font-semibold text-sm text-gray-900">
               {order.trackingNumber}
             </span>
+            <button
+              onClick={handleCopy}
+              className="p-0.5 rounded hover:bg-gray-200 transition-colors"
+              title="Copy tracking number"
+            >
+              {copied ? (
+                <Check size={14} className="text-green-600" />
+              ) : (
+                <Copy size={14} className="text-gray-400" />
+              )}
+            </button>
             <span
               className={`px-2 py-0.5 rounded-full text-xs font-medium ${c.bg} ${c.text}`}
             >
@@ -1073,7 +1096,7 @@ function TrackingCard({
           className="flex items-center gap-1"
           onClick={(e) => e.stopPropagation()}
         >
-          {hasUrl && !isJteManual && (
+          {hasUrl && (
             <a
               href={url!}
               target="_blank"
@@ -1084,31 +1107,18 @@ function TrackingCard({
               <ExternalLink size={15} />
             </a>
           )}
-          {isJteManual ? (
-            <a
-              href={jteUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="flex items-center gap-1 px-2 py-1 rounded text-xs font-medium text-amber-700 hover:bg-amber-50"
-              title="Open in JT website"
+          {canRefresh && (
+            <button
+              onClick={handleRefresh}
+              disabled={refreshing}
+              className="p-1.5 rounded hover:bg-gray-100 text-gray-400 hover:text-blue-600 disabled:opacity-50"
+              title="Refresh tracking"
             >
-              <ExternalLink size={13} />
-              Open in JT website
-            </a>
-          ) : (
-            canRefresh && (
-              <button
-                onClick={handleRefresh}
-                disabled={refreshing}
-                className="p-1.5 rounded hover:bg-gray-100 text-gray-400 hover:text-blue-600 disabled:opacity-50"
-                title="Refresh tracking"
-              >
-                <RefreshCw
-                  size={15}
-                  className={refreshing ? "animate-spin" : ""}
-                />
-              </button>
-            )
+              <RefreshCw
+                size={15}
+                className={refreshing ? "animate-spin" : ""}
+              />
+            </button>
           )}
           <button
             onClick={onDelete}

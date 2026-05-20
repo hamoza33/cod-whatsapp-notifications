@@ -113,10 +113,11 @@ export async function POST(request: NextRequest) {
 
     // Record the test message so it appears in the Inbox thread
     try {
+      const formattedPhone = phone.startsWith("+") ? phone : `+${phone}`;
       await prisma.whatsappMessage.create({
         data: {
           orderId: null,
-          phoneNumber: phone,
+          phoneNumber: formattedPhone,
           templateName,
           templateLanguage: language,
           templateVariablesJson: variables ?? [],

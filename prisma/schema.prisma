@@ -37,6 +37,13 @@ enum OrderStatus {
   RETURNED
   CANCELLED
   UNKNOWN
+  // Additional lead statuses from COD Network dashboard
+  NEW
+  NO_REPLY
+  WRONG
+  EXPIRED
+  CALL_LATER
+  CANCELLED_PRICE
 }
 
 model Order {
@@ -202,6 +209,7 @@ model Automation {
   id                       String       @id @default(cuid())
   name                     String
   isEnabled                Boolean      @default(false) @map("is_enabled")
+  autoRun                  Boolean      @default(true) @map("auto_run")
   whenStatusEquals         OrderStatus? @map("when_status_equals")
   andProductContains       String?      @map("and_product_contains")
   andProductDoesNotContain String?      @map("and_product_does_not_contain")
@@ -211,13 +219,34 @@ model Automation {
   // Ordered list of variable mappings — one entry per body param in the
   // WhatsApp template. Each entry is either a literal string (e.g. "Hello")
   // or a token like `{customer_name}`, `{phone}`, `{product}`, `{price}`,
-  // `{quantity}`, `{tracking}`, `{order_id}`, `{lead_id}`, `{city}`. The
+  // `{quantity}`, `{tracking}`, `{order_id}`, `{lead_id}`, `{city}`,
+  // `{tracking_status}`. The
   // sender resolves the tokens against the order being processed.
   thenSendTemplateVariables Json?       @map("then_send_template_variables")
   // Optional header image URL — used when the template has an IMAGE header.
   // If null, the per-Settings default header image URL is used.
   thenSendHeaderImageUrl   String?      @map("then_send_header_image_url")
   thenSendOnce             Boolean      @default(true) @map("then_send_once")
+  // --- Advanced conditions ---
+  // Phone number prefix / pattern match (e.g. "+212", "06", "07").
+  // If set, the automation only fires when the order's phone starts with this value.
+  andPhoneStartsWith       String?      @map("and_phone_starts_with")
+  // Tracking number condition — when set to "exists", the automation only fires
+  // when a tracking number is present on the order; "not_exists" fires only when
+  // the tracking number is absent.
+  andTrackingCondition     String?      @map("and_tracking_condition")
+  // City-based filter — if set, order's city must contain this substring.
+  andCityContains          String?      @map("and_city_contains")
+  // Customer name filter — if set, order's customer name must contain this substring.
+  andCustomerNameContains  String?      @map("and_customer_name_contains")
+  // Minimum order price filter (as a string to match COD Network's format).
+  andMinPrice              String?      @map("and_min_price")
+  // Maximum order price filter.
+  andMaxPrice              String?      @map("and_max_price")
+  // Tracking status filter — if set, the latest tracking event description
+  // must contain this substring for the automation to fire. Enables rules
+  // like "when tracking status contains 'location changed' → send template".
+  andTrackingStatusContains String?     @map("and_tracking_status_contains")
   createdAt                DateTime     @default(now()) @map("created_at")
   updatedAt                DateTime     @updatedAt @map("updated_at")
 
@@ -305,6 +334,7 @@ enum TrackingCarrier {
   INJAZ
   JTE
   JDW
+  NAQEL
   OTHER
 }
 
@@ -366,4 +396,34 @@ model TrackingEvent {
   @@index([trackingOrderId])
   @@index([occurredAt])
   @@map("tracking_events")
+}
+
+/// Stored images for template headers — avoids re-pasting URLs every time.
+model ImageLibrary {
+  id        String   @id @default(cuid())
+  url       String
+  name      String
+  mediaId   String?  @map("media_id")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@map("image_library")
+}
+
+/// Tracks which conversations are pinned in the inbox.
+model PinnedConversation {
+  id          String   @id @default(cuid())
+  phoneNumber String   @unique @map("phone_number")
+  pinnedAt    DateTime @default(now()) @map("pinned_at")
+
+  @@map("pinned_conversations")
+}
+
+/// Tracks when a user last read a conversation (by phone number).
+/// Used to compute unread counts: messages received after lastReadAt are unread.
+model ConversationReadState {
+  id          String   @id @default(cuid())
+  phoneNumber String   @unique @map("phone_number")
+  lastReadAt  DateTime @map("last_read_at")
+
+  @@map("conversation_read_states")
 }

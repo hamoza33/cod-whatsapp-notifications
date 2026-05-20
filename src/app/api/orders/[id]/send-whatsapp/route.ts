@@ -186,10 +186,11 @@ export async function POST(
         ? header.value
         : null;
 
+    const storedPhone = phone.startsWith("+") ? phone : `+${phone}`;
     const message = await prisma.whatsappMessage.create({
       data: {
         orderId: order.id,
-        phoneNumber: phone,
+        phoneNumber: storedPhone,
         templateName,
         templateLanguage,
         templateVariablesJson: variables,
@@ -220,10 +221,11 @@ export async function POST(
         header?.type === "image" && header.imageKind === "url"
           ? header.value
           : null;
+      const failedPhone = phone.startsWith("+") ? phone : `+${phone}`;
       await prisma.whatsappMessage.create({
         data: {
           orderId: order.id,
-          phoneNumber: phone,
+          phoneNumber: failedPhone,
           templateName,
           templateLanguage,
           templateVariablesJson: variables,

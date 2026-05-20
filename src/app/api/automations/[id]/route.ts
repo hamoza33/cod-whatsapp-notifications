@@ -50,9 +50,17 @@ export async function GET(request: NextRequest, context: RouteContext) {
 interface UpdateAutomationBody {
   name?: string;
   isEnabled?: boolean;
+  autoRun?: boolean;
   whenStatusEquals?: string | null;
   andProductContains?: string | null;
   andProductDoesNotContain?: string | null;
+  andPhoneStartsWith?: string | null;
+  andTrackingCondition?: string | null;
+  andCityContains?: string | null;
+  andCustomerNameContains?: string | null;
+  andMinPrice?: string | null;
+  andMaxPrice?: string | null;
+  andTrackingStatusContains?: string | null;
   thenMoveToStatus?: string | null;
   thenSendTemplateName?: string | null;
   thenSendTemplateLanguage?: string | null;
@@ -78,6 +86,7 @@ export async function PATCH(request: NextRequest, context: RouteContext) {
   const data: Prisma.AutomationUncheckedUpdateInput = {};
   if (body.name !== undefined) data.name = body.name.trim();
   if (body.isEnabled !== undefined) data.isEnabled = body.isEnabled;
+  if (body.autoRun !== undefined) data.autoRun = body.autoRun;
   if (body.whenStatusEquals !== undefined)
     data.whenStatusEquals = asStatus(body.whenStatusEquals);
   if (body.andProductContains !== undefined)
@@ -100,6 +109,20 @@ export async function PATCH(request: NextRequest, context: RouteContext) {
   if (body.thenSendHeaderImageUrl !== undefined)
     data.thenSendHeaderImageUrl = body.thenSendHeaderImageUrl?.trim() || null;
   if (body.thenSendOnce !== undefined) data.thenSendOnce = body.thenSendOnce;
+  if (body.andPhoneStartsWith !== undefined)
+    data.andPhoneStartsWith = body.andPhoneStartsWith?.trim() || null;
+  if (body.andTrackingCondition !== undefined)
+    data.andTrackingCondition = body.andTrackingCondition?.trim() || null;
+  if (body.andCityContains !== undefined)
+    data.andCityContains = body.andCityContains?.trim() || null;
+  if (body.andCustomerNameContains !== undefined)
+    data.andCustomerNameContains = body.andCustomerNameContains?.trim() || null;
+  if (body.andMinPrice !== undefined)
+    data.andMinPrice = body.andMinPrice?.trim() || null;
+  if (body.andMaxPrice !== undefined)
+    data.andMaxPrice = body.andMaxPrice?.trim() || null;
+  if (body.andTrackingStatusContains !== undefined)
+    data.andTrackingStatusContains = body.andTrackingStatusContains?.trim() || null;
 
   try {
     const automation = await prisma.automation.update({
@@ -176,11 +199,18 @@ export async function POST(request: NextRequest, context: RouteContext) {
         codNetworkOrderId: true,
         customerName: true,
         productName: true,
+        customerPhone: true,
+        trackingNumber: true,
+        customerCity: true,
+        productPrice: true,
         status: true,
+        trackingOrders: { select: { latestEvent: true }, take: 1 },
       },
     });
     const matching = orders.filter((o) =>
-      matchesAutomation(checkAutomation, { status: o.status, productName: o.productName })
+      matchesAutomation(checkAutomation, o, {
+        latestTrackingEvent: o.trackingOrders?.[0]?.latestEvent ?? null,
+      })
     );
     return NextResponse.json({
       candidateOrdersScanned: orders.length,
@@ -201,21 +231,35 @@ export async function POST(request: NextRequest, context: RouteContext) {
       where,
       take: 1000,
       orderBy: { codCreatedAt: "desc" },
+      include: { trackingOrders: { select: { latestEvent: true }, take: 1 } },
     });
     const matching = orders.filter((o) =>
-      matchesAutomation(checkAutomation, { status: o.status, productName: o.productName })
+      matchesAutomation(checkAutomation, o, {
+        latestTrackingEvent: o.trackingOrders?.[0]?.latestEvent ?? null,
+      })
     );
     let applied = 0;
     let failed = 0;
+    const errors: string[] = [];
     for (const order of matching) {
       try {
         const summaries = await runAutomationsForOrder(order.id, {
           automationIds: [automation.id],
         });
-        if (summaries.some((s) => s.status === "applied")) applied++;
-        else if (summaries.some((s) => s.status === "failed")) failed++;
-      } catch {
+        if (summaries.some((s) => s.status === "applied")) {
+          applied++;
+        } else if (summaries.some((s) => s.status === "failed")) {
+          failed++;
+          const failedSummary = summaries.find((s) => s.status === "failed");
+          if (failedSummary?.reason) {
+            errors.push(`#${order.codNetworkOrderId}: ${failedSummary.reason}`);
+          }
+        }
+      } catch (err) {
         failed++;
+        errors.push(
+          `#${order.codNetworkOrderId}: ${err instanceof Error ? err.message : String(err)}`
+        );
       }
     }
     return NextResponse.json({
@@ -223,6 +267,7 @@ export async function POST(request: NextRequest, context: RouteContext) {
       matchingCount: matching.length,
       applied,
       failed,
+      errors: errors.length > 0 ? errors : undefined,
     });
   }
 

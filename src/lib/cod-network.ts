@@ -556,7 +556,8 @@ const STATUS_CODE_MAP: Record<number, string> = {
 };
 
 const STATUS_STRING_MAP: Record<string, string> = {
-  new: "PENDING",
+  new: "NEW",
+  "new lead": "NEW",
   pending: "PENDING",
   assigned: "CONFIRMED",
   confirmed: "CONFIRMED",
@@ -573,6 +574,21 @@ const STATUS_STRING_MAP: Record<string, string> = {
   canceled: "CANCELLED",
   cancel: "CANCELLED",
   "out of stock": "CANCELLED",
+  "no reply": "NO_REPLY",
+  no_reply: "NO_REPLY",
+  noreply: "NO_REPLY",
+  unanswered: "NO_REPLY",
+  wrong: "WRONG",
+  "wrong lead": "WRONG",
+  "wrong number": "WRONG",
+  expired: "EXPIRED",
+  "call later": "CALL_LATER",
+  call_later: "CALL_LATER",
+  callback: "CALL_LATER",
+  scheduled: "CALL_LATER",
+  "cancelled price": "CANCELLED_PRICE",
+  cancelled_price: "CANCELLED_PRICE",
+  "canceled price": "CANCELLED_PRICE",
 };
 
 export function mapCodStatus(

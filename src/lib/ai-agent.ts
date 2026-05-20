@@ -9,6 +9,9 @@ interface OrderContext {
   trackingNumber: string | null;
   customerCity: string | null;
   codNetworkOrderId: string;
+  productPrice: string | null;
+  deliveryCompany: string | null;
+  latestTrackingEvent: string | null;
 }
 
 /**
@@ -26,19 +29,17 @@ export async function handleAiAutoReply(
   const apiKey = await getSetting(SETTING_KEYS.OPENAI_API_KEY);
   if (!apiKey) return { replied: false, error: "OpenAI API key not configured" };
 
-  // Check product type filter
-  const productTypesFilter = await getSetting(SETTING_KEYS.AI_AGENT_PRODUCT_TYPES);
-  if (productTypesFilter && order?.productName) {
-    const allowedTypes = productTypesFilter.split(",").map((t) => t.trim().toLowerCase()).filter(Boolean);
-    if (allowedTypes.length > 0) {
-      const product = await prisma.product.findFirst({
-        where: { name: order.productName },
-        select: { productType: true },
-      });
-      const orderType = product?.productType?.toLowerCase() || "";
-      if (!allowedTypes.some((t) => orderType.includes(t))) {
-        return { replied: false, error: "Order product type not in allowed list" };
-      }
+  // Check per-product AI agent toggle: if the order's product exists in the
+  // products table, only auto-reply when `aiAgentEnabled` is true for that
+  // product. Orders whose product isn't tracked are allowed through so the
+  // agent still works for ad-hoc / unlinked conversations.
+  if (order?.productName) {
+    const product = await prisma.product.findFirst({
+      where: { name: order.productName },
+      select: { aiAgentEnabled: true },
+    });
+    if (product && !product.aiAgentEnabled) {
+      return { replied: false, error: "AI agent not enabled for this product" };
     }
   }
 
@@ -62,7 +63,7 @@ export async function handleAiAutoReply(
   }
 
   const orderContext = order
-    ? `\n\nCustomer order context:\n- Name: ${order.customerName || "Unknown"}\n- Product: ${order.productName || "Unknown"}\n- Status: ${order.status}\n- Tracking: ${order.trackingNumber || "N/A"}\n- City: ${order.customerCity || "N/A"}\n- Order ID: ${order.codNetworkOrderId}`
+    ? `\n\nCustomer order context:\n- Name: ${order.customerName || "Unknown"}\n- Product: ${order.productName || "Unknown"}\n- Price: ${order.productPrice || "N/A"}\n- Status: ${order.status}\n- Tracking: ${order.trackingNumber || "N/A"}\n- Latest tracking update: ${order.latestTrackingEvent || "N/A"}\n- Carrier: ${order.deliveryCompany || "N/A"}\n- City: ${order.customerCity || "N/A"}\n- Order ID: ${order.codNetworkOrderId}`
     : "";
 
   // Fetch recent conversation history for context

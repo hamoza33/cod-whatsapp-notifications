@@ -116,14 +116,18 @@ export async function GET(
       }
     } else {
       const body = templateBodies.get(m.templateName);
+      const vars = Array.isArray(m.templateVariablesJson)
+        ? (m.templateVariablesJson as string[])
+        : [];
       if (body) {
-        const vars = Array.isArray(m.templateVariablesJson)
-          ? (m.templateVariablesJson as string[])
-          : [];
         renderedText = body.replace(/\{\{(\d+)\}\}/g, (_, idx) => {
           const i = parseInt(idx, 10) - 1;
           return vars[i] ?? `{{${idx}}}`;
         });
+      } else if (vars.length > 0) {
+        // Template body not cached yet — show the resolved variables so the
+        // user can still see what was sent instead of a generic placeholder.
+        renderedText = vars.join(" | ");
       }
     }
     // Resolve header image: stored per-message first, then fall back to
