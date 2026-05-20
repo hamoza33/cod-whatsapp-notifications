@@ -174,25 +174,31 @@ export default function InboxPage() {
     }
   }, [selectedNumberId]);
 
-  const fetchThread = useCallback(async (phone: string) => {
-    try {
-      const data = await api.get<ThreadResponse>(
-        `/whatsapp/inbox/${encodeURIComponent(phone)}`
-      );
-      const isNewConversation = prevThreadLength.current === 0;
-      const hasNewMessages = data.thread.length > prevThreadLength.current;
-      setThread(data);
-      prevThreadLength.current = data.thread.length;
+  const fetchThread = useCallback(
+    async (phone: string) => {
+      try {
+        const qs = selectedNumberId
+          ? `?numberId=${encodeURIComponent(selectedNumberId)}`
+          : "";
+        const data = await api.get<ThreadResponse>(
+          `/whatsapp/inbox/${encodeURIComponent(phone)}${qs}`
+        );
+        const isNewConversation = prevThreadLength.current === 0;
+        const hasNewMessages = data.thread.length > prevThreadLength.current;
+        setThread(data);
+        prevThreadLength.current = data.thread.length;
 
-      if (isNewConversation || (hasNewMessages && !userScrolledUp.current)) {
-        setTimeout(() => {
-          threadEndRef.current?.scrollIntoView({ behavior: "smooth" });
-        }, 100);
+        if (isNewConversation || (hasNewMessages && !userScrolledUp.current)) {
+          setTimeout(() => {
+            threadEndRef.current?.scrollIntoView({ behavior: "smooth" });
+          }, 100);
+        }
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Failed to load thread");
       }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load thread");
-    }
-  }, []);
+    },
+    [selectedNumberId]
+  );
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
@@ -212,6 +218,22 @@ export default function InboxPage() {
     }
     loadNumbers();
   }, []);
+
+  // Reset the right pane when the operator switches accounts so we don't keep
+  // showing a conversation that belongs to a different WhatsApp number. The
+  // very first assignment (initial load → default account) is skipped so the
+  // persisted session selection survives a page refresh.
+  const initialAccountSetRef = useRef(false);
+  useEffect(() => {
+    if (!selectedNumberId) return;
+    if (!initialAccountSetRef.current) {
+      initialAccountSetRef.current = true;
+      return;
+    }
+    setSelectedPhone(null);
+    setThread(null);
+    prevThreadLength.current = 0;
+  }, [selectedNumberId]);
 
   useEffect(() => {
     const interval = setInterval(() => {

@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { Prisma } from "@prisma/client";
 import { getAuthUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { WhatsAppClient, WhatsAppApiError } from "@/lib/whatsapp";
@@ -26,13 +27,46 @@ export async function GET(
   const digits = decodedPhone.replace(/[^\d]/g, "");
   const phoneVariants = [...new Set([decodedPhone, digits, `+${digits}`])];
 
+  // Optional account isolation — mirrors the listing route. When the inbox
+  // UI passes `?numberId=...` we narrow the thread to that account's PNI.
+  // The DEFAULT account additionally inherits all legacy rows (phone_number_id
+  // is null); any other account sees ONLY its own messages so the chat thread
+  // is truly isolated per WhatsApp number.
+  const url = new URL(request.url);
+  const numberIdParam = url.searchParams.get("numberId");
+  let pniFilter: string | null = null;
+  let includeLegacy = false;
+  if (numberIdParam) {
+    const row = await prisma.whatsappNumber.findUnique({
+      where: { id: numberIdParam },
+    });
+    if (row) {
+      pniFilter = row.phoneNumberId;
+      includeLegacy = row.isDefault;
+    } else if (/^\d{6,20}$/.test(numberIdParam)) {
+      pniFilter = numberIdParam;
+      const defaultRow = await prisma.whatsappNumber.findFirst({
+        where: { isDefault: true },
+      });
+      includeLegacy = defaultRow?.phoneNumberId === pniFilter;
+    }
+  }
+  // Prisma's `in` filter does not match null values, so for the default
+  // account we express the OR with two branches instead.
+  const accountClause: Prisma.InboundMessageWhereInput &
+    Prisma.WhatsappMessageWhereInput = pniFilter
+    ? includeLegacy
+      ? { OR: [{ phoneNumberId: pniFilter }, { phoneNumberId: null }] }
+      : { phoneNumberId: pniFilter }
+    : {};
+
   const [inbound, outbound] = await Promise.all([
     prisma.inboundMessage.findMany({
-      where: { fromPhoneNumber: { in: phoneVariants } },
+      where: { fromPhoneNumber: { in: phoneVariants }, ...accountClause },
       orderBy: { receivedAt: "asc" },
     }),
     prisma.whatsappMessage.findMany({
-      where: { phoneNumber: { in: phoneVariants } },
+      where: { phoneNumber: { in: phoneVariants }, ...accountClause },
       orderBy: { createdAt: "asc" },
       select: {
         id: true,
