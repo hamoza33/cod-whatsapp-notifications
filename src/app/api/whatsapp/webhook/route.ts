@@ -302,6 +302,28 @@ export async function POST(request: NextRequest) {
             errorMessage: errMsg ?? undefined,
           },
         });
+
+        // Mirror the receipt onto any matching bulk-messaging recipient so
+        // the Bulk Messaging status table updates the same way as the
+        // inbox/message logs. Keyed by providerMessageId, which the bulk
+        // sender stores at send time.
+        const recipientData: {
+          status: typeof mappedStatus;
+          errorMessage?: string;
+          deliveredAt?: Date;
+          readAt?: Date;
+          failedAt?: Date;
+        } = { status: mappedStatus };
+        if (mappedStatus === "DELIVERED") recipientData.deliveredAt = new Date();
+        else if (mappedStatus === "READ") recipientData.readAt = new Date();
+        else if (mappedStatus === "FAILED") {
+          recipientData.failedAt = new Date();
+          if (errMsg) recipientData.errorMessage = errMsg;
+        }
+        await prisma.bulkRecipient.updateMany({
+          where: { providerMessageId: status.id },
+          data: recipientData,
+        });
       }
     }
   }
