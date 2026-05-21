@@ -18,9 +18,9 @@ model User {
 }
 
 model Setting {
-  id    String @id @default(cuid())
-  key   String @unique
-  value String
+  id        String   @id @default(cuid())
+  key       String   @unique
+  value     String
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
@@ -47,50 +47,50 @@ enum OrderStatus {
 }
 
 model Order {
-  id                  String      @id @default(cuid())
-  codNetworkOrderId   String      @unique @map("cod_network_order_id")
+  id                String      @id @default(cuid())
+  codNetworkOrderId String      @unique @map("cod_network_order_id")
   // Lead identifier from COD Network. Some accounts have the lead-id as the
   // primary order reference; for others it's a separate field surfaced via
   // the Webhook Lead Status events. Nullable+unique so historical orders can
   // be back-filled when a webhook eventually delivers the lead id.
-  codNetworkLeadId    String?     @unique @map("cod_network_lead_id")
+  codNetworkLeadId  String?     @unique @map("cod_network_lead_id")
   // Manually-created order — never reset by a sync from COD Network. The
   // `codNetworkOrderId` for manual orders is a generated `MANUAL-<random>`
   // string so the unique index is preserved.
-  isManual            Boolean     @default(false) @map("is_manual")
-  customerName        String?     @map("customer_name")
-  customerPhone       String?     @map("customer_phone")
-  customerCity        String?     @map("customer_city")
-  customerAddress     String?     @map("customer_address")
-  productName         String?     @map("product_name")
-  productPrice        String?     @map("product_price")
-  productQuantity     String?     @map("product_quantity")
-  trackingNumber      String?     @map("tracking_number")
-  deliveryCompany     String?     @map("delivery_company")
-  status              OrderStatus @default(UNKNOWN)
-  statusChangedAt     DateTime?   @map("status_changed_at")
+  isManual          Boolean     @default(false) @map("is_manual")
+  customerName      String?     @map("customer_name")
+  customerPhone     String?     @map("customer_phone")
+  customerCity      String?     @map("customer_city")
+  customerAddress   String?     @map("customer_address")
+  productName       String?     @map("product_name")
+  productPrice      String?     @map("product_price")
+  productQuantity   String?     @map("product_quantity")
+  trackingNumber    String?     @map("tracking_number")
+  deliveryCompany   String?     @map("delivery_company")
+  status            OrderStatus @default(UNKNOWN)
+  statusChangedAt   DateTime?   @map("status_changed_at")
   // The raw status string from COD Network (e.g. "delivered", "out for
   // delivery", "shipped") preserved verbatim for debugging / automation
   // matching. Useful when COD adds new statuses we haven't mapped yet.
-  codDeliveryStatus   String?     @map("cod_delivery_status")
-  rawOrderJson        Json?       @map("raw_order_json")
-  lastSyncedAt        DateTime?   @map("last_synced_at")
+  codDeliveryStatus String?     @map("cod_delivery_status")
+  rawOrderJson      Json?       @map("raw_order_json")
+  lastSyncedAt      DateTime?   @map("last_synced_at")
   // The `created_at` reported by COD Network for the order itself, which is
   // the meaningful "newest first" sort key (the row's own `createdAt` reflects
   // when we first synced it, not when the customer placed the order).
-  codCreatedAt        DateTime?   @map("cod_created_at")
-  codUpdatedAt        DateTime?   @map("cod_updated_at")
+  codCreatedAt      DateTime?   @map("cod_created_at")
+  codUpdatedAt      DateTime?   @map("cod_updated_at")
   // Set when ANY WhatsApp message has been sent for this order — used by the
   // Pipeline UI to short-circuit accidental re-sends and to render the
   // "WhatsApp Sent" virtual column.
-  whatsappSentAt      DateTime?   @map("whatsapp_sent_at")
+  whatsappSentAt    DateTime?   @map("whatsapp_sent_at")
   // Whether this order has been queued for the AI voice agent to call.
-  callAgentQueued     Boolean     @default(false) @map("call_agent_queued")
+  callAgentQueued   Boolean     @default(false) @map("call_agent_queued")
   // Free-form notes the operator can attach to an order from the Pipeline
   // (e.g. "called customer, no answer"). Not synced from COD Network.
-  pipelineNote        String?     @map("pipeline_note")
-  createdAt           DateTime    @default(now()) @map("created_at")
-  updatedAt           DateTime    @updatedAt @map("updated_at")
+  pipelineNote      String?     @map("pipeline_note")
+  createdAt         DateTime    @default(now()) @map("created_at")
+  updatedAt         DateTime    @updatedAt @map("updated_at")
 
   whatsappMessages WhatsappMessage[]
   inboundMessages  InboundMessage[]
@@ -142,27 +142,27 @@ model WhatsappMessage {
 }
 
 model InboundMessage {
-  id                String    @id @default(cuid())
+  id                String   @id @default(cuid())
   // Meta's wamid for de-duplication; webhooks can re-deliver the same payload.
-  providerMessageId String    @unique @map("provider_message_id")
-  fromPhoneNumber   String    @map("from_phone_number")
+  providerMessageId String   @unique @map("provider_message_id")
+  fromPhoneNumber   String   @map("from_phone_number")
   // Pre-normalized international number used to match against Order.customerPhone.
-  contactName       String?   @map("contact_name")
+  contactName       String?  @map("contact_name")
   // "text", "image", "audio", "video", "document", "sticker", "location",
   // "contacts", "interactive", "button", "reaction", "system" — whatever Meta
   // sends. Body is stored verbatim so the inbox can render unsupported types.
   type              String
   text              String?
-  mediaId           String?   @map("media_id")
-  mediaMimeType     String?   @map("media_mime_type")
+  mediaId           String?  @map("media_id")
+  mediaMimeType     String?  @map("media_mime_type")
   // Meta Phone Number ID (the WABA the message was received ON). Nullable
   // because pre-existing inbound rows didn't store it; the inbox filter
   // treats null as "matches every account" for backward compatibility.
-  phoneNumberId     String?   @map("phone_number_id")
-  rawPayload        Json      @map("raw_payload")
-  receivedAt        DateTime  @default(now()) @map("received_at")
-  orderId           String?   @map("order_id")
-  order             Order?    @relation(fields: [orderId], references: [id])
+  phoneNumberId     String?  @map("phone_number_id")
+  rawPayload        Json     @map("raw_payload")
+  receivedAt        DateTime @default(now()) @map("received_at")
+  orderId           String?  @map("order_id")
+  order             Order?   @relation(fields: [orderId], references: [id])
 
   @@index([fromPhoneNumber])
   @@index([receivedAt])
@@ -192,18 +192,18 @@ model SyncLog {
 /// dialog so we know exactly how many body params + which header type each
 /// template needs without hitting Meta on every interaction.
 model WhatsappTemplate {
-  id              String   @id @default(cuid())
-  name            String
-  language        String
-  status          String
-  category        String   @default("UTILITY")
-  bodyParamCount  Int      @default(0) @map("body_param_count")
-  bodyText        String?  @map("body_text")
-  headerType      String?  @map("header_type")
-  components      Json
-  lastFetchedAt   DateTime @default(now()) @map("last_fetched_at")
-  createdAt       DateTime @default(now()) @map("created_at")
-  updatedAt       DateTime @updatedAt @map("updated_at")
+  id             String   @id @default(cuid())
+  name           String
+  language       String
+  status         String
+  category       String   @default("UTILITY")
+  bodyParamCount Int      @default(0) @map("body_param_count")
+  bodyText       String?  @map("body_text")
+  headerType     String?  @map("header_type")
+  components     Json
+  lastFetchedAt  DateTime @default(now()) @map("last_fetched_at")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
 
   @@unique([name, language])
   @@index([status])
@@ -216,49 +216,49 @@ model WhatsappTemplate {
 /// the configured WhatsApp template. Each (automation, order) pair runs at
 /// most once when `thenSendOnce` is true.
 model Automation {
-  id                       String       @id @default(cuid())
-  name                     String
-  isEnabled                Boolean      @default(false) @map("is_enabled")
-  autoRun                  Boolean      @default(true) @map("auto_run")
-  whenStatusEquals         OrderStatus? @map("when_status_equals")
-  andProductContains       String?      @map("and_product_contains")
-  andProductDoesNotContain String?      @map("and_product_does_not_contain")
-  thenMoveToStatus         OrderStatus? @map("then_move_to_status")
-  thenSendTemplateName     String?      @map("then_send_template_name")
-  thenSendTemplateLanguage String?      @map("then_send_template_language")
+  id                        String       @id @default(cuid())
+  name                      String
+  isEnabled                 Boolean      @default(false) @map("is_enabled")
+  autoRun                   Boolean      @default(true) @map("auto_run")
+  whenStatusEquals          OrderStatus? @map("when_status_equals")
+  andProductContains        String?      @map("and_product_contains")
+  andProductDoesNotContain  String?      @map("and_product_does_not_contain")
+  thenMoveToStatus          OrderStatus? @map("then_move_to_status")
+  thenSendTemplateName      String?      @map("then_send_template_name")
+  thenSendTemplateLanguage  String?      @map("then_send_template_language")
   // Ordered list of variable mappings — one entry per body param in the
   // WhatsApp template. Each entry is either a literal string (e.g. "Hello")
   // or a token like `{customer_name}`, `{phone}`, `{product}`, `{price}`,
   // `{quantity}`, `{tracking}`, `{order_id}`, `{lead_id}`, `{city}`,
   // `{tracking_status}`. The
   // sender resolves the tokens against the order being processed.
-  thenSendTemplateVariables Json?       @map("then_send_template_variables")
+  thenSendTemplateVariables Json?        @map("then_send_template_variables")
   // Optional header image URL — used when the template has an IMAGE header.
   // If null, the per-Settings default header image URL is used.
-  thenSendHeaderImageUrl   String?      @map("then_send_header_image_url")
-  thenSendOnce             Boolean      @default(true) @map("then_send_once")
+  thenSendHeaderImageUrl    String?      @map("then_send_header_image_url")
+  thenSendOnce              Boolean      @default(true) @map("then_send_once")
   // --- Advanced conditions ---
   // Phone number prefix / pattern match (e.g. "+212", "06", "07").
   // If set, the automation only fires when the order's phone starts with this value.
-  andPhoneStartsWith       String?      @map("and_phone_starts_with")
+  andPhoneStartsWith        String?      @map("and_phone_starts_with")
   // Tracking number condition — when set to "exists", the automation only fires
   // when a tracking number is present on the order; "not_exists" fires only when
   // the tracking number is absent.
-  andTrackingCondition     String?      @map("and_tracking_condition")
+  andTrackingCondition      String?      @map("and_tracking_condition")
   // City-based filter — if set, order's city must contain this substring.
-  andCityContains          String?      @map("and_city_contains")
+  andCityContains           String?      @map("and_city_contains")
   // Customer name filter — if set, order's customer name must contain this substring.
-  andCustomerNameContains  String?      @map("and_customer_name_contains")
+  andCustomerNameContains   String?      @map("and_customer_name_contains")
   // Minimum order price filter (as a string to match COD Network's format).
-  andMinPrice              String?      @map("and_min_price")
+  andMinPrice               String?      @map("and_min_price")
   // Maximum order price filter.
-  andMaxPrice              String?      @map("and_max_price")
+  andMaxPrice               String?      @map("and_max_price")
   // Tracking status filter — if set, the latest tracking event description
   // must contain this substring for the automation to fire. Enables rules
   // like "when tracking status contains 'location changed' → send template".
-  andTrackingStatusContains String?     @map("and_tracking_status_contains")
-  createdAt                DateTime     @default(now()) @map("created_at")
-  updatedAt                DateTime     @updatedAt @map("updated_at")
+  andTrackingStatusContains String?      @map("and_tracking_status_contains")
+  createdAt                 DateTime     @default(now()) @map("created_at")
+  updatedAt                 DateTime     @updatedAt @map("updated_at")
 
   runs AutomationRun[]
 
@@ -295,30 +295,30 @@ model AutomationRun {
 /// substring) and in the Manual Order form so they can autocomplete the
 /// product fields.
 model Product {
-  id                 String   @id @default(cuid())
-  codNetworkProductId String  @unique @map("cod_network_product_id")
-  sku                String?
-  name               String
-  nameArabic         String?  @map("name_arabic")
-  imageUrl           String?  @map("image_url")
-  description        String?  @map("description")
+  id                  String   @id @default(cuid())
+  codNetworkProductId String   @unique @map("cod_network_product_id")
+  sku                 String?
+  name                String
+  nameArabic          String?  @map("name_arabic")
+  imageUrl            String?  @map("image_url")
+  description         String?  @map("description")
   // String to preserve currency precision (COD returns e.g. "199.00").
-  price              String?
-  currency           String?
+  price               String?
+  currency            String?
   // From COD type.label — e.g. "Gadget", "Beauty", etc.
-  productType        String?  @map("product_type")
+  productType         String?  @map("product_type")
   // From COD status.label — e.g. "Enabled", "Disabled".
-  productStatus      String?  @map("product_status")
+  productStatus       String?  @map("product_status")
   // Whether this is a COD Drop product (vs seller's own product).
-  isDropProduct      Boolean  @default(false) @map("is_drop_product")
+  isDropProduct       Boolean  @default(false) @map("is_drop_product")
   // Whether the AI agent is enabled for this product specifically.
-  aiAgentEnabled     Boolean  @default(false) @map("ai_agent_enabled")
+  aiAgentEnabled      Boolean  @default(false) @map("ai_agent_enabled")
   // Direct link to the seller's landing page for the product (from COD).
-  storeUrl           String?  @map("store_url")
-  rawProductJson    Json?    @map("raw_product_json")
-  lastSyncedAt       DateTime @default(now()) @map("last_synced_at")
-  createdAt          DateTime @default(now()) @map("created_at")
-  updatedAt          DateTime @updatedAt @map("updated_at")
+  storeUrl            String?  @map("store_url")
+  rawProductJson      Json?    @map("raw_product_json")
+  lastSyncedAt        DateTime @default(now()) @map("last_synced_at")
+  createdAt           DateTime @default(now()) @map("created_at")
+  updatedAt           DateTime @updatedAt @map("updated_at")
 
   @@index([name])
   @@index([sku])
@@ -328,13 +328,13 @@ model Product {
 /// Multiple WhatsApp Business numbers can be managed via the Settings UI.
 /// The operator picks which number to use in the Inbox dropdown.
 model WhatsappNumber {
-  id              String   @id @default(cuid())
-  label           String
-  phoneNumberId   String   @map("phone_number_id")
-  displayPhone    String   @map("display_phone")
-  isDefault       Boolean  @default(false) @map("is_default")
-  createdAt       DateTime @default(now()) @map("created_at")
-  updatedAt       DateTime @updatedAt @map("updated_at")
+  id            String   @id @default(cuid())
+  label         String
+  phoneNumberId String   @map("phone_number_id")
+  displayPhone  String   @map("display_phone")
+  isDefault     Boolean  @default(false) @map("is_default")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
 
   @@map("whatsapp_numbers")
 }
@@ -363,23 +363,23 @@ enum TrackingStatus {
 /// are routed to Injaz Express. The cron job refreshes all active
 /// (non-delivered, non-returned) packages every 30 minutes.
 model TrackingOrder {
-  id              String          @id @default(cuid())
-  trackingNumber  String          @unique @map("tracking_number")
-  carrier         TrackingCarrier
-  carrierName     String?         @map("carrier_name")
-  status          TrackingStatus  @default(PENDING)
-  latestEvent     String?         @map("latest_event")
-  latestEventAt   DateTime?       @map("latest_event_at")
-  latestError     String?         @map("latest_error")
-  customerName    String?         @map("customer_name")
-  customerPhone   String?         @map("customer_phone")
-  productName     String?         @map("product_name")
-  codCreatedAt    DateTime?       @map("cod_created_at")
-  orderId         String?         @map("order_id")
-  order           Order?          @relation(fields: [orderId], references: [id])
-  lastCheckedAt   DateTime?       @map("last_checked_at")
-  createdAt       DateTime        @default(now()) @map("created_at")
-  updatedAt       DateTime        @updatedAt @map("updated_at")
+  id             String          @id @default(cuid())
+  trackingNumber String          @unique @map("tracking_number")
+  carrier        TrackingCarrier
+  carrierName    String?         @map("carrier_name")
+  status         TrackingStatus  @default(PENDING)
+  latestEvent    String?         @map("latest_event")
+  latestEventAt  DateTime?       @map("latest_event_at")
+  latestError    String?         @map("latest_error")
+  customerName   String?         @map("customer_name")
+  customerPhone  String?         @map("customer_phone")
+  productName    String?         @map("product_name")
+  codCreatedAt   DateTime?       @map("cod_created_at")
+  orderId        String?         @map("order_id")
+  order          Order?          @relation(fields: [orderId], references: [id])
+  lastCheckedAt  DateTime?       @map("last_checked_at")
+  createdAt      DateTime        @default(now()) @map("created_at")
+  updatedAt      DateTime        @updatedAt @map("updated_at")
 
   events TrackingEvent[]
 
@@ -436,4 +436,114 @@ model ConversationReadState {
   lastReadAt  DateTime @map("last_read_at")
 
   @@map("conversation_read_states")
+}
+
+enum BulkCampaignStatus {
+  DRAFT
+  SENDING
+  COMPLETED
+  CANCELLED
+  FAILED
+}
+
+enum BulkRecipientStatus {
+  PENDING
+  SENT
+  DELIVERED
+  READ
+  FAILED
+  SKIPPED
+  CANCELLED
+}
+
+/// A bulk WhatsApp message campaign. The operator uploads a sheet of
+/// recipients, maps columns to template variables, and the in-process
+/// worker sends one row at a time at a throttled rate while updating each
+/// `BulkRecipient` with sent / delivered / read / failed status.
+model BulkCampaign {
+  id                 String             @id @default(cuid())
+  name               String
+  templateName       String             @map("template_name")
+  templateLanguage   String             @map("template_language")
+  /// Snapshot of the body-param count from the chosen template (used to
+  /// validate per-recipient variable arrays before send and to render the
+  /// status table without re-fetching the template each time).
+  bodyParamCount     Int                @default(0) @map("body_param_count")
+  /// Optional header value — for IMAGE headers either an https URL or a
+  /// Meta media ID (set `headerKind` accordingly). For TEXT headers, the
+  /// literal text. Same shape as the Pipeline Send dialog.
+  headerType         String?            @map("header_type")
+  headerValue        String?            @map("header_value")
+  headerKind         String?            @map("header_kind")
+  /// WABA Phone Number ID to send from. Null means "use the default
+  /// settings-level WhatsApp account".
+  phoneNumberId      String?            @map("phone_number_id")
+  /// Audit copy of the operator's column-mapping decision. Shape:
+  /// `{ phoneColumn: string, nameColumn: string|null,
+  ///    variableColumns: Array<{column: string|null, literal: string|null}> }`.
+  columnMappingJson  Json?              @map("column_mapping_json")
+  status             BulkCampaignStatus @default(DRAFT)
+  totalRecipients    Int                @default(0) @map("total_recipients")
+  /// Default country code applied during phone normalization for this
+  /// campaign (frozen at creation time so re-running a campaign uses the
+  /// same rules even if the global default later changes).
+  defaultCountryCode String             @default("212") @map("default_country_code")
+  /// Per-row delay in milliseconds the worker waits between sends. Allows
+  /// the operator to dial throughput down if Meta starts rate-limiting.
+  throttleMs         Int                @default(200) @map("throttle_ms")
+  /// Optional limit on attempts per recipient when a transient error
+  /// occurs (network / 5xx). One past this and the recipient is marked
+  /// FAILED for good.
+  maxAttempts        Int                @default(3) @map("max_attempts")
+  errorMessage       String?            @map("error_message")
+  startedAt          DateTime?          @map("started_at")
+  completedAt        DateTime?          @map("completed_at")
+  createdBy          String             @map("created_by")
+  createdAt          DateTime           @default(now()) @map("created_at")
+  updatedAt          DateTime           @updatedAt @map("updated_at")
+
+  recipients BulkRecipient[]
+
+  @@index([status])
+  @@index([createdAt])
+  @@map("bulk_campaigns")
+}
+
+/// One row in a `BulkCampaign`. Holds the resolved phone + variables + any
+/// per-recipient send error. Status mirrors `WhatsappMessage.status` and is
+/// updated by both the send-worker and the inbound webhook (which receives
+/// Meta's delivery / read receipts).
+model BulkRecipient {
+  id                String              @id @default(cuid())
+  campaignId        String              @map("campaign_id")
+  rowIndex          Int                 @map("row_index")
+  phoneNumber       String              @map("phone_number")
+  phoneNumberRaw    String?             @map("phone_number_raw")
+  displayName       String?             @map("display_name")
+  /// Ordered list of resolved body-variable strings (length should equal
+  /// the campaign's bodyParamCount). Missing source values are coerced to
+  /// the empty string per the "missing variables OK" UX rule.
+  variablesJson     Json                @map("variables_json")
+  /// Optional per-row header value (e.g. tracking URL inserted into a
+  /// header image link). When null, the campaign-level header is used.
+  headerValue       String?             @map("header_value")
+  status            BulkRecipientStatus @default(PENDING)
+  providerMessageId String?             @map("provider_message_id")
+  whatsappMessageId String?             @map("whatsapp_message_id")
+  errorMessage      String?             @map("error_message")
+  errorCode         String?             @map("error_code")
+  attemptCount      Int                 @default(0) @map("attempt_count")
+  sentAt            DateTime?           @map("sent_at")
+  deliveredAt       DateTime?           @map("delivered_at")
+  readAt            DateTime?           @map("read_at")
+  failedAt          DateTime?           @map("failed_at")
+  createdAt         DateTime            @default(now()) @map("created_at")
+  updatedAt         DateTime            @updatedAt @map("updated_at")
+
+  campaign BulkCampaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+
+  @@index([campaignId])
+  @@index([status])
+  @@index([providerMessageId])
+  @@map("bulk_recipients")
 }
