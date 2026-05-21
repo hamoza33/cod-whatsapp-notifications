@@ -12,6 +12,11 @@ import { normalizePhoneNumber } from "./phone";
 import { OrderStatus } from "@prisma/client";
 import { deriveOrderStatus } from "./order-status";
 import { runAutomationsForOrder } from "./automations";
+import {
+  fireOrderCreatedFlows,
+  fireOrderStatusChangedFlows,
+  safeFireFlows,
+} from "./automation-flows/triggers";
 
 function extractLeadId(codOrder: CodNetworkOrder): string | null {
   // COD Network exposes the lead-id under various keys depending on which
@@ -259,6 +264,12 @@ async function upsertOrder(
       } catch (err) {
         console.error("[sync] automation engine threw", err);
       }
+      if (statusChanged) {
+        await safeFireFlows(
+          fireOrderStatusChangedFlows(existing.id, existing.status, status),
+          `ORDER_STATUS_CHANGED flow for order ${existing.id}`
+        );
+      }
     }
   } else {
     const created = await prisma.order.create({
@@ -291,6 +302,10 @@ async function upsertOrder(
       } catch (err) {
         console.error("[sync] automation engine threw on new order", err);
       }
+      await safeFireFlows(
+        fireOrderCreatedFlows(created.id),
+        `ORDER_CREATED flow for order ${created.id}`
+      );
     }
   }
 }
