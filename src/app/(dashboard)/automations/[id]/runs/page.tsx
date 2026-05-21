@@ -61,8 +61,8 @@ export default function FlowRunsPage() {
     setLoading(true);
     try {
       const [f, r] = await Promise.all([
-        api.get<{ flow: FlowDto }>(`/api/automation-flows/${flowId}`),
-        api.get<{ runs: FlowRun[] }>(`/api/automation-flows/${flowId}/runs?limit=100`),
+        api.get<{ flow: FlowDto }>(`/automation-flows/${flowId}`),
+        api.get<{ runs: FlowRun[] }>(`/automation-flows/${flowId}/runs?limit=100`),
       ]);
       setFlow(f.flow);
       setRuns(r.runs);

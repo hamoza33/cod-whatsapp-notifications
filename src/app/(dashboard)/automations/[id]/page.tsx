@@ -427,9 +427,9 @@ function FlowEditorInner() {
     (async () => {
       try {
         const [flowRes, dpRes, tplRes] = await Promise.all([
-          api.get<{ flow: FlowDto }>(`/api/automation-flows/${flowId}`),
-          api.get<DataPointsResponse>("/api/automation-flows/data-points"),
-          api.get<{ templates: TemplateRow[] }>("/api/whatsapp/templates/cached"),
+          api.get<{ flow: FlowDto }>(`/automation-flows/${flowId}`),
+          api.get<DataPointsResponse>("/automation-flows/data-points"),
+          api.get<{ templates: TemplateRow[] }>("/whatsapp/templates/cached"),
         ]);
         if (cancelled) return;
         setFlow(flowRes.flow);
@@ -494,7 +494,7 @@ function FlowEditorInner() {
           label: typeof e.label === "string" ? e.label : undefined,
         })),
       };
-      await api.patch(`/api/automation-flows/${flow.id}`, {
+      await api.patch(`/automation-flows/${flow.id}`, {
         name,
         description,
         isEnabled,
@@ -634,7 +634,7 @@ function FlowEditorInner() {
     setTestResult(null);
     try {
       const res = await api.post<{ runId: string; status: string; steps: Array<{ output?: string; error?: string; nodeKind: string; status: string }> }>(
-        `/api/automation-flows/${flow.id}/test`,
+        `/automation-flows/${flow.id}/test`,
         {}
       );
       const summary = res.steps

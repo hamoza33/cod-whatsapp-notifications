@@ -75,7 +75,7 @@ export default function AutomationFlowsPage() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await api.get<{ flows: FlowRow[] }>("/api/automation-flows");
+      const res = await api.get<{ flows: FlowRow[] }>("/automation-flows");
       setFlows(res.flows);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load flows");
@@ -96,7 +96,7 @@ export default function AutomationFlowsPage() {
     setCreating(true);
     setError(null);
     try {
-      const res = await api.post<{ flow: FlowRow }>("/api/automation-flows", {
+      const res = await api.post<{ flow: FlowRow }>("/automation-flows", {
         name: newName.trim(),
         description: newDescription.trim() || undefined,
         triggerType: newTrigger,
@@ -116,7 +116,7 @@ export default function AutomationFlowsPage() {
       prev.map((f) => (f.id === flow.id ? { ...f, isEnabled: next } : f))
     );
     try {
-      await api.patch(`/api/automation-flows/${flow.id}`, { isEnabled: next });
+      await api.patch(`/automation-flows/${flow.id}`, { isEnabled: next });
     } catch (err) {
       setFlows((prev) =>
         prev.map((f) => (f.id === flow.id ? { ...f, isEnabled: flow.isEnabled } : f))
@@ -127,7 +127,7 @@ export default function AutomationFlowsPage() {
 
   const handleDuplicate = async (flowId: string) => {
     try {
-      await api.post(`/api/automation-flows/${flowId}/duplicate`);
+      await api.post(`/automation-flows/${flowId}/duplicate`);
       await load();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Duplicate failed");
@@ -137,7 +137,7 @@ export default function AutomationFlowsPage() {
   const handleDelete = async (flow: FlowRow) => {
     if (!confirm(`Delete flow "${flow.name}"? This cannot be undone.`)) return;
     try {
-      await api.del(`/api/automation-flows/${flow.id}`);
+      await api.del(`/automation-flows/${flow.id}`);
       setFlows((prev) => prev.filter((f) => f.id !== flow.id));
     } catch (err) {
       setError(err instanceof Error ? err.message : "Delete failed");
