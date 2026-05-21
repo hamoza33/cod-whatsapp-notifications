@@ -5,6 +5,11 @@ import { deriveOrderStatus } from "./order-status";
 import { normalizePhoneNumber } from "./phone";
 import { getSetting, SETTING_KEYS } from "./settings";
 import { runAutomationsForOrder } from "./automations";
+import {
+  fireOrderCreatedFlows,
+  fireOrderStatusChangedFlows,
+  safeFireFlows,
+} from "./automation-flows/triggers";
 
 interface CodWebhookEnvelope {
   event?: string;
@@ -227,6 +232,21 @@ export async function applyWebhookEvent(
       await runAutomationsForOrder(orderRow.id, { autoTriggered: true });
     } catch (err) {
       console.error("[cod-webhook] automation engine threw", err);
+    }
+    if (created) {
+      safeFireFlows(
+        fireOrderCreatedFlows(orderRow.id),
+        `ORDER_CREATED flow for order ${orderRow.id}`
+      ).catch(() => {});
+    } else if (statusChanged) {
+      safeFireFlows(
+        fireOrderStatusChangedFlows(
+          orderRow.id,
+          existing?.status ?? null,
+          orderRow.status
+        ),
+        `ORDER_STATUS_CHANGED flow for order ${orderRow.id}`
+      ).catch(() => {});
     }
   }
 

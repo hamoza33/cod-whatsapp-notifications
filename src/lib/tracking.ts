@@ -5,6 +5,7 @@ import {
   getSettings,
 } from "./settings";
 import { runAutomationsForOrder } from "./automations";
+import { fireTrackingStatusChangedFlows, safeFireFlows } from "./automation-flows/triggers";
 import { fetchImileTracking } from "./tracking-providers/imile";
 import { fetchInjazTracking } from "./tracking-providers/injaz";
 import { fetchJdwBulk } from "./tracking-providers/jdw";
@@ -313,6 +314,14 @@ async function applyTrackingResult(
       runAutomationsForOrder(trackingRow.orderId!, { autoTriggered: true }).catch((err) =>
         console.error("[tracking] automation trigger failed", err)
       );
+      safeFireFlows(
+        fireTrackingStatusChangedFlows(
+          trackingRow.orderId,
+          null,
+          status
+        ),
+        `TRACKING_STATUS_CHANGED flow for order ${trackingRow.orderId}`
+      ).catch(() => {});
     }
   }
 

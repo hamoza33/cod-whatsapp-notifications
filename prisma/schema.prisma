@@ -288,6 +288,66 @@ model AutomationRun {
   @@map("automation_runs")
 }
 
+/// A visual-builder automation flow — the newer, more flexible counterpart
+/// to `Automation`. Each flow is a directed graph of nodes (triggers,
+/// conditions, actions) connected by edges. The graph definition is stored
+/// as a JSON blob (`graphJson`) so the schema can evolve without migrations
+/// every time a new node type is added.
+///
+/// Flows fire on the trigger declared by their entry-node `triggerType` and
+/// execute end-to-end through the graph until they hit an action with no
+/// outgoing edge or an explicit `action.stop` node. Each execution attempt
+/// is recorded as an `AutomationFlowRun` row.
+model AutomationFlow {
+  id          String   @id @default(cuid())
+  name        String
+  description String?
+  isEnabled   Boolean  @default(false) @map("is_enabled")
+  /// One of: ORDER_CREATED, ORDER_STATUS_CHANGED, TRACKING_STATUS_CHANGED,
+  /// MESSAGE_RECEIVED, MANUAL. Used by the engine to know which event
+  /// streams should evaluate this flow without parsing the JSON graph.
+  triggerType String   @map("trigger_type")
+  /// Full graph definition: `{ nodes: [...], edges: [...], viewport: {...} }`
+  /// Matches the @xyflow/react shape so the canvas can hydrate directly.
+  graphJson   Json     @map("graph_json")
+  lastFiredAt DateTime? @map("last_fired_at")
+  runCount    Int      @default(0) @map("run_count")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  runs AutomationFlowRun[]
+
+  @@index([isEnabled, triggerType])
+  @@map("automation_flows")
+}
+
+/// One execution attempt of an AutomationFlow. Records which path the
+/// engine walked through the graph + every action that ran, so the UI
+/// can render a step-by-step timeline and the operator can debug why a
+/// flow stopped where it did.
+model AutomationFlowRun {
+  id          String   @id @default(cuid())
+  flowId      String   @map("flow_id")
+  orderId     String?  @map("order_id")
+  /// Free-form initial context — the order snapshot, tracking snapshot,
+  /// inbound message text, etc. — captured at the moment the trigger fired.
+  contextJson Json     @map("context_json")
+  /// RUNNING, SUCCESS, FAILED, STOPPED
+  status      String
+  /// Per-node execution log:
+  /// `[{ nodeId, nodeType, status, output?, error?, ranAt }]`
+  stepsJson   Json     @map("steps_json")
+  errorMessage String? @map("error_message")
+  startedAt   DateTime @default(now()) @map("started_at")
+  finishedAt  DateTime? @map("finished_at")
+
+  flow AutomationFlow @relation(fields: [flowId], references: [id], onDelete: Cascade)
+
+  @@index([flowId, startedAt])
+  @@index([orderId])
+  @@map("automation_flow_runs")
+}
+
 /// Cached catalog of products pulled from COD Network's seller API
 /// (`GET /v2/seller/products`). Refreshed by the sync cron + on-demand via
 /// `/api/products/sync`. Surfaced in the Automation editor so the operator

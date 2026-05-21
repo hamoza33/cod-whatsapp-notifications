@@ -4,6 +4,10 @@ import { prisma } from "@/lib/prisma";
 import { getSetting, SETTING_KEYS } from "@/lib/settings";
 import { Prisma } from "@prisma/client";
 import { handleAiAutoReply } from "@/lib/ai-agent";
+import {
+  fireMessageReceivedFlows,
+  safeFireFlows,
+} from "@/lib/automation-flows/triggers";
 
 export const dynamic = "force-dynamic";
 
@@ -270,6 +274,18 @@ export async function POST(request: NextRequest) {
         handleAiAutoReply(fromPhone, text, order).catch((err) =>
           console.error("[webhook] AI auto-reply error:", err)
         );
+        // Also fire any visual-builder flows whose trigger is
+        // MESSAGE_RECEIVED. Runs in best-effort mode so a misconfigured
+        // flow can't 500 the webhook.
+        safeFireFlows(
+          fireMessageReceivedFlows({
+            fromPhone,
+            text,
+            messageType: msg.type ?? "text",
+            matchedOrderId: orderId,
+          }),
+          `MESSAGE_RECEIVED flow for ${fromPhone}`
+        ).catch(() => {});
       }
 
       // Update status of outbound messages we previously sent.
