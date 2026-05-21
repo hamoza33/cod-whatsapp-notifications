@@ -3,6 +3,10 @@ import { getAuthUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { OrderStatus, Prisma } from "@prisma/client";
 import { runAutomationsForOrder } from "@/lib/automations";
+import {
+  fireOrderStatusChangedFlows,
+  safeFireFlows,
+} from "@/lib/automation-flows/triggers";
 
 const ALLOWED_STATUSES: OrderStatus[] = [
   "PENDING",
@@ -138,6 +142,15 @@ export async function PATCH(
     } catch (err) {
       console.error("[orders/PATCH] automation engine threw", err);
     }
+    // Fire new visual-builder flows for the status change event.
+    await safeFireFlows(
+      fireOrderStatusChangedFlows(
+        order.id,
+        previousOrder.status,
+        order.status
+      ),
+      `ORDER_STATUS_CHANGED flow for order ${order.id}`
+    );
   }
 
   return NextResponse.json({ order });

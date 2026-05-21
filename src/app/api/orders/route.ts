@@ -3,6 +3,10 @@ import { getAuthUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { OrderStatus } from "@prisma/client";
 import { randomBytes } from "crypto";
+import {
+  fireOrderCreatedFlows,
+  safeFireFlows,
+} from "@/lib/automation-flows/triggers";
 
 export async function GET(request: NextRequest) {
   const user = getAuthUser(request);
@@ -199,6 +203,12 @@ export async function POST(request: NextRequest) {
       lastSyncedAt: now,
     },
   });
+
+  // Fire new visual-builder flows for the order creation event.
+  safeFireFlows(
+    fireOrderCreatedFlows(order.id),
+    `ORDER_CREATED flow for order ${order.id}`
+  ).catch(() => {});
 
   return NextResponse.json({ order });
 }
