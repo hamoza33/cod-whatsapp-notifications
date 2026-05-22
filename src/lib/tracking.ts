@@ -7,7 +7,10 @@ import {
 import { runAutomationsForOrder } from "./automations";
 import { fireTrackingStatusChangedFlows, safeFireFlows } from "./automation-flows/triggers";
 import { fetchNaqelOfficialTracking } from "./tracking-providers/naqel";
-import { fetchCourierApiTracking } from "./tracking-providers/courier-api";
+import {
+  fetchCourierApiBulk,
+  fetchCourierApiTracking,
+} from "./tracking-providers/courier-api";
 import type {
   ProviderResult,
 } from "./tracking-providers/types";
@@ -215,6 +218,7 @@ interface ApplyOpts {
   trackingNumber: string;
   currentLatestEvent: string | null;
   currentLatestEventAt: Date | null;
+  currentStatus: TrackingStatus;
   carrier: TrackingCarrier;
 }
 
@@ -223,7 +227,6 @@ async function applyTrackingResult(
   result: ProviderResult
 ): Promise<{ status: TrackingStatus; eventsCount: number }> {
   const { events, rawStatus, error } = result;
-  const status = mapToTrackingStatus(opts.carrier, rawStatus);
 
   for (const evt of events) {
     await prisma.trackingEvent.upsert({
@@ -258,6 +261,17 @@ async function applyTrackingResult(
   const latestEvent = events.length > 0 ? events[0] : null;
 
   const newLatestEvent = latestEvent?.description ?? opts.currentLatestEvent;
+
+  // Preserve the existing status whenever the provider returned no fresh
+  // events. This avoids demoting a correctly-recorded DELIVERED / RETURNED
+  // order back to UNKNOWN just because a single courier-API call failed,
+  // timed out, or returned an empty response. Status only moves forward
+  // when we actually have a new event (events.length > 0) with a real
+  // rawStatus we can map.
+  const status =
+    events.length > 0 && rawStatus
+      ? mapToTrackingStatus(opts.carrier, rawStatus)
+      : opts.currentStatus;
 
   await prisma.trackingOrder.update({
     where: { id: opts.orderId },
@@ -324,6 +338,7 @@ export async function refreshTracking(trackingOrderId: string) {
       trackingNumber: order.trackingNumber,
       currentLatestEvent: order.latestEvent,
       currentLatestEventAt: order.latestEventAt,
+      currentStatus: order.status,
       carrier: order.carrier,
     },
     result
@@ -469,12 +484,16 @@ export async function reclassifyOtherOrders(deadlineMs?: number) {
 // not support it; it continues to hit the Naqel public site scraper.
 //
 // Pool topology:
-//   - imile: 5 workers, chunk-size 1, calling fetchCourierApiTracking().
-//   - injaz: 5 workers, chunk-size 1, calling fetchCourierApiTracking().
-//   - jdw:   5 workers, chunk-size 1, calling fetchCourierApiTracking().
+//   - imile: 5 workers, chunk-size 50, calling fetchCourierApiBulk().
+//   - injaz: 5 workers, chunk-size 50, calling fetchCourierApiBulk().
+//   - jdw:   5 workers, chunk-size 50, calling fetchCourierApiBulk().
+//            All three carriers above are parallelised server-side by the
+//            courier API's POST /track/bulk endpoint, so a single 50-item
+//            HTTP request returns in seconds rather than a single-shot per
+//            waybill (~50× speed-up for iMile's ~2 750 orders).
 //   - jte:   3 workers, chunk-size 1, calling fetchCourierApiTracking().
-//            Lower concurrency because each JTE call triggers a Tencent
-//            Captcha solve upstream and routinely takes 30+ seconds.
+//            Kept per-waybill because each JTE call triggers a Tencent
+//            Captcha solve upstream and is forced sequential server-side.
 //   - naqel: 5 workers, chunk-size 1, calling fetchNaqelOfficialTracking().
 //
 // Each per-tracking-number outcome is persisted via applyTrackingResult().
@@ -492,6 +511,9 @@ const JDW_CONCURRENCY = 5;
 const RECLASSIFY_CONCURRENCY = 5;
 const RECLASSIFY_TAKE = 250;
 const DEFAULT_WALL_CLOCK_MS = 45_000;
+// Number of waybills sent in a single POST /track/bulk request. 50 keeps the
+// request body small while still giving ~50× speed-up over per-waybill calls.
+const BULK_CHUNK_SIZE = 50;
 
 interface ActiveOrderRow {
   id: string;
@@ -544,12 +566,30 @@ export interface RefreshAllOptions {
    * (the manual "Refresh All" UI button passes true).
    */
   includeFinal?: boolean;
+  /**
+   * Restrict the refresh to orders matching this single status. Used by the
+   * "Refresh Section" button so e.g. clicking it while the Delivered pill is
+   * selected only re-checks delivered orders. When set, takes precedence
+   * over `includeFinal`'s active-state allowlist.
+   */
+  statusFilter?: TrackingStatus;
+  /**
+   * Restrict the refresh to a single carrier. Used by the "Refresh Section"
+   * button when a carrier filter is active. Always paired with statusFilter
+   * in practice but can be passed independently.
+   */
+  carrierFilter?: TrackingCarrier;
 }
 
 export async function refreshAllTracking(
   opts: RefreshAllOptions = {}
 ): Promise<RefreshAllResult> {
-  const { limit, includeFinal = false } = opts;
+  const {
+    limit,
+    includeFinal = false,
+    statusFilter,
+    carrierFilter,
+  } = opts;
   const wallClockMs = DEFAULT_WALL_CLOCK_MS;
   const startedAt = Date.now();
   const deadline = startedAt + wallClockMs;
@@ -561,7 +601,12 @@ export async function refreshAllTracking(
   // reclassifyOtherOrders honours the deadline internally via drainQueue
   // and is also row-capped via RECLASSIFY_TAKE so a single tick can never
   // burn the entire budget on reclassification.
-  const reclassifyResult = await reclassifyOtherOrders(deadline);
+  // Skip reclassification entirely when the caller is targeting a single
+  // status / carrier — they only want to refresh the matching bucket.
+  const reclassifyResult =
+    statusFilter || carrierFilter
+      ? { reclassified: 0, totalScanned: 0 }
+      : await reclassifyOtherOrders(deadline);
 
   // Read the courier API URL override once so every pool shares it.
   const trackingSettings = await getSettings([
@@ -570,12 +615,28 @@ export async function refreshAllTracking(
   const courierApiUrl =
     trackingSettings[SETTING_KEYS.COURIER_TRACKING_API_URL] || undefined;
 
-  const activeFilter: Prisma.TrackingOrderWhereInput = {
-    carrier: { not: TrackingCarrier.OTHER },
-    ...(includeFinal
-      ? {}
-      : {
-          status: {
+  // Build the carrier predicate. carrierFilter (set by the "Refresh Section"
+  // button when a carrier is selected) narrows to a single carrier. When not
+  // set, we exclude OTHER as before so we don't pay courier-API costs on
+  // rows whose carrier we couldn't detect.
+  const carrierPredicate: Prisma.TrackingOrderWhereInput["carrier"] =
+    carrierFilter ? carrierFilter : { not: TrackingCarrier.OTHER };
+
+  // Build the status predicate.
+  //   - statusFilter present: narrow to that single status (used by the
+  //     "Refresh Section" button) — always wins.
+  //   - includeFinal=true: no status filter (Refresh All across every status
+  //     including DELIVERED + RETURNED).
+  //   - default: cron-style active-state allowlist (now includes ALL seven
+  //     non-final + UNKNOWN states; DELIVERED + RETURNED still excluded so
+  //     the 5-min cron doesn't repeatedly bill the courier API for terminal
+  //     orders).
+  const statusPredicate: Prisma.TrackingOrderWhereInput["status"] | undefined =
+    statusFilter
+      ? statusFilter
+      : includeFinal
+        ? undefined
+        : {
             in: [
               TrackingStatus.PENDING,
               TrackingStatus.IN_TRANSIT,
@@ -583,8 +644,11 @@ export async function refreshAllTracking(
               TrackingStatus.EXCEPTION,
               TrackingStatus.UNKNOWN,
             ],
-          },
-        }),
+          };
+
+  const activeFilter: Prisma.TrackingOrderWhereInput = {
+    carrier: carrierPredicate,
+    ...(statusPredicate !== undefined ? { status: statusPredicate } : {}),
   };
 
   const totalActive = await prisma.trackingOrder.count({ where: activeFilter });
@@ -677,60 +741,110 @@ export async function refreshAllTracking(
     }
   };
 
-  // ---------- iMile pool: 5 workers, one number at a time ----------
-  // Routes through the unified courier-tracking-api.
-  const imileQueue: ActiveOrderRow[][] = buckets.imile.map((o) => [o]);
-  totalChunks += imileQueue.length;
+  // Helper: chunk an array into N-sized arrays.
+  const chunkBy = <T>(arr: T[], size: number): T[][] => {
+    const out: T[][] = [];
+    for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
+    return out;
+  };
 
-  const imilePool = drainQueue(
-    imileQueue,
-    IMILE_CONCURRENCY,
-    deadline,
-    async (chunk) => {
-      for (const o of chunk) {
-        let result: ProviderResult;
-        try {
-          result = await fetchCourierApiTracking(
-            o.trackingNumber,
-            TrackingCarrier.IMILE,
-            courierApiUrl
-          );
-        } catch (err) {
-          const detail = err instanceof Error ? err.message : "fetch_failed";
-          result = {
+  // Apply a single ProviderResult to one order and record the outcome.
+  const persistAndRecord = async (
+    o: ActiveOrderRow,
+    result: ProviderResult
+  ) => {
+    try {
+      const persisted = await applyTrackingResult(
+        {
+          orderId: o.id,
+          trackingNumber: o.trackingNumber,
+          currentLatestEvent: o.latestEvent,
+          currentLatestEventAt: o.latestEventAt,
+          currentStatus: o.status,
+          carrier: o.carrier,
+        },
+        result
+      );
+      recordOutcome(o, {
+        ok: true,
+        status: persisted.status,
+        eventsCount: persisted.eventsCount,
+        error: result.error,
+      });
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : "apply_failed";
+      recordOutcome(o, { ok: false, error: detail });
+    }
+  };
+
+  // Build a bulk pool for a carrier that supports the POST /track/bulk
+  // endpoint (iMile, Injaz, JDW). Each "chunk" in the queue is up to 50
+  // orders → one HTTP call. The courier API parallelises non-J&T waybills
+  // server-side so a 50-item bulk request returns in seconds.
+  const buildBulkPool = (
+    orders: ActiveOrderRow[],
+    carrier: TrackingCarrier,
+    concurrency: number
+  ): Promise<void> => {
+    const chunks = chunkBy(orders, BULK_CHUNK_SIZE);
+    totalChunks += chunks.length;
+    return drainQueue(chunks, concurrency, deadline, async (chunk) => {
+      const trackingNumbers = chunk.map((o) => o.trackingNumber);
+      let resultMap: Map<string, ProviderResult>;
+      try {
+        resultMap = await fetchCourierApiBulk(
+          trackingNumbers,
+          carrier,
+          courierApiUrl
+        );
+      } catch (err) {
+        const detail = err instanceof Error ? err.message : "fetch_failed";
+        resultMap = new Map();
+        for (const tn of trackingNumbers) {
+          resultMap.set(tn, {
             events: [],
             rawStatus: null,
-            error: `courier_api_error:${detail}`,
-          };
-        }
-        try {
-          const persisted = await applyTrackingResult(
-            {
-              orderId: o.id,
-              trackingNumber: o.trackingNumber,
-              currentLatestEvent: o.latestEvent,
-              currentLatestEventAt: o.latestEventAt,
-              carrier: o.carrier,
-            },
-            result
-          );
-          recordOutcome(o, {
-            ok: true,
-            status: persisted.status,
-            eventsCount: persisted.eventsCount,
-            error: result.error,
+            error: `courier_api_bulk_error:${detail}`,
           });
-        } catch (err) {
-          const detail = err instanceof Error ? err.message : "apply_failed";
-          recordOutcome(o, { ok: false, error: detail });
         }
       }
-    }
+      for (const o of chunk) {
+        const result =
+          resultMap.get(o.trackingNumber) ?? {
+            events: [],
+            rawStatus: null,
+            error: "bulk_missing_response",
+          };
+        await persistAndRecord(o, result);
+      }
+    });
+  };
+
+  // ---------- iMile pool: 5 workers × chunk-50 via /track/bulk ----------
+  const imilePool = buildBulkPool(
+    buckets.imile,
+    TrackingCarrier.IMILE,
+    IMILE_CONCURRENCY
   );
 
-  // ---------- JTE pool: courier-tracking-api, 3 workers, one number at a time ----------
-  // The courier API handles Tencent Captcha solving for JT Express. Each call
-  // takes ~10-30s due to captcha solve time, so we limit concurrency.
+  // ---------- Injaz pool: 5 workers × chunk-50 via /track/bulk ----------
+  const injazPool = buildBulkPool(
+    buckets.injaz,
+    TrackingCarrier.INJAZ,
+    INJAZ_CONCURRENCY
+  );
+
+  // ---------- JDW pool: 5 workers × chunk-50 via /track/bulk ----------
+  const jdwPool = buildBulkPool(
+    buckets.jdw,
+    TrackingCarrier.JDW,
+    JDW_CONCURRENCY
+  );
+
+  // ---------- JTE pool: courier-tracking-api, 3 workers, one at a time ----------
+  // The courier API handles Tencent Captcha solving for JT Express server-side
+  // and forces J&T waybills sequential even inside /track/bulk, so bulking
+  // gives no speed-up here. Keep per-waybill with low concurrency.
   const JTE_CONCURRENCY = 3;
   const jteQueue: ActiveOrderRow[][] = buckets.jte.map((o) => [o]);
   totalChunks += jteQueue.length;
@@ -756,32 +870,12 @@ export async function refreshAllTracking(
             error: `courier_api_error:${detail}`,
           };
         }
-        try {
-          const persisted = await applyTrackingResult(
-            {
-              orderId: o.id,
-              trackingNumber: o.trackingNumber,
-              currentLatestEvent: o.latestEvent,
-              currentLatestEventAt: o.latestEventAt,
-              carrier: o.carrier,
-            },
-            result
-          );
-          recordOutcome(o, {
-            ok: true,
-            status: persisted.status,
-            eventsCount: persisted.eventsCount,
-            error: result.error,
-          });
-        } catch (err) {
-          const detail = err instanceof Error ? err.message : "apply_failed";
-          recordOutcome(o, { ok: false, error: detail });
-        }
+        await persistAndRecord(o, result);
       }
     }
   );
 
-  // ---------- Naqel pool: 5 workers, one number at a time ----------
+  // ---------- Naqel pool: 5 workers, one at a time ----------
   // Naqel is not supported by the courier-tracking-api, so we call the
   // Naqel official site scraper directly.
   const NAQEL_CONCURRENCY = 5;
@@ -805,130 +899,12 @@ export async function refreshAllTracking(
             error: `naqel_error:${detail}`,
           };
         }
-        try {
-          const persisted = await applyTrackingResult(
-            {
-              orderId: o.id,
-              trackingNumber: o.trackingNumber,
-              currentLatestEvent: o.latestEvent,
-              currentLatestEventAt: o.latestEventAt,
-              carrier: o.carrier,
-            },
-            result
-          );
-          recordOutcome(o, {
-            ok: true,
-            status: persisted.status,
-            eventsCount: persisted.eventsCount,
-            error: result.error,
-          });
-        } catch (err) {
-          const detail = err instanceof Error ? err.message : "apply_failed";
-          recordOutcome(o, { ok: false, error: detail });
-        }
+        await persistAndRecord(o, result);
       }
     }
   );
 
-  // ---------- JDW pool: 5 workers, one number at a time ----------
-  // Routes through the unified courier-tracking-api.
-  const jdwQueue: ActiveOrderRow[][] = buckets.jdw.map((o) => [o]);
-  totalChunks += jdwQueue.length;
-
-  const jdwPool = drainQueue(
-    jdwQueue,
-    JDW_CONCURRENCY,
-    deadline,
-    async (chunk) => {
-      for (const o of chunk) {
-        let result: ProviderResult;
-        try {
-          result = await fetchCourierApiTracking(
-            o.trackingNumber,
-            TrackingCarrier.JDW,
-            courierApiUrl
-          );
-        } catch (err) {
-          const detail = err instanceof Error ? err.message : "fetch_failed";
-          result = {
-            events: [],
-            rawStatus: null,
-            error: `courier_api_error:${detail}`,
-          };
-        }
-        try {
-          const persisted = await applyTrackingResult(
-            {
-              orderId: o.id,
-              trackingNumber: o.trackingNumber,
-              currentLatestEvent: o.latestEvent,
-              currentLatestEventAt: o.latestEventAt,
-              carrier: o.carrier,
-            },
-            result
-          );
-          recordOutcome(o, {
-            ok: true,
-            status: persisted.status,
-            eventsCount: persisted.eventsCount,
-            error: result.error,
-          });
-        } catch (err) {
-          const detail = err instanceof Error ? err.message : "apply_failed";
-          recordOutcome(o, { ok: false, error: detail });
-        }
-      }
-    }
-  );
-
-  // ---------- Injaz pool: 5 workers, one number at a time ----------
-  // Routes through the unified courier-tracking-api.
-  const injazQueue: ActiveOrderRow[][] = buckets.injaz.map((o) => [o]);
-  totalChunks += injazQueue.length;
-
-  const injazPool = drainQueue(
-    injazQueue,
-    INJAZ_CONCURRENCY,
-    deadline,
-    async (chunk) => {
-      for (const o of chunk) {
-        let result: ProviderResult;
-        try {
-          result = await fetchCourierApiTracking(
-            o.trackingNumber,
-            TrackingCarrier.INJAZ,
-            courierApiUrl
-          );
-        } catch (err) {
-          const detail = err instanceof Error ? err.message : "fetch_failed";
-          result = { events: [], rawStatus: null, error: `courier_api_error:${detail}` };
-        }
-        try {
-          const persisted = await applyTrackingResult(
-            {
-              orderId: o.id,
-              trackingNumber: o.trackingNumber,
-              currentLatestEvent: o.latestEvent,
-              currentLatestEventAt: o.latestEventAt,
-              carrier: o.carrier,
-            },
-            result
-          );
-          recordOutcome(o, {
-            ok: true,
-            status: persisted.status,
-            eventsCount: persisted.eventsCount,
-            error: result.error,
-          });
-        } catch (err) {
-          const detail = err instanceof Error ? err.message : "apply_failed";
-          recordOutcome(o, { ok: false, error: detail });
-        }
-      }
-    }
-  );
-
-  // Run all 4 pools concurrently. Each pool drains its own queue with its
+  // Run all 5 pools concurrently. Each pool drains its own queue with its
   // own worker count. The shared deadline + applyTrackingResult writes mean
   // the orchestration is naturally back-pressured by Postgres latency.
   await Promise.all([imilePool, injazPool, jdwPool, jtePool, naqelPool]);
