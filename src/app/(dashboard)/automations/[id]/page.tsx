@@ -420,6 +420,7 @@ function FlowEditorInner() {
   const [testResult, setTestResult] = useState<string | null>(null);
   const dirtyRef = useRef(false);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const persistRef = useRef<() => Promise<void>>(() => Promise.resolve());
 
   // ---- initial load ------------------------------------------------------
   useEffect(() => {
@@ -509,13 +510,18 @@ function FlowEditorInner() {
     }
   }, [flow, nodes, edges, name, description, isEnabled]);
 
+  // Keep a stable ref so debounced timers always call the latest version.
+  useEffect(() => {
+    persistRef.current = persist;
+  }, [persist]);
+
   const queueSave = useCallback(() => {
     dirtyRef.current = true;
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     saveTimerRef.current = setTimeout(() => {
-      void persist();
+      void persistRef.current();
     }, 1200);
-  }, [persist]);
+  }, []);
 
   // ---- canvas change handlers --------------------------------------------
   const onNodesChange = useCallback(
