@@ -607,3 +607,17 @@ model BulkRecipient {
   @@index([providerMessageId])
   @@map("bulk_recipients")
 }
+
+model MediaAsset {
+  id          String   @id @default(cuid())
+  filename    String
+  mimeType    String   @map("mime_type")
+  size        Int
+  url         String
+  metaMediaId String?  @map("meta_media_id")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  @@index([createdAt])
+  @@map("media_assets")
+}

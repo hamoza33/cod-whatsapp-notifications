@@ -60,6 +60,7 @@ import {
   StickyNote,
   PhoneCall,
   CheckCircle2,
+  Upload,
 } from "lucide-react";
 import { api } from "@/lib/api-client";
 
@@ -284,6 +285,8 @@ const OPERATOR_LABELS: Record<ConditionOperator, string> = {
 // exposes so the engine knows where to wire incoming + outgoing edges.
 // ----------------------------------------------------------------------------
 
+const HANDLE_SIZE: React.CSSProperties = { width: 14, height: 14 };
+
 function TriggerNode({ data, selected }: NodeProps) {
   const d = data as unknown as TriggerData;
   return (
@@ -299,7 +302,7 @@ function TriggerNode({ data, selected }: NodeProps) {
         {TRIGGER_LABELS[d.triggerType] ?? d.triggerType}
       </div>
       {d.label && <div className="text-[11px] text-gray-500 mt-0.5">{d.label}</div>}
-      <Handle type="source" position={Position.Bottom} className="!bg-amber-500" />
+      <Handle type="source" position={Position.Bottom} className="!bg-amber-500" style={HANDLE_SIZE} />
     </div>
   );
 }
@@ -313,7 +316,7 @@ function ConditionNode({ data, selected }: NodeProps) {
         selected ? "border-blue-500 ring-2 ring-blue-200" : "border-purple-300"
       } min-w-[220px]`}
     >
-      <Handle type="target" position={Position.Top} className="!bg-purple-500" />
+      <Handle type="target" position={Position.Top} className="!bg-purple-500" style={HANDLE_SIZE} />
       <div className="px-4 py-3">
         <div className="flex items-center gap-2 text-purple-700 font-semibold text-[12px]">
           <Filter size={14} /> CONDITION
@@ -334,14 +337,14 @@ function ConditionNode({ data, selected }: NodeProps) {
         id="true"
         type="source"
         position={Position.Bottom}
-        style={{ left: "25%" }}
+        style={{ left: "25%", ...HANDLE_SIZE }}
         className="!bg-green-500"
       />
       <Handle
         id="false"
         type="source"
         position={Position.Bottom}
-        style={{ left: "75%" }}
+        style={{ left: "75%", ...HANDLE_SIZE }}
         className="!bg-red-500"
       />
     </div>
@@ -357,7 +360,7 @@ function ActionNode({ data, selected }: NodeProps) {
         selected ? "border-blue-500 ring-2 ring-blue-200" : "border-blue-300"
       } min-w-[220px]`}
     >
-      <Handle type="target" position={Position.Top} className="!bg-blue-500" />
+      <Handle type="target" position={Position.Top} className="!bg-blue-500" style={HANDLE_SIZE} />
       <div className="flex items-center gap-2 text-blue-700 font-semibold text-[12px]">
         <Icon size={14} /> ACTION
       </div>
@@ -375,7 +378,7 @@ function ActionNode({ data, selected }: NodeProps) {
       {d.action === "wait" && d.waitSeconds !== null && d.waitSeconds !== undefined && (
         <div className="text-[11px] text-gray-500 mt-0.5">{d.waitSeconds}s</div>
       )}
-      <Handle type="source" position={Position.Bottom} className="!bg-blue-500" />
+      <Handle type="source" position={Position.Bottom} className="!bg-blue-500" style={HANDLE_SIZE} />
     </div>
   );
 }
@@ -456,7 +459,7 @@ function FlowEditorInner() {
             targetHandle: e.targetHandle ?? undefined,
             label: e.label,
             markerEnd: { type: MarkerType.ArrowClosed, color: "#94a3b8" },
-            style: { stroke: "#94a3b8" },
+            style: { stroke: "#94a3b8", strokeWidth: 2, cursor: "pointer" },
           }))
         );
       } catch (err) {
@@ -837,12 +840,19 @@ function FlowEditorInner() {
             onEdgesChange={onEdgesChange}
             onConnect={onConnect}
             onSelectionChange={onSelectionChange}
+            onEdgeClick={(_event, edge) => {
+              if (confirm("Delete this connection?")) {
+                setEdges((eds) => eds.filter((e) => e.id !== edge.id));
+                queueSave();
+              }
+            }}
             nodeTypes={nodeTypes}
+            deleteKeyCode={["Backspace", "Delete"]}
             fitView
             fitViewOptions={{ padding: 0.3 }}
             defaultEdgeOptions={{
               markerEnd: { type: MarkerType.ArrowClosed, color: "#94a3b8" },
-              style: { stroke: "#94a3b8" },
+              style: { stroke: "#94a3b8", strokeWidth: 2, cursor: "pointer" },
             }}
           >
             <Background gap={18} size={1} />
@@ -961,6 +971,16 @@ function NodeInspector({
       )}
       {data.kind === "action" && (
         <ActionInspector data={data} dataPoints={dataPoints} templates={templates} onChange={onChange} />
+      )}
+
+      {data.kind !== "trigger" && (
+        <button
+          type="button"
+          onClick={onDelete}
+          className="mt-6 w-full text-[12px] text-red-600 hover:text-white hover:bg-red-600 border border-red-200 rounded-md px-3 py-2 flex items-center justify-center gap-1 transition-colors"
+        >
+          <Trash2 size={12} /> Delete this step
+        </button>
       )}
     </div>
   );
@@ -1166,9 +1186,16 @@ function ActionInspector({
               value={data.templateName ?? ""}
               onChange={(e) => {
                 const t = templates.find((tt) => tt.name === e.target.value);
+                const varCount = countTemplateVariables(t?.bodyText ?? "");
+                const existing = data.templateVariables ?? [];
+                const vars =
+                  varCount > 0
+                    ? Array.from({ length: varCount }, (_, i) => existing[i] ?? "")
+                    : existing;
                 onChange({
                   templateName: e.target.value || null,
                   templateLanguage: t?.language ?? data.templateLanguage ?? "en",
+                  templateVariables: vars,
                 } as Partial<FlowNodeData>);
               }}
               className="w-full border border-gray-200 rounded-md px-2 py-1 text-[12px]"
@@ -1184,14 +1211,15 @@ function ActionInspector({
           <TemplateVariablesEditor
             variables={data.templateVariables ?? []}
             dataPoints={dataPoints}
+            expectedCount={countTemplateVariables(
+              templates.find((tt) => tt.name === data.templateName)?.bodyText ?? ""
+            )}
             onChange={(vars) =>
               onChange({ templateVariables: vars } as Partial<FlowNodeData>)
             }
           />
-          <LabeledInput
-            label="Header image URL (optional)"
+          <HeaderImagePicker
             value={data.templateHeaderImageUrl ?? ""}
-            placeholder="https://… (leave blank to use Settings default)"
             onChange={(v) =>
               onChange({ templateHeaderImageUrl: v || null } as Partial<FlowNodeData>)
             }
@@ -1316,16 +1344,25 @@ function ActionInspector({
 function TemplateVariablesEditor({
   variables,
   dataPoints,
+  expectedCount,
   onChange,
 }: {
   variables: string[];
   dataPoints: DataPoint[];
+  expectedCount: number;
   onChange: (vars: string[]) => void;
 }) {
   return (
     <div>
       <div className="flex items-center justify-between mb-1">
-        <label className="text-[12px] text-gray-700">Template variables</label>
+        <label className="text-[12px] text-gray-700">
+          Template variables
+          {expectedCount > 0 && (
+            <span className="ml-1 text-[10px] text-gray-500">
+              ({expectedCount} required)
+            </span>
+          )}
+        </label>
         <button
           type="button"
           onClick={() => onChange([...variables, ""])}
@@ -1334,7 +1371,12 @@ function TemplateVariablesEditor({
           <Plus size={11} /> Add slot
         </button>
       </div>
-      {variables.length === 0 && (
+      {expectedCount > 0 && variables.length !== expectedCount && (
+        <div className="text-[10px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1 mb-1">
+          Template expects {expectedCount} variable{expectedCount !== 1 ? "s" : ""}, but {variables.length} provided.
+        </div>
+      )}
+      {variables.length === 0 && expectedCount === 0 && (
         <div className="text-[10px] text-gray-500">
           No variables — template will be sent with no body params.
         </div>
@@ -1393,8 +1435,183 @@ function DataPointHelper({ dataPoints }: { dataPoints: DataPoint[] }) {
 }
 
 // ----------------------------------------------------------------------------
+// Media gallery picker for template header images
+// ----------------------------------------------------------------------------
+
+interface MediaAsset {
+  id: string;
+  filename: string;
+  mimeType: string;
+  url: string;
+  metaMediaId: string | null;
+  createdAt: string;
+}
+
+function HeaderImagePicker({
+  value,
+  onChange,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+}) {
+  const [gallery, setGallery] = useState<MediaAsset[]>([]);
+  const [showGallery, setShowGallery] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (!showGallery) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await api.get<{ assets: MediaAsset[] }>("/media-assets");
+        if (!cancelled) setGallery(res.assets);
+      } catch {
+        /* ignore */
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [showGallery]);
+
+  const handleUpload = async (file: File) => {
+    setUploading(true);
+    setUploadError(null);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const res = await fetch("/api/media-assets", {
+        method: "POST",
+        body: fd,
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: "Upload failed" }));
+        throw new Error((err as { error?: string }).error ?? "Upload failed");
+      }
+      const data = (await res.json()) as { asset: MediaAsset };
+      setGallery((prev) => [data.asset, ...prev]);
+      onChange(data.asset.url);
+      setShowGallery(false);
+    } catch (err) {
+      setUploadError(err instanceof Error ? err.message : "Upload failed");
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  return (
+    <div>
+      <label className="text-[12px] text-gray-700 block mb-1">
+        Header image (optional)
+      </label>
+      {value && (
+        <div className="mb-2 relative inline-block">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={value}
+            alt="Header"
+            className="w-20 h-20 object-cover rounded border border-gray-200"
+          />
+          <button
+            type="button"
+            onClick={() => onChange("")}
+            className="absolute -top-1 -right-1 bg-red-500 text-white rounded-full w-4 h-4 flex items-center justify-center text-[10px] leading-none hover:bg-red-700"
+            title="Remove"
+          >
+            ×
+          </button>
+        </div>
+      )}
+      <div className="flex items-center gap-2">
+        <button
+          type="button"
+          onClick={() => setShowGallery(!showGallery)}
+          className="text-[11px] text-blue-700 hover:text-blue-900 border border-blue-200 rounded px-2 py-1 flex items-center gap-1"
+        >
+          <Upload size={11} /> {showGallery ? "Hide gallery" : "Choose image"}
+        </button>
+        <input
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder="…or paste URL"
+          className="flex-1 border border-gray-200 rounded-md px-2 py-1 text-[11px]"
+        />
+      </div>
+      {showGallery && (
+        <div className="mt-2 border border-gray-200 rounded-md p-2 bg-gray-50 max-h-64 overflow-y-auto">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-[11px] font-semibold text-gray-600">Image gallery</span>
+            <button
+              type="button"
+              onClick={() => fileRef.current?.click()}
+              disabled={uploading}
+              className="text-[11px] text-blue-700 hover:text-blue-900 flex items-center gap-1"
+            >
+              {uploading ? <Loader2 size={11} className="animate-spin" /> : <Plus size={11} />}
+              Upload new
+            </button>
+            <input
+              ref={fileRef}
+              type="file"
+              accept="image/*"
+              className="hidden"
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                if (f) void handleUpload(f);
+                e.target.value = "";
+              }}
+            />
+          </div>
+          {uploadError && (
+            <div className="text-[10px] text-red-600 mb-1">{uploadError}</div>
+          )}
+          {gallery.length === 0 && !uploading && (
+            <div className="text-[10px] text-gray-500 py-4 text-center">
+              No images yet — upload your first one.
+            </div>
+          )}
+          <div className="grid grid-cols-3 gap-1">
+            {gallery.map((asset) => (
+              <button
+                key={asset.id}
+                type="button"
+                onClick={() => {
+                  onChange(asset.url);
+                  setShowGallery(false);
+                }}
+                className={`relative rounded border-2 overflow-hidden ${
+                  value === asset.url ? "border-blue-500" : "border-transparent hover:border-gray-300"
+                }`}
+              >
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={asset.url}
+                  alt={asset.filename}
+                  className="w-full aspect-square object-cover"
+                />
+                <div className="absolute bottom-0 inset-x-0 bg-black/50 text-white text-[8px] px-1 py-0.5 truncate">
+                  {asset.filename}
+                </div>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ----------------------------------------------------------------------------
 // Small helpers
 // ----------------------------------------------------------------------------
+
+function countTemplateVariables(bodyText: string): number {
+  if (!bodyText) return 0;
+  const matches = bodyText.match(/{{\s*\d+\s*}}/g);
+  if (!matches) return 0;
+  const nums = matches.map((m) => parseInt(m.replace(/[{}]/g, "").trim(), 10));
+  return Math.max(...nums);
+}
 
 function LabeledInput({
   label,
