@@ -393,11 +393,12 @@ export default function TrackingPage() {
   const handleRefreshAll = async () => {
     setRefreshing(true);
     type CarrierStats = { processed: number; eventsAdded: number; errors: number };
-    const totals: Record<"imile" | "jte" | "jdw" | "injaz", CarrierStats> = {
+    const totals: Record<"imile" | "jte" | "jdw" | "injaz" | "naqel", CarrierStats> = {
       imile: { processed: 0, eventsAdded: 0, errors: 0 },
       jte: { processed: 0, eventsAdded: 0, errors: 0 },
       jdw: { processed: 0, eventsAdded: 0, errors: 0 },
       injaz: { processed: 0, eventsAdded: 0, errors: 0 },
+      naqel: { processed: 0, eventsAdded: 0, errors: 0 },
     };
     const formatBreakdown = (remaining: number) => {
       const parts: string[] = [];
@@ -406,6 +407,7 @@ export default function TrackingPage() {
         jte: "JTE",
         jdw: "JDW",
         injaz: "Injaz",
+        naqel: "Naqel",
       };
       for (const k of Object.keys(totals) as (keyof typeof totals)[]) {
         const s = totals[k];
