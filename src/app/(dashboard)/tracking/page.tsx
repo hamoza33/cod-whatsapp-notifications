@@ -428,7 +428,7 @@ export default function TrackingPage() {
           totalActive: number;
           reclassified: number;
           byCarrier?: Record<keyof typeof totals, CarrierStats>;
-        }>("/tracking/refresh");
+        }>("/tracking/refresh?includeFinal=true");
         totalDone += result.totalProcessed;
         if (result.byCarrier) {
           for (const k of Object.keys(totals) as (keyof typeof totals)[]) {
@@ -579,8 +579,9 @@ export default function TrackingPage() {
             </span>
           </h1>
           <p className="text-sm text-gray-600 mt-1">
-            Tracks pending & in-transit orders automatically. Delivered/returned
-            orders are skipped.
+            Background tracking refreshes pending & in-transit orders
+            automatically. Click Refresh All to re-check every order, including
+            delivered and returned.
           </p>
         </div>
         <div className="flex gap-2">
@@ -659,8 +660,8 @@ export default function TrackingPage() {
             ))}
           </div>
           <p className="text-xs text-gray-400 mt-2">
-            Only pending and in-transit orders are refreshed. Delivered and
-            returned orders are skipped.
+            Auto-refresh covers pending and in-transit orders. Click Refresh
+            All to re-check every order, including delivered and returned.
           </p>
         </div>
       )}
