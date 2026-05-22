@@ -88,6 +88,10 @@ export const SETTING_KEYS = {
   // Automation auto-run — when enabled, automations trigger automatically
   // without needing to click "Run now"
   AUTOMATION_AUTO_RUN: "automation_auto_run",
+  // Courier Tracking API — unified tracking aggregator that replaces
+  // 4tracking.net and provides direct carrier API access for iMile, Injaz,
+  // JT Express (with captcha solving), and JDW Logistics.
+  COURIER_TRACKING_API_URL: "courier_tracking_api_url",
 } as const;
 
 export const SENSITIVE_SETTING_KEYS: readonly string[] = [

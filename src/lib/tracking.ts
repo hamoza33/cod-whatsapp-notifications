@@ -9,9 +9,8 @@ import { fireTrackingStatusChangedFlows, safeFireFlows } from "./automation-flow
 import { fetchImileTracking } from "./tracking-providers/imile";
 import { fetchInjazTracking } from "./tracking-providers/injaz";
 import { fetchJdwBulk } from "./tracking-providers/jdw";
-import { fetch4TrackingBatch } from "./tracking-providers/four-tracking";
-import { fetchJteOfficialTracking } from "./tracking-providers/jte";
 import { fetchNaqelOfficialTracking } from "./tracking-providers/naqel";
+import { fetchCourierApiTracking } from "./tracking-providers/courier-api";
 import type {
   ProviderResult,
 } from "./tracking-providers/types";
@@ -23,23 +22,18 @@ import type {
 
 export { fetchImileTracking } from "./tracking-providers/imile";
 export { fetchInjazTracking } from "./tracking-providers/injaz";
-// Legacy aliases for the JTE + JDW scrapers. JTE is intentionally a
-// manual-only stub: server-side scraping requires Tencent Captcha + a
-// dynamic ofmg.jtjms-sa.com URL that's not viable without a headless
-// browser, so the orchestrator surfaces `jte_manual_only` and the UI
-// renders an "Open in JT website" link per row. JDW still goes through
-// the working JD Logistics bulk endpoint.
+// JTE now uses the courier-tracking-api which handles Tencent Captcha
+// solving via CapSolver / 2Captcha. JDW still goes through the working
+// JD Logistics bulk endpoint.
 /**
- * Manual-only stub for JT Express. Server-side tracking is not viable
- * (Tencent Captcha + dynamic URL); callers MUST treat this as a signal
- * to render a "Track on jtexpress.me" external link in the UI rather
- * than retry. Kept as a named export so legacy callers don't break.
+ * JT Express tracking via the courier-tracking-api. The external service
+ * handles Tencent Captcha solving automatically (via CapSolver / 2Captcha).
+ * Falls back to error code if captcha solving is unavailable.
  */
 export async function fetchJteTracking(
   trackingNumber: string
 ): Promise<ProviderResult> {
-  void trackingNumber;
-  return { events: [], rawStatus: null, error: "jte_manual_only" };
+  return fetchCourierApiTracking(trackingNumber, TrackingCarrier.JTE);
 }
 
 export async function fetchJdwTracking(
@@ -153,37 +147,17 @@ async function fetchTrackingByCarrier(
     case TrackingCarrier.INJAZ:
       return fetchInjazTracking(trackingNumber);
     case TrackingCarrier.JTE: {
-      // Primary: 4tracking.net. Fallback: JTE official site.
-      const primary = await fetch4TrackingSingle(trackingNumber);
-      if (!primary.error || (primary.events.length > 0 && !primary.error)) return primary;
-      console.log(`[tracking] JTE 4tracking failed for ${trackingNumber}, trying official site`);
-      return fetchJteOfficialTracking(trackingNumber);
+      const settings = await getSettings([SETTING_KEYS.COURIER_TRACKING_API_URL]);
+      const apiUrl = settings[SETTING_KEYS.COURIER_TRACKING_API_URL] || undefined;
+      return fetchCourierApiTracking(trackingNumber, TrackingCarrier.JTE, apiUrl);
     }
     case TrackingCarrier.JDW:
       return fetchJdwTracking(trackingNumber);
-    case TrackingCarrier.NAQEL: {
-      // Primary: 4tracking.net. Fallback: Naqel official site.
-      const primary = await fetch4TrackingSingle(trackingNumber);
-      if (!primary.error || (primary.events.length > 0 && !primary.error)) return primary;
-      console.log(`[tracking] Naqel 4tracking failed for ${trackingNumber}, trying official site`);
+    case TrackingCarrier.NAQEL:
       return fetchNaqelOfficialTracking(trackingNumber);
-    }
     default:
       return { events: [], rawStatus: null };
   }
-}
-
-async function fetch4TrackingSingle(
-  trackingNumber: string
-): Promise<ProviderResult> {
-  const map = await fetch4TrackingBatch([trackingNumber]);
-  return (
-    map.get(trackingNumber) ?? {
-      events: [],
-      rawStatus: null,
-      error: "not_found_on_4tracking",
-    }
-  );
 }
 
 // ---------------------------------------------------------------------------
@@ -584,16 +558,17 @@ export async function refreshAllTracking(
   // burn the entire budget on reclassification.
   const reclassifyResult = await reclassifyOtherOrders(deadline);
 
-  // Read captcha settings once. If the user hasn't set them we default the
-  // provider to '2captcha' and leave the key null — the JDW provider gives a
-  // clear `captcha_required` error in that case.
-  const captchaSettings = await getSettings([
+  // Read captcha + courier API settings once.
+  const trackingSettings = await getSettings([
     SETTING_KEYS.CAPTCHA_API_KEY,
     SETTING_KEYS.CAPTCHA_PROVIDER,
+    SETTING_KEYS.COURIER_TRACKING_API_URL,
   ]);
-  const captchaApiKey = captchaSettings[SETTING_KEYS.CAPTCHA_API_KEY];
+  const captchaApiKey = trackingSettings[SETTING_KEYS.CAPTCHA_API_KEY];
   const captchaProvider =
-    captchaSettings[SETTING_KEYS.CAPTCHA_PROVIDER] ?? "2captcha";
+    trackingSettings[SETTING_KEYS.CAPTCHA_PROVIDER] ?? "2captcha";
+  const courierApiUrl =
+    trackingSettings[SETTING_KEYS.COURIER_TRACKING_API_URL] || undefined;
 
   const activeFilter = {
     status: {
@@ -747,54 +722,34 @@ export async function refreshAllTracking(
     }
   );
 
-  // ---------- JTE pool: 4tracking.net, 10 per batch, 30s timeout ----------
-  const FOURTRACK_CHUNK_SIZE = 10;
-  const FOURTRACK_CONCURRENCY = 3;
-  const jteQueue: ActiveOrderRow[][] = [];
-  for (let i = 0; i < buckets.jte.length; i += FOURTRACK_CHUNK_SIZE) {
-    jteQueue.push(buckets.jte.slice(i, i + FOURTRACK_CHUNK_SIZE));
-  }
+  // ---------- JTE pool: courier-tracking-api, 3 workers, one number at a time ----------
+  // The courier API handles Tencent Captcha solving for JT Express. Each call
+  // takes ~10-30s due to captcha solve time, so we limit concurrency.
+  const JTE_CONCURRENCY = 3;
+  const jteQueue: ActiveOrderRow[][] = buckets.jte.map((o) => [o]);
   totalChunks += jteQueue.length;
 
   const jtePool = drainQueue(
     jteQueue,
-    FOURTRACK_CONCURRENCY,
+    JTE_CONCURRENCY,
     deadline,
     async (chunk) => {
-      const numbers = chunk.map((o) => o.trackingNumber);
-      let map: Map<string, ProviderResult>;
-      let fourTrackingFailed = false;
-      try {
-        map = await fetch4TrackingBatch(numbers);
-      } catch (err) {
-        fourTrackingFailed = true;
-        map = new Map();
-        const detail = err instanceof Error ? err.message : "fetch_failed";
-        for (const n of numbers) {
-          map.set(n, { events: [], rawStatus: null, error: `fourtracking_fetch_failed:${detail}` });
-        }
-      }
-
       for (const o of chunk) {
-        let result = map.get(o.trackingNumber) ?? {
-          events: [],
-          rawStatus: null,
-          error: "not_found_on_4tracking",
-        };
-
-        // Fallback: if 4tracking failed for this number, try JTE official site
-        if (result.error && result.events.length === 0) {
-          try {
-            console.log(`[tracking] JTE 4tracking failed for ${o.trackingNumber}, trying official site`);
-            const fallbackResult = await fetchJteOfficialTracking(o.trackingNumber);
-            if (!fallbackResult.error || fallbackResult.events.length > 0) {
-              result = fallbackResult;
-            }
-          } catch {
-            // Keep the original 4tracking error
-          }
+        let result: ProviderResult;
+        try {
+          result = await fetchCourierApiTracking(
+            o.trackingNumber,
+            TrackingCarrier.JTE,
+            courierApiUrl
+          );
+        } catch (err) {
+          const detail = err instanceof Error ? err.message : "fetch_failed";
+          result = {
+            events: [],
+            rawStatus: null,
+            error: `courier_api_error:${detail}`,
+          };
         }
-
         try {
           const persisted = await applyTrackingResult(
             {
@@ -817,54 +772,33 @@ export async function refreshAllTracking(
           recordOutcome(o, { ok: false, error: detail });
         }
       }
-      void fourTrackingFailed;
     }
   );
 
-  // ---------- Naqel pool: 4tracking.net, 10 per batch ----------
-  const naqelQueue: ActiveOrderRow[][] = [];
-  for (let i = 0; i < buckets.naqel.length; i += FOURTRACK_CHUNK_SIZE) {
-    naqelQueue.push(buckets.naqel.slice(i, i + FOURTRACK_CHUNK_SIZE));
-  }
+  // ---------- Naqel pool: 5 workers, one number at a time ----------
+  // Naqel is not supported by the courier-tracking-api, so we call the
+  // Naqel official site scraper directly.
+  const NAQEL_CONCURRENCY = 5;
+  const naqelQueue: ActiveOrderRow[][] = buckets.naqel.map((o) => [o]);
   totalChunks += naqelQueue.length;
 
   const naqelPool = drainQueue(
     naqelQueue,
-    FOURTRACK_CONCURRENCY,
+    NAQEL_CONCURRENCY,
     deadline,
     async (chunk) => {
-      const numbers = chunk.map((o) => o.trackingNumber);
-      let map: Map<string, ProviderResult>;
-      try {
-        map = await fetch4TrackingBatch(numbers);
-      } catch (err) {
-        map = new Map();
-        const detail = err instanceof Error ? err.message : "fetch_failed";
-        for (const n of numbers) {
-          map.set(n, { events: [], rawStatus: null, error: `fourtracking_fetch_failed:${detail}` });
-        }
-      }
-
       for (const o of chunk) {
-        let result = map.get(o.trackingNumber) ?? {
-          events: [],
-          rawStatus: null,
-          error: "not_found_on_4tracking",
-        };
-
-        // Fallback: if 4tracking failed for this number, try Naqel official site
-        if (result.error && result.events.length === 0) {
-          try {
-            console.log(`[tracking] Naqel 4tracking failed for ${o.trackingNumber}, trying official site`);
-            const fallbackResult = await fetchNaqelOfficialTracking(o.trackingNumber);
-            if (!fallbackResult.error || fallbackResult.events.length > 0) {
-              result = fallbackResult;
-            }
-          } catch {
-            // Keep the original 4tracking error
-          }
+        let result: ProviderResult;
+        try {
+          result = await fetchNaqelOfficialTracking(o.trackingNumber);
+        } catch (err) {
+          const detail = err instanceof Error ? err.message : "fetch_failed";
+          result = {
+            events: [],
+            rawStatus: null,
+            error: `naqel_error:${detail}`,
+          };
         }
-
         try {
           const persisted = await applyTrackingResult(
             {
