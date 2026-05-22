@@ -103,9 +103,15 @@ function errorPill(
       };
     case "jte_manual_only":
       return {
-        label: "Track on JT website",
+        label: "Awaiting re-track",
         bg: "bg-amber-50",
         text: "text-amber-700",
+      };
+    case "not_found_on_courier_api":
+      return {
+        label: "Not found via courier API",
+        bg: "bg-gray-100",
+        text: "text-gray-600",
       };
     case "imile_rate_limited":
       return {
@@ -141,6 +147,9 @@ function errorPill(
         latestError.startsWith("imile_error:") ||
         latestError.startsWith("jdw_error:") ||
         latestError.startsWith("injaz_error:") ||
+        latestError.startsWith("naqel_error:") ||
+        latestError.startsWith("courier_api_error:") ||
+        latestError.startsWith("courier_api_fetch_failed:") ||
         latestError.startsWith("fourtracking_fetch_failed:")
       ) {
         return {
