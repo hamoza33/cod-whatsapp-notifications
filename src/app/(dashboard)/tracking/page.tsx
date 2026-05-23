@@ -428,8 +428,15 @@ export default function TrackingPage() {
       return remaining > 0 ? `${head}. ${remaining} remaining.` : head;
     };
     const params = new URLSearchParams();
-    params.set("includeFinal", "true");
-    if (statusOverride) params.set("status", statusOverride);
+    // When a status pill is selected (Refresh Section), forward it as the
+    // status filter — the server lets DELIVERED / RETURNED through that
+    // path. "Refresh All" (no statusOverride) deliberately omits
+    // includeFinal so terminal buckets are NOT re-checked on every click;
+    // use Refresh Section + the Delivered/Returned pill to re-verify those.
+    if (statusOverride) {
+      params.set("status", statusOverride);
+      params.set("includeFinal", "true");
+    }
     if (carrierOverride) params.set("carrier", carrierOverride);
     const url = `/tracking/refresh?${params.toString()}`;
     let totalDone = 0;
@@ -478,8 +485,13 @@ export default function TrackingPage() {
     }
   };
 
+  // "Refresh All" re-checks only the active buckets (Pending, In Transit,
+  // Out for Delivery, Exception, Unknown). DELIVERED and RETURNED are
+  // terminal — re-tracking them on every click burned ~70 % of the budget
+  // for no signal change. To re-verify a terminal bucket, select its pill
+  // and use Refresh Section.
   const handleRefreshAll = () =>
-    runRefresh(setRefreshing, "Refreshed");
+    runRefresh(setRefreshing, "Refreshed active");
 
   // Refreshes only orders matching the currently selected status pill (and
   // carrier dropdown, if any) — gives users a way to re-track a single
@@ -618,8 +630,10 @@ export default function TrackingPage() {
           </h1>
           <p className="text-sm text-gray-600 mt-1">
             Background tracking refreshes pending & in-transit orders
-            automatically. Click Refresh All to re-check every order, including
-            delivered and returned.
+            automatically. “Refresh All” re-checks every active bucket
+            (Pending, In Transit, Out for Delivery, Exception, Unknown). To
+            re-verify Delivered or Returned, pick that status pill and use
+            “Refresh Section”.
           </p>
         </div>
         <div className="flex gap-2">
@@ -677,6 +691,7 @@ export default function TrackingPage() {
           <button
             onClick={handleRefreshAll}
             disabled={refreshing || refreshingSection}
+            title="Re-check all active orders (skips Delivered & Returned). Use Refresh Section on the Delivered/Returned pill to re-verify those."
             className="flex items-center gap-2 px-3 py-2 bg-gray-100 text-gray-700 rounded-md text-sm font-medium hover:bg-gray-200 disabled:opacity-50"
           >
             <RefreshCw

@@ -510,7 +510,11 @@ const INJAZ_CONCURRENCY = 5;
 const JDW_CONCURRENCY = 5;
 const RECLASSIFY_CONCURRENCY = 5;
 const RECLASSIFY_TAKE = 250;
-const DEFAULT_WALL_CLOCK_MS = 45_000;
+// 120 s gives a single /api/tracking/refresh round enough budget to drain
+// ~3× more orders than the previous 45 s before the UI loops. Stays well
+// under Fly's per-request limit while still letting iMile's per-IP rate
+// limit do its thing.
+const DEFAULT_WALL_CLOCK_MS = 120_000;
 // Number of waybills sent in a single POST /track/bulk request. 50 keeps the
 // request body small while still giving ~50× speed-up over per-waybill calls.
 const BULK_CHUNK_SIZE = 50;
