@@ -644,9 +644,11 @@ export async function reclassifyOtherOrders(deadlineMs?: number) {
 //            courier API's POST /track/bulk endpoint, so a single 50-item
 //            HTTP request returns in seconds rather than a single-shot per
 //            waybill (~50× speed-up for iMile's ~2 750 orders).
-//   - jte:   3 workers, chunk-size 1, calling fetchCourierApiTracking().
-//            Kept per-waybill because each JTE call triggers a Tencent
-//            Captcha solve upstream and is forced sequential server-side.
+//   - jte:   1 worker, chunk-size 1, calling fetchCourierApiTracking().
+//            The courier API solves a Tencent slider captcha per call which
+//            is forced sequential server-side. Running more than 1 worker
+//            here just queues requests on the upstream and causes ours to
+//            hit the 120s client timeout before the upstream finishes.
 //   - naqel: 5 workers, chunk-size 1, calling fetchCourierApiTracking().
 //            Routed through the courier API (which scrapes the public
 //            Naqel tracking page server-side); the local scraper used
@@ -1005,11 +1007,13 @@ export async function refreshAllTracking(
     JDW_CONCURRENCY
   );
 
-  // ---------- JTE pool: courier-tracking-api, 3 workers, one at a time ----------
+  // ---------- JTE pool: courier-tracking-api, 1 worker, one at a time ----------
   // The courier API handles Tencent Captcha solving for JT Express server-side
   // and forces J&T waybills sequential even inside /track/bulk, so bulking
-  // gives no speed-up here. Keep per-waybill with low concurrency.
-  const JTE_CONCURRENCY = 3;
+  // gives no speed-up here. We also keep concurrency at 1: anything higher
+  // queues server-side and our 2nd/3rd request hits the 120s client timeout
+  // before the upstream gets to it, surfacing as a confusing UNKNOWN demote.
+  const JTE_CONCURRENCY = 1;
   const jteQueue: ActiveOrderRow[][] = buckets.jte.map((o) => [o]);
   totalChunks += jteQueue.length;
 
