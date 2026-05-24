@@ -30,7 +30,8 @@ type TrackingStatus =
   | "DELIVERED"
   | "RETURNED"
   | "EXCEPTION"
-  | "UNKNOWN";
+  | "UNKNOWN"
+  | "EXPIRED";
 
 interface TrackingEvent {
   id: string;
@@ -72,6 +73,7 @@ const STATUS_COLORS: Record<TrackingStatus, { bg: string; text: string }> = {
   RETURNED: { bg: "bg-red-100", text: "text-red-700" },
   EXCEPTION: { bg: "bg-orange-100", text: "text-orange-700" },
   UNKNOWN: { bg: "bg-gray-100", text: "text-gray-500" },
+  EXPIRED: { bg: "bg-purple-100", text: "text-purple-700" },
 };
 
 const STATUS_LABELS: Record<TrackingStatus, string> = {
@@ -82,6 +84,7 @@ const STATUS_LABELS: Record<TrackingStatus, string> = {
   RETURNED: "Returned",
   EXCEPTION: "Exception",
   UNKNOWN: "Unknown",
+  EXPIRED: "Expired",
 };
 
 function errorPill(
@@ -752,7 +755,7 @@ export default function TrackingPage() {
       )}
 
       {/* Status summary cards */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3 mb-6">
+      <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-3 mb-6">
         {(Object.keys(STATUS_LABELS) as TrackingStatus[]).map((s) => {
           const c = STATUS_COLORS[s];
           const count = statusCounts[s] || 0;

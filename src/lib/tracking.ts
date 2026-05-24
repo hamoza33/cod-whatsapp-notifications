@@ -6,7 +6,6 @@ import {
 } from "./settings";
 import { runAutomationsForOrder } from "./automations";
 import { fireTrackingStatusChangedFlows, safeFireFlows } from "./automation-flows/triggers";
-import { fetchNaqelOfficialTracking } from "./tracking-providers/naqel";
 import {
   fetchCourierApiBulk,
   fetchCourierApiTracking,
@@ -19,11 +18,11 @@ import type {
 // Re-exports — keep the public surface stable for existing callers and for
 // a potential rollback. Per-carrier scrapers live under src/lib/tracking-providers/.
 //
-// iMile, Injaz, J&T Express, and JDW Logistics all route through the
-// unified courier-tracking-api (https://courier-tracking-api.fly.dev),
-// which handles per-carrier auth, RSA signing for iMile, JT captcha
-// solving, and JDW captcha solving server-side. Naqel is not supported
-// by the courier API and continues to hit its public site scraper.
+// iMile, Injaz, J&T Express, JDW Logistics and Naqel Express all route
+// through the unified courier-tracking-api
+// (https://courier-tracking-api.fly.dev), which handles per-carrier auth,
+// RSA signing for iMile, JT captcha solving, JDW captcha solving, and
+// Naqel HTML scraping server-side.
 // ---------------------------------------------------------------------------
 
 export async function fetchImileTracking(
@@ -136,18 +135,15 @@ async function fetchTrackingByCarrier(
   carrier: TrackingCarrier,
   trackingNumber: string
 ): Promise<ProviderResult> {
-  // Naqel is handled directly — the courier-tracking-api does not
-  // support it. Every other carrier (iMile, Injaz, JTE, JDW) goes
-  // through the unified courier API so we have one consistent source
-  // of tracking data across the entire fleet.
-  if (carrier === TrackingCarrier.NAQEL) {
-    return fetchNaqelOfficialTracking(trackingNumber);
-  }
+  // Every supported carrier (iMile, Injaz, JTE, JDW, Naqel) goes through
+  // the unified courier-tracking-api so we have one consistent source of
+  // tracking data across the entire fleet.
   if (
     carrier === TrackingCarrier.IMILE ||
     carrier === TrackingCarrier.INJAZ ||
     carrier === TrackingCarrier.JTE ||
-    carrier === TrackingCarrier.JDW
+    carrier === TrackingCarrier.JDW ||
+    carrier === TrackingCarrier.NAQEL
   ) {
     const settings = await getSettings([SETTING_KEYS.COURIER_TRACKING_API_URL]);
     const apiUrl = settings[SETTING_KEYS.COURIER_TRACKING_API_URL] || undefined;
@@ -160,6 +156,28 @@ async function fetchTrackingByCarrier(
 // Unified tracking status mapper
 // ---------------------------------------------------------------------------
 
+/**
+ * Map a carrier-side raw status string to our internal TrackingStatus enum.
+ *
+ * Important nuance for RETURNED — only confirmed return-to-sender states
+ * count as terminal RETURNED. Intermediate "returned to the station /
+ * facility / warehouse" events on the carrier side mean the package was
+ * brought back to a depot for redelivery; they are NOT yet a refund-the-
+ * shipper signal and must stay in IN_TRANSIT until the carrier confirms
+ * the shipper-side hand-off.
+ *
+ * Per-carrier examples calibrated against real `latest_event` strings
+ * seen in production (2026-05-23):
+ *
+ *  JDW  RETURNED ✓  "ready to return to senders address"
+ *       IN_TRANSIT  "Your package has been returned to the station for the reason: ..."
+ *  Naqel RETURNED ✓ "Shipment Returned to Origin"
+ *       IN_TRANSIT  "Shipment Returned to Naqel Facility"
+ *       IN_TRANSIT  "Return request created"
+ *       OUT_FOR_DELIVERY "Out For Delivery with Courier"
+ *       EXCEPTION   "Delivery attempted – Consignee refused"
+ *  iMile RETURNED ✓ "returned to sender" / "sign for failure - returned"
+ */
 function mapToTrackingStatus(
   _carrier: TrackingCarrier,
   rawStatus: string | null
@@ -168,21 +186,83 @@ function mapToTrackingStatus(
 
   const s = rawStatus.toLowerCase();
 
-  if (s.includes("delivered") || s.includes("signed"))
+  if (
+    s.includes("delivered") ||
+    s.includes("signed") ||
+    s.includes("sign for success") ||
+    s.includes("successfully delivered")
+  )
     return TrackingStatus.DELIVERED;
+
+  // Terminal RETURNED — confirmed handed back to shipper / origin.
+  if (
+    s.includes("returned to origin") ||
+    s.includes("return to origin") ||
+    s.includes("returned to sender") ||
+    s.includes("return to sender") ||
+    s.includes("returned to shipper") ||
+    s.includes("return to shipper") ||
+    s.includes("returned to consignor") ||
+    s.includes("return to consignor") ||
+    s.includes("back to sender") ||
+    s.includes("back to shipper") ||
+    s.includes("return to senders address") ||
+    s.includes("ready to return to senders address") ||
+    s.includes("sign for failure - returned")
+  )
+    return TrackingStatus.RETURNED;
+
   if (s.includes("out for delivery") || s.includes("dispatched"))
     return TrackingStatus.OUT_FOR_DELIVERY;
+
+  // Intermediate "returned to station / facility / warehouse" — NOT
+  // terminal. Package is at a carrier depot for redelivery or pending
+  // a return-to-sender decision. Map to IN_TRANSIT so the order stays
+  // in the operator's active queue until the carrier confirms an actual
+  // return-to-sender (see RETURNED check above).
+  if (
+    s.includes("returned to the station") ||
+    s.includes("returned to station") ||
+    s.includes("returned to naqel facility") ||
+    s.includes("returned to facility") ||
+    s.includes("returned to warehouse") ||
+    s.includes("returned to the warehouse") ||
+    s.includes("return request created") ||
+    s.includes("return in progress") ||
+    s.includes("returning to") ||
+    s.includes("being returned") ||
+    s.includes("back to station") ||
+    s.includes("back to facility") ||
+    s.includes("back to warehouse")
+  )
+    return TrackingStatus.IN_TRANSIT;
+
+  // Generic delivery-failed signal that is NOT yet a refund-the-shipper
+  // event. The package may be reattempted; surface as EXCEPTION so the
+  // operator can act before the courier escalates to a true return.
+  if (
+    s.includes("delivery attempted") ||
+    s.includes("consignee refused") ||
+    s.includes("undeliverable") ||
+    s.includes("address not found") ||
+    s.includes("address incorrect") ||
+    s.includes("no answer")
+  )
+    return TrackingStatus.EXCEPTION;
+
   if (
     s.includes("transit") ||
     s.includes("in transit") ||
     s.includes("pick up") ||
     s.includes("pickup") ||
+    s.includes("picked up") ||
     s.includes("send to") ||
     s.includes("departed") ||
     s.includes("arrived") ||
     s.includes("shipping") ||
     s.includes("on the way") ||
-    s.includes("in warehouse")
+    s.includes("in warehouse") ||
+    s.includes("prepared for delivery")
   )
     return TrackingStatus.IN_TRANSIT;
   if (
@@ -195,16 +275,79 @@ function mapToTrackingStatus(
     s.includes("info received")
   )
     return TrackingStatus.PENDING;
-  if (s.includes("return")) return TrackingStatus.RETURNED;
   if (
     s.includes("exception") ||
     s.includes("failed") ||
-    s.includes("problem") ||
-    s.includes("expired")
+    s.includes("problem")
   )
     return TrackingStatus.EXCEPTION;
 
   return TrackingStatus.IN_TRANSIT;
+}
+
+// ---------------------------------------------------------------------------
+// EXPIRED auto-classifier
+// ---------------------------------------------------------------------------
+//
+// EXPIRED is a terminal "we gave up on this order" state. The operator
+// asked for this because COD orders that have been stuck in PENDING /
+// IN_TRANSIT / OUT_FOR_DELIVERY / EXCEPTION / UNKNOWN for more than 30
+// days from their COD-Network creation date are essentially abandoned —
+// they will not be delivered, the customer will not call back, and the
+// carrier will not magically resolve them.
+//
+// We compute it from `codCreatedAt` (the source-of-truth timestamp from
+// COD Network's seller-orders API) rather than `createdAt` (when we
+// imported the row) so re-syncing the database does not reset the
+// 30-day window.
+//
+// The classifier runs both inline (on every applyTrackingResult call,
+// so the moment a stale order gets refreshed it transitions to EXPIRED)
+// AND as a periodic sweep via `sweepExpiredTracking()` so the rest of
+// the long-tail-stuck orders eventually transition without needing a
+// fresh refresh cycle.
+
+const EXPIRED_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+
+function isExpirable(status: TrackingStatus): boolean {
+  return (
+    status === TrackingStatus.PENDING ||
+    status === TrackingStatus.IN_TRANSIT ||
+    status === TrackingStatus.OUT_FOR_DELIVERY ||
+    status === TrackingStatus.EXCEPTION ||
+    status === TrackingStatus.UNKNOWN
+  );
+}
+
+function isStaleForExpiry(codCreatedAt: Date | null | undefined): boolean {
+  if (!codCreatedAt) return false;
+  return Date.now() - codCreatedAt.getTime() > EXPIRED_AGE_MS;
+}
+
+/**
+ * Sweep every TrackingOrder whose `codCreatedAt` is older than 30 days
+ * and whose status is still non-terminal (i.e. not DELIVERED, RETURNED,
+ * or already EXPIRED), and bulk-update them to EXPIRED. Returns the
+ * number of rows transitioned.
+ */
+export async function sweepExpiredTracking(): Promise<number> {
+  const cutoff = new Date(Date.now() - EXPIRED_AGE_MS);
+  const res = await prisma.trackingOrder.updateMany({
+    where: {
+      codCreatedAt: { not: null, lt: cutoff },
+      status: {
+        in: [
+          TrackingStatus.PENDING,
+          TrackingStatus.IN_TRANSIT,
+          TrackingStatus.OUT_FOR_DELIVERY,
+          TrackingStatus.EXCEPTION,
+          TrackingStatus.UNKNOWN,
+        ],
+      },
+    },
+    data: { status: TrackingStatus.EXPIRED },
+  });
+  return res.count;
 }
 
 // ---------------------------------------------------------------------------
@@ -220,6 +363,7 @@ interface ApplyOpts {
   currentLatestEventAt: Date | null;
   currentStatus: TrackingStatus;
   carrier: TrackingCarrier;
+  codCreatedAt: Date | null;
 }
 
 async function applyTrackingResult(
@@ -268,10 +412,18 @@ async function applyTrackingResult(
   // timed out, or returned an empty response. Status only moves forward
   // when we actually have a new event (events.length > 0) with a real
   // rawStatus we can map.
-  const status =
+  let status =
     events.length > 0 && rawStatus
       ? mapToTrackingStatus(opts.carrier, rawStatus)
       : opts.currentStatus;
+
+  // Inline EXPIRED classification: if the order is older than 30 days
+  // since its COD-Network creation date AND the carrier-derived status
+  // is still non-terminal, transition to EXPIRED. DELIVERED and
+  // RETURNED are never overridden — they are real terminal outcomes.
+  if (isExpirable(status) && isStaleForExpiry(opts.codCreatedAt)) {
+    status = TrackingStatus.EXPIRED;
+  }
 
   await prisma.trackingOrder.update({
     where: { id: opts.orderId },
@@ -340,6 +492,7 @@ export async function refreshTracking(trackingOrderId: string) {
       currentLatestEventAt: order.latestEventAt,
       currentStatus: order.status,
       carrier: order.carrier,
+      codCreatedAt: order.codCreatedAt,
     },
     result
   );
@@ -494,7 +647,11 @@ export async function reclassifyOtherOrders(deadlineMs?: number) {
 //   - jte:   3 workers, chunk-size 1, calling fetchCourierApiTracking().
 //            Kept per-waybill because each JTE call triggers a Tencent
 //            Captcha solve upstream and is forced sequential server-side.
-//   - naqel: 5 workers, chunk-size 1, calling fetchNaqelOfficialTracking().
+//   - naqel: 5 workers, chunk-size 1, calling fetchCourierApiTracking().
+//            Routed through the courier API (which scrapes the public
+//            Naqel tracking page server-side); the local scraper used
+//            an old URL that returned 404 and dumped every order into
+//            UNKNOWN.
 //
 // Each per-tracking-number outcome is persisted via applyTrackingResult().
 // The TrackingOrder.lastCheckedAt always advances even on error so the next
@@ -526,6 +683,7 @@ interface ActiveOrderRow {
   status: TrackingStatus;
   latestEvent: string | null;
   latestEventAt: Date | null;
+  codCreatedAt: Date | null;
 }
 
 interface PerCarrierStats {
@@ -673,6 +831,7 @@ export async function refreshAllTracking(
       status: true,
       latestEvent: true,
       latestEventAt: true,
+      codCreatedAt: true,
     },
   })) as ActiveOrderRow[];
 
@@ -766,6 +925,7 @@ export async function refreshAllTracking(
           currentLatestEventAt: o.latestEventAt,
           currentStatus: o.status,
           carrier: o.carrier,
+          codCreatedAt: o.codCreatedAt,
         },
         result
       );
@@ -880,8 +1040,9 @@ export async function refreshAllTracking(
   );
 
   // ---------- Naqel pool: 5 workers, one at a time ----------
-  // Naqel is not supported by the courier-tracking-api, so we call the
-  // Naqel official site scraper directly.
+  // Naqel is routed through the courier-tracking-api like every other
+  // carrier. The courier API scrapes the public Naqel tracking page
+  // server-side and returns a normalized event timeline.
   const NAQEL_CONCURRENCY = 5;
   const naqelQueue: ActiveOrderRow[][] = buckets.naqel.map((o) => [o]);
   totalChunks += naqelQueue.length;
@@ -894,7 +1055,11 @@ export async function refreshAllTracking(
       for (const o of chunk) {
         let result: ProviderResult;
         try {
-          result = await fetchNaqelOfficialTracking(o.trackingNumber);
+          result = await fetchCourierApiTracking(
+            o.trackingNumber,
+            TrackingCarrier.NAQEL,
+            courierApiUrl
+          );
         } catch (err) {
           const detail = err instanceof Error ? err.message : "fetch_failed";
           result = {
@@ -912,6 +1077,18 @@ export async function refreshAllTracking(
   // own worker count. The shared deadline + applyTrackingResult writes mean
   // the orchestration is naturally back-pressured by Postgres latency.
   await Promise.all([imilePool, injazPool, jdwPool, jtePool, naqelPool]);
+
+  // After every refresh cycle, sweep stale orders (>30 days since
+  // codCreatedAt, not DELIVERED / RETURNED) into EXPIRED. This is
+  // bounded by a single UPDATE so it doesn't pressure the deadline.
+  try {
+    await sweepExpiredTracking();
+  } catch (err) {
+    console.warn(
+      "[tracking-refresh] sweepExpiredTracking failed",
+      err instanceof Error ? err.message : err
+    );
+  }
 
   const totalProcessed = results.length;
   const remaining = Math.max(0, totalActive - totalProcessed);

@@ -11,6 +11,7 @@ const VALID_STATUSES = new Set<TrackingStatus>([
   TrackingStatus.RETURNED,
   TrackingStatus.EXCEPTION,
   TrackingStatus.UNKNOWN,
+  TrackingStatus.EXPIRED,
 ]);
 const VALID_CARRIERS = new Set<TrackingCarrier>([
   TrackingCarrier.IMILE,

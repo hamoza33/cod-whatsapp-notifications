@@ -21,7 +21,21 @@ const CARRIER_MAP: Partial<Record<TrackingCarrier, string>> = {
   [TrackingCarrier.INJAZ]: "injaz",
   [TrackingCarrier.JTE]: "jt",
   [TrackingCarrier.JDW]: "jdw",
+  [TrackingCarrier.NAQEL]: "naqel",
 };
+
+// Single-waybill timeout. JTE has to solve a Tencent slider captcha
+// server-side which routinely takes 60-90 s, so the timeout must be
+// generous enough for the slow-path or every JTE order falls through to
+// `courier_api_fetch_failed:timeout` and lands in UNKNOWN.
+const SINGLE_TIMEOUT_DEFAULT_MS = 30_000;
+const SINGLE_TIMEOUT_JTE_MS = 120_000;
+
+function singleTimeoutFor(carrier?: TrackingCarrier | null): number {
+  return carrier === TrackingCarrier.JTE
+    ? SINGLE_TIMEOUT_JTE_MS
+    : SINGLE_TIMEOUT_DEFAULT_MS;
+}
 
 interface CourierApiEvent {
   time: string | null;
@@ -85,7 +99,7 @@ export async function fetchCourierApiTracking(
   try {
     response = await fetch(url, {
       headers: { Accept: "application/json" },
-      signal: AbortSignal.timeout(30_000),
+      signal: AbortSignal.timeout(singleTimeoutFor(carrier)),
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : "network_error";
