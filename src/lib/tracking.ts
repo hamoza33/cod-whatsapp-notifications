@@ -209,50 +209,60 @@ function mapToTrackingStatus(
   )
     return TrackingStatus.DELIVERED;
 
-  // Terminal RETURNED — confirmed handed back to shipper / origin.
+  // Intermediate "ready to return / returning / at station / pending
+  // return decision" — NOT terminal. Checked BEFORE the RETURNED block
+  // because narratives like "ready to return to senders address" or
+  // "preparing to return to origin" contain the substrings that the
+  // terminal block would otherwise match. The package is at a carrier
+  // depot / waybill stage; the carrier has NOT yet confirmed an actual
+  // delivery back to the shipper. Operator should still see it as an
+  // active order.
   if (
-    s.includes("returned to origin") ||
-    s.includes("return to origin") ||
-    s.includes("returned to sender") ||
-    s.includes("return to sender") ||
-    s.includes("returned to the sender") ||
-    s.includes("return to the sender") ||
-    s.includes("returned to shipper") ||
-    s.includes("return to shipper") ||
-    s.includes("returned to consignor") ||
-    s.includes("return to consignor") ||
-    s.includes("back to sender") ||
-    s.includes("back to shipper") ||
-    s.includes("return to senders address") ||
-    s.includes("ready to return to senders address") ||
-    s.includes("sign for failure - returned")
-  )
-    return TrackingStatus.RETURNED;
-
-  if (s.includes("out for delivery") || s.includes("dispatched"))
-    return TrackingStatus.OUT_FOR_DELIVERY;
-
-  // Intermediate "returned to station / facility / warehouse" — NOT
-  // terminal. Package is at a carrier depot for redelivery or pending
-  // a return-to-sender decision. Map to IN_TRANSIT so the order stays
-  // in the operator's active queue until the carrier confirms an actual
-  // return-to-sender (see RETURNED check above).
-  if (
+    s.includes("ready to return") ||
+    s.includes("is ready to return") ||
+    s.includes("waiting to return") ||
+    s.includes("pending return") ||
+    s.includes("preparing to return") ||
+    s.includes("preparing for return") ||
+    s.includes("scheduled to return") ||
+    s.includes("returning to") ||
+    s.includes("being returned") ||
+    s.includes("return in progress") ||
+    s.includes("return request created") ||
     s.includes("returned to the station") ||
     s.includes("returned to station") ||
     s.includes("returned to naqel facility") ||
     s.includes("returned to facility") ||
     s.includes("returned to warehouse") ||
     s.includes("returned to the warehouse") ||
-    s.includes("return request created") ||
-    s.includes("return in progress") ||
-    s.includes("returning to") ||
-    s.includes("being returned") ||
     s.includes("back to station") ||
     s.includes("back to facility") ||
     s.includes("back to warehouse")
   )
     return TrackingStatus.IN_TRANSIT;
+
+  // Terminal RETURNED — confirmed handed back to shipper / origin.
+  // Only PAST-TENSE patterns ("returned to ...", "has been returned",
+  // "sign for failure - returned") count, because present-tense phrases
+  // like "ready to return to senders address" appear in JDW narratives
+  // when the package is still at the carrier's facility (caught above).
+  if (
+    s.includes("returned to origin") ||
+    s.includes("returned to sender") ||
+    s.includes("returned to the sender") ||
+    s.includes("returned to shipper") ||
+    s.includes("returned to the shipper") ||
+    s.includes("returned to consignor") ||
+    s.includes("returned to the consignor") ||
+    s.includes("has been returned to") ||
+    s.includes("successfully returned") ||
+    s.includes("return completed") ||
+    s.includes("sign for failure - returned")
+  )
+    return TrackingStatus.RETURNED;
+
+  if (s.includes("out for delivery") || s.includes("dispatched"))
+    return TrackingStatus.OUT_FOR_DELIVERY;
 
   // Generic delivery-failed signal that is NOT yet a refund-the-shipper
   // event. The package may be reattempted; surface as EXCEPTION so the
@@ -663,8 +673,14 @@ export async function reclassifyOtherOrders(deadlineMs?: number) {
 // based on their most-recent stored event, and writes the new status
 // without hitting the courier-tracking-api.
 //
-// Terminal statuses (DELIVERED / RETURNED / EXPIRED) are skipped — they
-// are operator-confirmed outcomes that the carrier doesn't walk back.
+// EXPIRED is skipped (purely time-derived and only ever an upgrade away
+// from an active bucket). DELIVERED is also skipped because every
+// DELIVERED pattern is unambiguous past-tense and can't be turned into
+// an active bucket by a mapper change. RETURNED IS included so that any
+// previously-mis-mapped intermediate signal (e.g. JDW "is ready to
+// return to senders address" wrongly stuck on RETURNED) gets demoted
+// back to its real bucket — correctly-classified RETURNED orders still
+// re-map to RETURNED via the past-tense patterns.
 export async function reclassifyStoredStatuses() {
   const candidates = await prisma.trackingOrder.findMany({
     where: {
@@ -675,6 +691,7 @@ export async function reclassifyStoredStatuses() {
           TrackingStatus.OUT_FOR_DELIVERY,
           TrackingStatus.EXCEPTION,
           TrackingStatus.UNKNOWN,
+          TrackingStatus.RETURNED,
         ],
       },
     },
