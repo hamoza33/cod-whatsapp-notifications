@@ -6,9 +6,6 @@ import {
 } from "./settings";
 import { runAutomationsForOrder } from "./automations";
 import { fireTrackingStatusChangedFlows, safeFireFlows } from "./automation-flows/triggers";
-import { fetchImileTracking } from "./tracking-providers/imile";
-import { fetchInjazTracking } from "./tracking-providers/injaz";
-import { fetchJdwBulk } from "./tracking-providers/jdw";
 import { fetchNaqelOfficialTracking } from "./tracking-providers/naqel";
 import { fetchCourierApiTracking } from "./tracking-providers/courier-api";
 import type {
@@ -18,44 +15,40 @@ import type {
 // ---------------------------------------------------------------------------
 // Re-exports — keep the public surface stable for existing callers and for
 // a potential rollback. Per-carrier scrapers live under src/lib/tracking-providers/.
+//
+// iMile, Injaz, J&T Express, and JDW Logistics all route through the
+// unified courier-tracking-api (https://courier-tracking-api.fly.dev),
+// which handles per-carrier auth, RSA signing for iMile, JT captcha
+// solving, and JDW captcha solving server-side. Naqel is not supported
+// by the courier API and continues to hit its public site scraper.
 // ---------------------------------------------------------------------------
 
-export { fetchImileTracking } from "./tracking-providers/imile";
-export { fetchInjazTracking } from "./tracking-providers/injaz";
-// JTE now uses the courier-tracking-api which handles Tencent Captcha
-// solving via CapSolver / 2Captcha. JDW still goes through the working
-// JD Logistics bulk endpoint.
-/**
- * JT Express tracking via the courier-tracking-api. The external service
- * handles Tencent Captcha solving automatically (via CapSolver / 2Captcha).
- * Falls back to error code if captcha solving is unavailable.
- */
-export async function fetchJteTracking(
-  trackingNumber: string
+export async function fetchImileTracking(
+  trackingNumber: string,
+  apiUrl?: string
 ): Promise<ProviderResult> {
-  return fetchCourierApiTracking(trackingNumber, TrackingCarrier.JTE);
+  return fetchCourierApiTracking(trackingNumber, TrackingCarrier.IMILE, apiUrl);
+}
+
+export async function fetchInjazTracking(
+  trackingNumber: string,
+  apiUrl?: string
+): Promise<ProviderResult> {
+  return fetchCourierApiTracking(trackingNumber, TrackingCarrier.INJAZ, apiUrl);
+}
+
+export async function fetchJteTracking(
+  trackingNumber: string,
+  apiUrl?: string
+): Promise<ProviderResult> {
+  return fetchCourierApiTracking(trackingNumber, TrackingCarrier.JTE, apiUrl);
 }
 
 export async function fetchJdwTracking(
-  trackingNumber: string
+  trackingNumber: string,
+  apiUrl?: string
 ): Promise<ProviderResult> {
-  // Single-number convenience wrapper. Reads captcha settings on demand so
-  // the legacy callers don't have to change.
-  const settings = await getSettings([
-    SETTING_KEYS.CAPTCHA_API_KEY,
-    SETTING_KEYS.CAPTCHA_PROVIDER,
-  ]);
-  const map = await fetchJdwBulk([trackingNumber], {
-    captchaApiKey: settings[SETTING_KEYS.CAPTCHA_API_KEY],
-    captchaProvider: settings[SETTING_KEYS.CAPTCHA_PROVIDER] ?? "2captcha",
-  });
-  return (
-    map.get(trackingNumber) ?? {
-      events: [],
-      rawStatus: null,
-      error: "not_found_on_jdw",
-    }
-  );
+  return fetchCourierApiTracking(trackingNumber, TrackingCarrier.JDW, apiUrl);
 }
 
 export type { ParsedEvent, ProviderResult } from "./tracking-providers/types";
@@ -86,8 +79,7 @@ export function detectCarrier(
     if (dc.includes("injaz")) return TrackingCarrier.INJAZ;
     // Match J&T / JT / J&T Express only on a word boundary so labels like
     // "Future Logistics FJT" or "JT2 Cargo" don't get misclassified as JTE
-    // (which is the manual-only no-fetch path — a misclassification would
-    // permanently park the row at `jte_manual_only`).
+    // and routed through the courier API's JT pipeline.
     // Normalize underscores / dots / slashes to spaces before testing so
     // operator labels like "JT_Express", "JT.Express" or "JT/Express"
     // aren't masked by the fact that `_` is a JS-regex word character
@@ -141,23 +133,24 @@ async function fetchTrackingByCarrier(
   carrier: TrackingCarrier,
   trackingNumber: string
 ): Promise<ProviderResult> {
-  switch (carrier) {
-    case TrackingCarrier.IMILE:
-      return fetchImileTracking(trackingNumber);
-    case TrackingCarrier.INJAZ:
-      return fetchInjazTracking(trackingNumber);
-    case TrackingCarrier.JTE: {
-      const settings = await getSettings([SETTING_KEYS.COURIER_TRACKING_API_URL]);
-      const apiUrl = settings[SETTING_KEYS.COURIER_TRACKING_API_URL] || undefined;
-      return fetchCourierApiTracking(trackingNumber, TrackingCarrier.JTE, apiUrl);
-    }
-    case TrackingCarrier.JDW:
-      return fetchJdwTracking(trackingNumber);
-    case TrackingCarrier.NAQEL:
-      return fetchNaqelOfficialTracking(trackingNumber);
-    default:
-      return { events: [], rawStatus: null };
+  // Naqel is handled directly — the courier-tracking-api does not
+  // support it. Every other carrier (iMile, Injaz, JTE, JDW) goes
+  // through the unified courier API so we have one consistent source
+  // of tracking data across the entire fleet.
+  if (carrier === TrackingCarrier.NAQEL) {
+    return fetchNaqelOfficialTracking(trackingNumber);
   }
+  if (
+    carrier === TrackingCarrier.IMILE ||
+    carrier === TrackingCarrier.INJAZ ||
+    carrier === TrackingCarrier.JTE ||
+    carrier === TrackingCarrier.JDW
+  ) {
+    const settings = await getSettings([SETTING_KEYS.COURIER_TRACKING_API_URL]);
+    const apiUrl = settings[SETTING_KEYS.COURIER_TRACKING_API_URL] || undefined;
+    return fetchCourierApiTracking(trackingNumber, carrier, apiUrl);
+  }
+  return { events: [], rawStatus: null };
 }
 
 // ---------------------------------------------------------------------------
@@ -466,21 +459,23 @@ export async function reclassifyOtherOrders(deadlineMs?: number) {
 }
 
 // ---------------------------------------------------------------------------
-// Bulk refresh — 4 concurrent worker pools.
+// Bulk refresh — 5 concurrent worker pools, one per carrier.
+//
+// Every carrier the courier-tracking-api supports — iMile, Injaz, JTE,
+// JDW — now routes through a single unified provider call. This keeps
+// the source of truth consistent across the entire shipment fleet and
+// removes the per-carrier authentication / captcha plumbing from this
+// codebase. Naqel is the lone exception because the courier API does
+// not support it; it continues to hit the Naqel public site scraper.
 //
 // Pool topology:
-//   - imile: 5 workers, chunk-size 1, calling fetchImileTracking() per
-//     number against the RSA direct API. (4tracking.net has been removed —
-//     it's a Cloudflare-protected SPA; see four-tracking.ts for details.)
-//   - injaz: 5 workers, chunk-size 1, calling fetchInjazTracking() per
-//     number against the public HTML scraper.
-//   - jdw:   5 workers, chunk-size 10, calling fetchJdwBulk() against the
-//     JD Logistics consumer endpoint (the only true batch endpoint).
-//   - jte:   NO HTTP fetch. JT Express requires Tencent Captcha + a
-//     dynamic ofmg.jtjms-sa.com URL that's not viable without a headless
-//     browser. Each JTE row is persisted with `error: 'jte_manual_only'`
-//     so lastCheckedAt advances and the UI can render an "Open in JT
-//     website" link instead of a broken refresh.
+//   - imile: 5 workers, chunk-size 1, calling fetchCourierApiTracking().
+//   - injaz: 5 workers, chunk-size 1, calling fetchCourierApiTracking().
+//   - jdw:   5 workers, chunk-size 1, calling fetchCourierApiTracking().
+//   - jte:   3 workers, chunk-size 1, calling fetchCourierApiTracking().
+//            Lower concurrency because each JTE call triggers a Tencent
+//            Captcha solve upstream and routinely takes 30+ seconds.
+//   - naqel: 5 workers, chunk-size 1, calling fetchNaqelOfficialTracking().
 //
 // Each per-tracking-number outcome is persisted via applyTrackingResult().
 // The TrackingOrder.lastCheckedAt always advances even on error so the next
@@ -493,7 +488,6 @@ export async function reclassifyOtherOrders(deadlineMs?: number) {
 
 const IMILE_CONCURRENCY = 5;
 const INJAZ_CONCURRENCY = 5;
-const JDW_CHUNK_SIZE = 10;
 const JDW_CONCURRENCY = 5;
 const RECLASSIFY_CONCURRENCY = 5;
 const RECLASSIFY_TAKE = 250;
@@ -558,15 +552,10 @@ export async function refreshAllTracking(
   // burn the entire budget on reclassification.
   const reclassifyResult = await reclassifyOtherOrders(deadline);
 
-  // Read captcha + courier API settings once.
+  // Read the courier API URL override once so every pool shares it.
   const trackingSettings = await getSettings([
-    SETTING_KEYS.CAPTCHA_API_KEY,
-    SETTING_KEYS.CAPTCHA_PROVIDER,
     SETTING_KEYS.COURIER_TRACKING_API_URL,
   ]);
-  const captchaApiKey = trackingSettings[SETTING_KEYS.CAPTCHA_API_KEY];
-  const captchaProvider =
-    trackingSettings[SETTING_KEYS.CAPTCHA_PROVIDER] ?? "2captcha";
   const courierApiUrl =
     trackingSettings[SETTING_KEYS.COURIER_TRACKING_API_URL] || undefined;
 
@@ -604,7 +593,7 @@ export async function refreshAllTracking(
     },
   })) as ActiveOrderRow[];
 
-  // Group by carrier into 4 buckets.
+  // Group by carrier into 5 buckets.
   const buckets = {
     imile: [] as ActiveOrderRow[],
     jte: [] as ActiveOrderRow[],
@@ -674,9 +663,7 @@ export async function refreshAllTracking(
   };
 
   // ---------- iMile pool: 5 workers, one number at a time ----------
-  // We chunk to size 1 so the pool drives 5 concurrent single-number calls
-  // against the iMile RSA direct API. (4tracking.net has been removed; see
-  // four-tracking.ts for the reason.)
+  // Routes through the unified courier-tracking-api.
   const imileQueue: ActiveOrderRow[][] = buckets.imile.map((o) => [o]);
   totalChunks += imileQueue.length;
 
@@ -688,13 +675,17 @@ export async function refreshAllTracking(
       for (const o of chunk) {
         let result: ProviderResult;
         try {
-          result = await fetchImileTracking(o.trackingNumber);
+          result = await fetchCourierApiTracking(
+            o.trackingNumber,
+            TrackingCarrier.IMILE,
+            courierApiUrl
+          );
         } catch (err) {
           const detail = err instanceof Error ? err.message : "fetch_failed";
           result = {
             events: [],
             rawStatus: null,
-            error: `imile_error:${detail}`,
+            error: `courier_api_error:${detail}`,
           };
         }
         try {
@@ -824,11 +815,9 @@ export async function refreshAllTracking(
     }
   );
 
-  // ---------- JDW pool ----------
-  const jdwQueue: ActiveOrderRow[][] = [];
-  for (let i = 0; i < buckets.jdw.length; i += JDW_CHUNK_SIZE) {
-    jdwQueue.push(buckets.jdw.slice(i, i + JDW_CHUNK_SIZE));
-  }
+  // ---------- JDW pool: 5 workers, one number at a time ----------
+  // Routes through the unified courier-tracking-api.
+  const jdwQueue: ActiveOrderRow[][] = buckets.jdw.map((o) => [o]);
   totalChunks += jdwQueue.length;
 
   const jdwPool = drainQueue(
@@ -836,37 +825,22 @@ export async function refreshAllTracking(
     JDW_CONCURRENCY,
     deadline,
     async (chunk) => {
-      const numbers = chunk.map((o) => o.trackingNumber);
-      let map: Map<string, ProviderResult>;
-      try {
-        map = await fetchJdwBulk(numbers, {
-          captchaApiKey,
-          captchaProvider,
-        });
-      } catch (err) {
-        const detail = err instanceof Error ? err.message : "fetch_failed";
-        for (const o of chunk) {
-          await applyTrackingResult(
-            {
-              orderId: o.id,
-              trackingNumber: o.trackingNumber,
-              currentLatestEvent: o.latestEvent,
-              currentLatestEventAt: o.latestEventAt,
-              carrier: o.carrier,
-            },
-            { events: [], rawStatus: null, error: `jdw_error:${detail}` }
-          );
-          recordOutcome(o, { ok: false, error: detail });
-        }
-        return;
-      }
-
       for (const o of chunk) {
-        const result = map.get(o.trackingNumber) ?? {
-          events: [],
-          rawStatus: null,
-          error: "not_found_on_jdw",
-        };
+        let result: ProviderResult;
+        try {
+          result = await fetchCourierApiTracking(
+            o.trackingNumber,
+            TrackingCarrier.JDW,
+            courierApiUrl
+          );
+        } catch (err) {
+          const detail = err instanceof Error ? err.message : "fetch_failed";
+          result = {
+            events: [],
+            rawStatus: null,
+            error: `courier_api_error:${detail}`,
+          };
+        }
         try {
           const persisted = await applyTrackingResult(
             {
@@ -893,7 +867,7 @@ export async function refreshAllTracking(
   );
 
   // ---------- Injaz pool: 5 workers, one number at a time ----------
-  // We chunk to size 1 so the pool drives 5 concurrent single-number scrapes.
+  // Routes through the unified courier-tracking-api.
   const injazQueue: ActiveOrderRow[][] = buckets.injaz.map((o) => [o]);
   totalChunks += injazQueue.length;
 
@@ -905,10 +879,14 @@ export async function refreshAllTracking(
       for (const o of chunk) {
         let result: ProviderResult;
         try {
-          result = await fetchInjazTracking(o.trackingNumber);
+          result = await fetchCourierApiTracking(
+            o.trackingNumber,
+            TrackingCarrier.INJAZ,
+            courierApiUrl
+          );
         } catch (err) {
           const detail = err instanceof Error ? err.message : "fetch_failed";
-          result = { events: [], rawStatus: null, error: `injaz_error:${detail}` };
+          result = { events: [], rawStatus: null, error: `courier_api_error:${detail}` };
         }
         try {
           const persisted = await applyTrackingResult(
