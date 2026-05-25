@@ -536,9 +536,20 @@ export interface RefreshAllResult {
   };
 }
 
+export interface RefreshAllOptions {
+  limit?: number;
+  /**
+   * When true, the bulk pool also re-checks DELIVERED and RETURNED orders.
+   * Defaults to false so the cron tick stays bounded to active states
+   * (the manual "Refresh All" UI button passes true).
+   */
+  includeFinal?: boolean;
+}
+
 export async function refreshAllTracking(
-  limit?: number
+  opts: RefreshAllOptions = {}
 ): Promise<RefreshAllResult> {
+  const { limit, includeFinal = false } = opts;
   const wallClockMs = DEFAULT_WALL_CLOCK_MS;
   const startedAt = Date.now();
   const deadline = startedAt + wallClockMs;
@@ -559,17 +570,21 @@ export async function refreshAllTracking(
   const courierApiUrl =
     trackingSettings[SETTING_KEYS.COURIER_TRACKING_API_URL] || undefined;
 
-  const activeFilter = {
-    status: {
-      in: [
-        TrackingStatus.PENDING,
-        TrackingStatus.IN_TRANSIT,
-        TrackingStatus.OUT_FOR_DELIVERY,
-        TrackingStatus.EXCEPTION,
-        TrackingStatus.UNKNOWN,
-      ],
-    },
+  const activeFilter: Prisma.TrackingOrderWhereInput = {
     carrier: { not: TrackingCarrier.OTHER },
+    ...(includeFinal
+      ? {}
+      : {
+          status: {
+            in: [
+              TrackingStatus.PENDING,
+              TrackingStatus.IN_TRANSIT,
+              TrackingStatus.OUT_FOR_DELIVERY,
+              TrackingStatus.EXCEPTION,
+              TrackingStatus.UNKNOWN,
+            ],
+          },
+        }),
   };
 
   const totalActive = await prisma.trackingOrder.count({ where: activeFilter });
