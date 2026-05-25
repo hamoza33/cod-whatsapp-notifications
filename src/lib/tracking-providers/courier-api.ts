@@ -131,19 +131,170 @@ export async function fetchCourierApiTracking(
 }
 
 /**
- * Batch-fetch tracking for multiple waybills. Calls the courier API
- * sequentially for each number (the API doesn't have a batch endpoint).
- * Returns a map of tracking number → ProviderResult.
+ * Bulk-fetch tracking for up to 100 waybills in a single HTTP request via
+ * the courier API's `POST /track/bulk` endpoint. The API processes non-JT
+ * waybills in parallel server-side, so this is dramatically faster than
+ * calling /track once per waybill (≈50 numbers per few seconds).
+ *
+ * J&T waybills are processed sequentially server-side due to the captcha
+ * solve, so when the chunk contains JTE numbers they still pay that cost.
+ *
+ * Returns a Map keyed by trimmed tracking number. Missing entries fall back
+ * to a `bulk_missing_response` error.
+ */
+const BULK_MAX_PER_REQUEST = 100;
+
+interface CourierApiBulkRequestItem {
+  waybill: string;
+  carrier?: string;
+}
+
+interface CourierApiBulkResponseItem {
+  waybill: string;
+  carrier: string;
+  result?: CourierApiResult;
+  error?: { message: string; captchaRequired?: boolean };
+}
+
+interface CourierApiBulkResponse {
+  total: number;
+  successful: number;
+  failed: number;
+  results: CourierApiBulkResponseItem[];
+}
+
+export async function fetchCourierApiBulk(
+  trackingNumbers: string[],
+  carrier?: TrackingCarrier | null,
+  apiUrl?: string
+): Promise<Map<string, ProviderResult>> {
+  const map = new Map<string, ProviderResult>();
+  if (trackingNumbers.length === 0) return map;
+
+  const base = (apiUrl || DEFAULT_API_URL).replace(/\/$/, "");
+  const carrierCode = carrier ? CARRIER_MAP[carrier] : undefined;
+
+  for (let i = 0; i < trackingNumbers.length; i += BULK_MAX_PER_REQUEST) {
+    const slice = trackingNumbers.slice(i, i + BULK_MAX_PER_REQUEST);
+    const items: CourierApiBulkRequestItem[] = slice.map((tn) =>
+      carrierCode
+        ? { waybill: tn, carrier: carrierCode }
+        : { waybill: tn }
+    );
+
+    let response: Response;
+    try {
+      response = await fetch(`${base}/track/bulk`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json",
+        },
+        body: JSON.stringify({ waybills: items }),
+        // Allow generous time for chunks containing J&T (~30s/item sequential).
+        signal: AbortSignal.timeout(120_000),
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "network_error";
+      for (const tn of slice) {
+        map.set(tn, {
+          events: [],
+          rawStatus: null,
+          error: `courier_api_bulk_failed:${msg}`,
+        });
+      }
+      continue;
+    }
+
+    if (!response.ok) {
+      let errMsg = "unknown";
+      try {
+        const body = (await response.json()) as { error?: string };
+        if (body?.error) errMsg = body.error;
+      } catch {
+        /* ignore */
+      }
+      for (const tn of slice) {
+        map.set(tn, {
+          events: [],
+          rawStatus: null,
+          error: `courier_api_bulk_error:${response.status}:${errMsg}`,
+        });
+      }
+      continue;
+    }
+
+    let body: CourierApiBulkResponse;
+    try {
+      body = (await response.json()) as CourierApiBulkResponse;
+    } catch {
+      for (const tn of slice) {
+        map.set(tn, {
+          events: [],
+          rawStatus: null,
+          error: "courier_api_bulk_invalid_json",
+        });
+      }
+      continue;
+    }
+
+    for (const item of body.results) {
+      const waybill = item.waybill;
+      if (item.error) {
+        if (item.error.captchaRequired) {
+          map.set(waybill, {
+            events: [],
+            rawStatus: null,
+            error: "captcha_required",
+          });
+        } else {
+          map.set(waybill, {
+            events: [],
+            rawStatus: null,
+            error: `courier_api_bulk_item_error:${item.error.message}`,
+          });
+        }
+        continue;
+      }
+      const result = item.result;
+      if (!result || !result.found || result.events.length === 0) {
+        map.set(waybill, {
+          events: [],
+          rawStatus: result?.latestStatus ?? null,
+          error: "not_found_on_courier_api",
+        });
+        continue;
+      }
+      map.set(waybill, {
+        events: result.events.map(parseEvent),
+        rawStatus: result.latestStatus,
+      });
+    }
+
+    // Fill in any waybill that the response did not echo back.
+    for (const tn of slice) {
+      if (!map.has(tn)) {
+        map.set(tn, {
+          events: [],
+          rawStatus: null,
+          error: "bulk_missing_response",
+        });
+      }
+    }
+  }
+
+  return map;
+}
+
+/**
+ * Legacy per-call batch helper kept for any consumer that hasn't migrated
+ * to the bulk endpoint yet. Internally now delegates to fetchCourierApiBulk
+ * so callers get the bulk speed-up for free.
  */
 export async function fetchCourierApiBatch(
   trackingNumbers: string[],
   carrier?: TrackingCarrier | null,
   apiUrl?: string
 ): Promise<Map<string, ProviderResult>> {
-  const map = new Map<string, ProviderResult>();
-  for (const tn of trackingNumbers) {
-    const result = await fetchCourierApiTracking(tn, carrier, apiUrl);
-    map.set(tn, result);
-  }
-  return map;
+  return fetchCourierApiBulk(trackingNumbers, carrier, apiUrl);
 }

@@ -221,6 +221,7 @@ export default function TrackingPage() {
   const [orders, setOrders] = useState<TrackingOrder[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [refreshingSection, setRefreshingSection] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [reclassifying, setReclassifying] = useState(false);
   const [search, setSearch] = useState("");
@@ -390,8 +391,17 @@ export default function TrackingPage() {
     setPage(1);
   };
 
-  const handleRefreshAll = async () => {
-    setRefreshing(true);
+  // Drives both the "Refresh All" and "Refresh Section" buttons. When
+  // statusOverride/carrierOverride are passed they are forwarded to the
+  // refresh API as ?status= and ?carrier= so only the matching bucket is
+  // re-tracked.
+  const runRefresh = async (
+    setBusy: (b: boolean) => void,
+    label: string,
+    statusOverride?: TrackingStatus,
+    carrierOverride?: string
+  ) => {
+    setBusy(true);
     type CarrierStats = { processed: number; eventsAdded: number; errors: number };
     const totals: Record<"imile" | "jte" | "jdw" | "injaz" | "naqel", CarrierStats> = {
       imile: { processed: 0, eventsAdded: 0, errors: 0 },
@@ -414,9 +424,21 @@ export default function TrackingPage() {
         if (s.processed === 0) continue;
         parts.push(`${labels[k]}: ${s.processed} processed (${s.eventsAdded} updated)`);
       }
-      const head = parts.length > 0 ? parts.join(", ") : "No active orders";
+      const head = parts.length > 0 ? parts.join(", ") : "No matching orders";
       return remaining > 0 ? `${head}. ${remaining} remaining.` : head;
     };
+    const params = new URLSearchParams();
+    // When a status pill is selected (Refresh Section), forward it as the
+    // status filter — the server lets DELIVERED / RETURNED through that
+    // path. "Refresh All" (no statusOverride) deliberately omits
+    // includeFinal so terminal buckets are NOT re-checked on every click;
+    // use Refresh Section + the Delivered/Returned pill to re-verify those.
+    if (statusOverride) {
+      params.set("status", statusOverride);
+      params.set("includeFinal", "true");
+    }
+    if (carrierOverride) params.set("carrier", carrierOverride);
+    const url = `/tracking/refresh?${params.toString()}`;
     let totalDone = 0;
     try {
       let hasMore = true;
@@ -428,7 +450,7 @@ export default function TrackingPage() {
           totalActive: number;
           reclassified: number;
           byCarrier?: Record<keyof typeof totals, CarrierStats>;
-        }>("/tracking/refresh");
+        }>(url);
         totalDone += result.totalProcessed;
         if (result.byCarrier) {
           for (const k of Object.keys(totals) as (keyof typeof totals)[]) {
@@ -449,15 +471,43 @@ export default function TrackingPage() {
       }
       await fetchOrders();
       await fetchCounts();
-      showToast("success", `Refreshed ${totalDone} orders. ${formatBreakdown(0)}`);
+      showToast(
+        "success",
+        `${label}: ${totalDone} orders. ${formatBreakdown(0)}`
+      );
     } catch (err) {
       showToast(
         "error",
         err instanceof Error ? err.message : "Refresh failed"
       );
     } finally {
-      setRefreshing(false);
+      setBusy(false);
     }
+  };
+
+  // "Refresh All" re-checks only the active buckets (Pending, In Transit,
+  // Out for Delivery, Exception, Unknown). DELIVERED and RETURNED are
+  // terminal — re-tracking them on every click burned ~70 % of the budget
+  // for no signal change. To re-verify a terminal bucket, select its pill
+  // and use Refresh Section.
+  const handleRefreshAll = () =>
+    runRefresh(setRefreshing, "Refreshed active");
+
+  // Refreshes only orders matching the currently selected status pill (and
+  // carrier dropdown, if any) — gives users a way to re-track a single
+  // section (e.g. just Delivered, or just iMile Pending) without paying
+  // the full ~3 min Refresh-All cost or touching other buckets.
+  const handleRefreshSection = () => {
+    if (!filterStatus) return;
+    const label = filterCarrier
+      ? `Refreshed ${filterCarrier} ${STATUS_LABELS[filterStatus as TrackingStatus]}`
+      : `Refreshed ${STATUS_LABELS[filterStatus as TrackingStatus]}`;
+    return runRefresh(
+      setRefreshingSection,
+      label,
+      filterStatus as TrackingStatus,
+      filterCarrier || undefined
+    );
   };
 
   const handleSyncAll = async () => {
@@ -579,8 +629,11 @@ export default function TrackingPage() {
             </span>
           </h1>
           <p className="text-sm text-gray-600 mt-1">
-            Tracks pending & in-transit orders automatically. Delivered/returned
-            orders are skipped.
+            Background tracking refreshes pending & in-transit orders
+            automatically. “Refresh All” re-checks every active bucket
+            (Pending, In Transit, Out for Delivery, Exception, Unknown). To
+            re-verify Delivered or Returned, pick that status pill and use
+            “Refresh Section”.
           </p>
         </div>
         <div className="flex gap-2">
@@ -616,8 +669,29 @@ export default function TrackingPage() {
             {reclassifying ? "Reclassifying..." : "Reclassify"}
           </button>
           <button
+            onClick={handleRefreshSection}
+            disabled={
+              refreshing || refreshingSection || !filterStatus
+            }
+            title={
+              filterStatus
+                ? `Refresh only ${
+                    STATUS_LABELS[filterStatus as TrackingStatus]
+                  } orders${filterCarrier ? ` (${filterCarrier})` : ""}`
+                : "Select a status pill to enable section refresh"
+            }
+            className="flex items-center gap-2 px-3 py-2 bg-gray-100 text-gray-700 rounded-md text-sm font-medium hover:bg-gray-200 disabled:opacity-50"
+          >
+            <RefreshCw
+              size={16}
+              className={refreshingSection ? "animate-spin" : ""}
+            />
+            Refresh Section
+          </button>
+          <button
             onClick={handleRefreshAll}
-            disabled={refreshing}
+            disabled={refreshing || refreshingSection}
+            title="Re-check all active orders (skips Delivered & Returned). Use Refresh Section on the Delivered/Returned pill to re-verify those."
             className="flex items-center gap-2 px-3 py-2 bg-gray-100 text-gray-700 rounded-md text-sm font-medium hover:bg-gray-200 disabled:opacity-50"
           >
             <RefreshCw
@@ -659,8 +733,8 @@ export default function TrackingPage() {
             ))}
           </div>
           <p className="text-xs text-gray-400 mt-2">
-            Only pending and in-transit orders are refreshed. Delivered and
-            returned orders are skipped.
+            Auto-refresh covers pending and in-transit orders. Click Refresh
+            All to re-check every order, including delivered and returned.
           </p>
         </div>
       )}
