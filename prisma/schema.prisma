@@ -416,6 +416,7 @@ enum TrackingStatus {
   RETURNED
   EXCEPTION
   UNKNOWN
+  EXPIRED
 }
 
 /// A package being tracked via iMile or Injaz Express. Tracking numbers
