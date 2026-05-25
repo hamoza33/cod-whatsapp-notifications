@@ -177,14 +177,29 @@ async function fetchTrackingByCarrier(
  *       OUT_FOR_DELIVERY "Out For Delivery with Courier"
  *       EXCEPTION   "Delivery attempted – Consignee refused"
  *  iMile RETURNED ✓ "returned to sender" / "sign for failure - returned"
+ *  JTE   DELIVERED ✓ status="Sign scan"        desc="...has been signed by [Receiver signed]..."
+ *        RETURNED ✓  status="Sign scan"        desc="...returned to the sender..."
+ *
+ * `rawStatus` is the short upstream status code (e.g. JT's "Sign scan"
+ * or JDW's null) and `eventDescription` is the human-readable narrative
+ * from the latest event. Both signals are merged because real carriers
+ * leave the meaningful keywords in different fields — JDW puts them in
+ * the description and leaves status empty, while iMile puts them in the
+ * status. We honour whichever signal hints at a terminal state first.
  */
 function mapToTrackingStatus(
   _carrier: TrackingCarrier,
-  rawStatus: string | null
+  rawStatus: string | null,
+  eventDescription?: string | null
 ): TrackingStatus {
-  if (!rawStatus) return TrackingStatus.UNKNOWN;
+  const parts: string[] = [];
+  if (rawStatus) parts.push(rawStatus);
+  if (eventDescription && eventDescription !== rawStatus) {
+    parts.push(eventDescription);
+  }
+  if (parts.length === 0) return TrackingStatus.UNKNOWN;
 
-  const s = rawStatus.toLowerCase();
+  const s = parts.join(" | ").toLowerCase();
 
   if (
     s.includes("delivered") ||
@@ -200,6 +215,8 @@ function mapToTrackingStatus(
     s.includes("return to origin") ||
     s.includes("returned to sender") ||
     s.includes("return to sender") ||
+    s.includes("returned to the sender") ||
+    s.includes("return to the sender") ||
     s.includes("returned to shipper") ||
     s.includes("return to shipper") ||
     s.includes("returned to consignor") ||
@@ -410,12 +427,21 @@ async function applyTrackingResult(
   // events. This avoids demoting a correctly-recorded DELIVERED / RETURNED
   // order back to UNKNOWN just because a single courier-API call failed,
   // timed out, or returned an empty response. Status only moves forward
-  // when we actually have a new event (events.length > 0) with a real
-  // rawStatus we can map.
-  let status =
-    events.length > 0 && rawStatus
-      ? mapToTrackingStatus(opts.carrier, rawStatus)
-      : opts.currentStatus;
+  // when we actually have a new event we can map (rawStatus OR the event
+  // description — JDW returns no status field and JT's "Sign scan" is too
+  // generic, so the description is often the only place the real terminal
+  // signal — "returned to the sender", "Receiver signed" — appears).
+  let status = opts.currentStatus;
+  if (latestEvent) {
+    const mapped = mapToTrackingStatus(
+      opts.carrier,
+      rawStatus,
+      latestEvent.description
+    );
+    if (mapped !== TrackingStatus.UNKNOWN) {
+      status = mapped;
+    }
+  }
 
   // Inline EXPIRED classification: if the order is older than 30 days
   // since its COD-Network creation date AND the carrier-derived status
@@ -624,6 +650,77 @@ export async function reclassifyOtherOrders(deadlineMs?: number) {
     totalScanned: otherOrders.length,
     ...(cappedAt !== null ? { cappedAt } : {}),
   };
+}
+
+// ---------------------------------------------------------------------------
+// Re-classify stored tracking statuses without re-fetching
+// ---------------------------------------------------------------------------
+//
+// When the mapper rules change (e.g. we add "returned to the sender" as a
+// terminal pattern), existing tracking_orders rows can be stuck on a
+// stale status even though their `tracking_events` already contain the
+// signal we now recognise. This sweeps all non-terminal orders, re-maps
+// based on their most-recent stored event, and writes the new status
+// without hitting the courier-tracking-api.
+//
+// Terminal statuses (DELIVERED / RETURNED / EXPIRED) are skipped — they
+// are operator-confirmed outcomes that the carrier doesn't walk back.
+export async function reclassifyStoredStatuses() {
+  const candidates = await prisma.trackingOrder.findMany({
+    where: {
+      status: {
+        in: [
+          TrackingStatus.PENDING,
+          TrackingStatus.IN_TRANSIT,
+          TrackingStatus.OUT_FOR_DELIVERY,
+          TrackingStatus.EXCEPTION,
+          TrackingStatus.UNKNOWN,
+        ],
+      },
+    },
+    select: {
+      id: true,
+      carrier: true,
+      status: true,
+      codCreatedAt: true,
+      events: {
+        orderBy: { occurredAt: "desc" },
+        take: 1,
+        select: { status: true, description: true },
+      },
+    },
+  });
+
+  let reclassified = 0;
+  for (const row of candidates) {
+    const latest = row.events[0];
+    let target: TrackingStatus = row.status;
+
+    if (latest) {
+      const mapped = mapToTrackingStatus(
+        row.carrier,
+        latest.status,
+        latest.description
+      );
+      if (mapped !== TrackingStatus.UNKNOWN) {
+        target = mapped;
+      }
+    }
+
+    if (isExpirable(target) && isStaleForExpiry(row.codCreatedAt)) {
+      target = TrackingStatus.EXPIRED;
+    }
+
+    if (target !== row.status) {
+      await prisma.trackingOrder.update({
+        where: { id: row.id },
+        data: { status: target },
+      });
+      reclassified++;
+    }
+  }
+
+  return { reclassified, totalScanned: candidates.length };
 }
 
 // ---------------------------------------------------------------------------
