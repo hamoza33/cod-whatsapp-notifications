@@ -5,6 +5,7 @@ import { OrderStatus } from "@prisma/client";
 import { randomBytes } from "crypto";
 import {
   fireOrderCreatedFlows,
+  fireOrderTrackingAssignedFlows,
   safeFireFlows,
 } from "@/lib/automation-flows/triggers";
 
@@ -209,6 +210,12 @@ export async function POST(request: NextRequest) {
     fireOrderCreatedFlows(order.id),
     `ORDER_CREATED flow for order ${order.id}`
   ).catch(() => {});
+  if (order.trackingNumber && order.trackingNumber.trim() !== "") {
+    safeFireFlows(
+      fireOrderTrackingAssignedFlows(order.id),
+      `ORDER_TRACKING_ASSIGNED flow for order ${order.id}`
+    ).catch(() => {});
+  }
 
   return NextResponse.json({ order });
 }

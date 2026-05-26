@@ -14,6 +14,7 @@ import { deriveOrderStatus } from "./order-status";
 import { runAutomationsForOrder } from "./automations";
 import {
   fireOrderCreatedFlows,
+  fireOrderTrackingAssignedFlows,
   fireOrderStatusChangedFlows,
   safeFireFlows,
 } from "./automation-flows/triggers";
@@ -234,6 +235,13 @@ async function upsertOrder(
     const trackingChanged =
       (trackingNumber && trackingNumber !== existing.trackingNumber) ||
       (rawStatusLabel && rawStatusLabel !== existing.codDeliveryStatus);
+    // Tracking was just observed for the first time — used to fire
+    // ORDER_TRACKING_ASSIGNED flows below. Treat empty strings the same
+    // as null so a whitespace-only previous value still counts as "was
+    // missing".
+    const trackingJustAssigned =
+      (!existing.trackingNumber || existing.trackingNumber.trim() === "") &&
+      !!(trackingNumber && trackingNumber.trim() !== "");
     await prisma.order.update({
       where: { codNetworkOrderId: codOrderId },
       data: {
@@ -268,6 +276,12 @@ async function upsertOrder(
         await safeFireFlows(
           fireOrderStatusChangedFlows(existing.id, existing.status, status),
           `ORDER_STATUS_CHANGED flow for order ${existing.id}`
+        );
+      }
+      if (trackingJustAssigned) {
+        await safeFireFlows(
+          fireOrderTrackingAssignedFlows(existing.id),
+          `ORDER_TRACKING_ASSIGNED flow for order ${existing.id}`
         );
       }
     }
@@ -306,6 +320,12 @@ async function upsertOrder(
         fireOrderCreatedFlows(created.id),
         `ORDER_CREATED flow for order ${created.id}`
       );
+      if (trackingNumber && trackingNumber.trim() !== "") {
+        await safeFireFlows(
+          fireOrderTrackingAssignedFlows(created.id),
+          `ORDER_TRACKING_ASSIGNED flow for order ${created.id}`
+        );
+      }
     }
   }
 }

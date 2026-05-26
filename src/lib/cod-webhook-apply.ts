@@ -8,6 +8,7 @@ import { runAutomationsForOrder } from "./automations";
 import {
   fireOrderCreatedFlows,
   fireOrderStatusChangedFlows,
+  fireOrderTrackingAssignedFlows,
   safeFireFlows,
 } from "./automation-flows/triggers";
 
@@ -224,6 +225,15 @@ export async function applyWebhookEvent(
     created = true;
   }
 
+  // Detect whether the webhook just observed a tracking number for the
+  // first time — either on a brand-new order or as the first update that
+  // fills in a previously-empty tracking field. Empty strings are treated
+  // the same as null so a whitespace-only previous value still counts.
+  const hadTrackingBefore =
+    !!(existing?.trackingNumber && existing.trackingNumber.trim() !== "");
+  const hasTrackingNow = !!(trackingNumber && trackingNumber.trim() !== "");
+  const trackingJustAssigned = !hadTrackingBefore && hasTrackingNow;
+
   // Fire automation rules when status OR tracking data changes. Run in
   // best-effort mode so a single bad rule doesn't 500 the webhook (COD
   // Network would otherwise retry forever).
@@ -246,6 +256,12 @@ export async function applyWebhookEvent(
           orderRow.status
         ),
         `ORDER_STATUS_CHANGED flow for order ${orderRow.id}`
+      ).catch(() => {});
+    }
+    if (trackingJustAssigned) {
+      safeFireFlows(
+        fireOrderTrackingAssignedFlows(orderRow.id),
+        `ORDER_TRACKING_ASSIGNED flow for order ${orderRow.id}`
       ).catch(() => {});
     }
   }

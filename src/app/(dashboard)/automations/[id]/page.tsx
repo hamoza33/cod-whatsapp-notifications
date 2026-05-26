@@ -16,7 +16,16 @@
 
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type FocusEvent,
+  type KeyboardEvent,
+  type MouseEvent,
+} from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import {
@@ -70,6 +79,7 @@ import { api } from "@/lib/api-client";
 
 type FlowTriggerType =
   | "ORDER_CREATED"
+  | "ORDER_TRACKING_ASSIGNED"
   | "ORDER_STATUS_CHANGED"
   | "TRACKING_STATUS_CHANGED"
   | "MESSAGE_RECEIVED"
@@ -229,6 +239,7 @@ const TRACKING_STATUSES = [
 
 const TRIGGER_LABELS: Record<FlowTriggerType, string> = {
   ORDER_CREATED: "Order created",
+  ORDER_TRACKING_ASSIGNED: "Tracking number assigned",
   ORDER_STATUS_CHANGED: "Order status changed",
   TRACKING_STATUS_CHANGED: "Tracking status changed",
   MESSAGE_RECEIVED: "Customer reply received",
@@ -1235,21 +1246,18 @@ function ActionInspector({
 
       {data.action === "send_text_message" && (
         <>
-          <label className="text-[12px] text-gray-700 block">
-            Message text
-            <textarea
-              value={data.text ?? ""}
-              onChange={(e) => onChange({ text: e.target.value } as Partial<FlowNodeData>)}
-              rows={4}
-              placeholder="Hi {{order.customerName}}, your order is on its way!"
-              className="mt-1 w-full border border-gray-200 rounded-md px-2 py-1 text-[12px]"
-            />
-          </label>
+          <TextareaWithDataPoints
+            label="Message text"
+            value={data.text ?? ""}
+            rows={4}
+            placeholder="Hi {{order.customerName}}, your order is on its way!"
+            dataPoints={dataPoints}
+            onChange={(v) => onChange({ text: v } as Partial<FlowNodeData>)}
+          />
           <div className="text-[10px] text-gray-500 leading-relaxed">
             Free-form text only delivers if the customer messaged you in the
             last 24 hours (Meta limitation). Use Send Template for cold sends.
           </div>
-          <DataPointHelper dataPoints={dataPoints} />
         </>
       )}
 
@@ -1265,19 +1273,14 @@ function ActionInspector({
       )}
 
       {data.action === "add_pipeline_note" && (
-        <>
-          <label className="text-[12px] text-gray-700 block">
-            Note
-            <textarea
-              value={data.note ?? ""}
-              onChange={(e) => onChange({ note: e.target.value } as Partial<FlowNodeData>)}
-              rows={3}
-              placeholder="Auto-noted: customer in {{order.customerCity}}"
-              className="mt-1 w-full border border-gray-200 rounded-md px-2 py-1 text-[12px]"
-            />
-          </label>
-          <DataPointHelper dataPoints={dataPoints} />
-        </>
+        <TextareaWithDataPoints
+          label="Note"
+          value={data.note ?? ""}
+          rows={3}
+          placeholder="Auto-noted: customer in {{order.customerCity}}"
+          dataPoints={dataPoints}
+          onChange={(v) => onChange({ note: v } as Partial<FlowNodeData>)}
+        />
       )}
 
       {data.action === "wait" && (
@@ -1358,6 +1361,53 @@ function TemplateVariablesEditor({
   expectedCount: number;
   onChange: (vars: string[]) => void;
 }) {
+  const inputRefs = useRef<Array<HTMLInputElement | null>>([]);
+  const [activeIdx, setActiveIdx] = useState<number | null>(
+    variables.length > 0 ? 0 : null
+  );
+  const cursorRef = useRef<{ start: number; end: number }>({ start: 0, end: 0 });
+
+  const captureCursor = (el: HTMLInputElement) => {
+    cursorRef.current = {
+      start: el.selectionStart ?? el.value.length,
+      end: el.selectionEnd ?? el.value.length,
+    };
+  };
+
+  const insertToken = (token: string) => {
+    // No slots yet — create one containing the token.
+    if (variables.length === 0) {
+      onChange([token]);
+      setActiveIdx(0);
+      return;
+    }
+    const idx =
+      activeIdx !== null && activeIdx >= 0 && activeIdx < variables.length
+        ? activeIdx
+        : variables.length - 1;
+    const slot = variables[idx] ?? "";
+    const start = Math.min(cursorRef.current.start, slot.length);
+    const end = Math.min(cursorRef.current.end, slot.length);
+    const nextValue = slot.slice(0, start) + token + slot.slice(end);
+    const next = [...variables];
+    next[idx] = nextValue;
+    onChange(next);
+    // Restore focus + cursor after React applies the new value.
+    setTimeout(() => {
+      const el = inputRefs.current[idx];
+      if (el) {
+        el.focus();
+        const newPos = start + token.length;
+        try {
+          el.setSelectionRange(newPos, newPos);
+        } catch {
+          /* not all input types support setSelectionRange */
+        }
+        cursorRef.current = { start: newPos, end: newPos };
+      }
+    }, 0);
+  };
+
   return (
     <div>
       <div className="flex items-center justify-between mb-1">
@@ -1371,7 +1421,10 @@ function TemplateVariablesEditor({
         </label>
         <button
           type="button"
-          onClick={() => onChange([...variables, ""])}
+          onClick={() => {
+            onChange([...variables, ""]);
+            setActiveIdx(variables.length);
+          }}
           className="text-[11px] text-blue-700 hover:text-blue-900 flex items-center gap-1"
         >
           <Plus size={11} /> Add slot
@@ -1389,24 +1442,43 @@ function TemplateVariablesEditor({
       )}
       <div className="space-y-1">
         {variables.map((slot, i) => (
-          <div key={i} className="flex items-center gap-1">
+          <div
+            key={i}
+            className={`flex items-center gap-1 rounded ${
+              activeIdx === i ? "ring-1 ring-blue-300 bg-blue-50/40" : ""
+            }`}
+          >
             <span className="text-[10px] text-gray-500 w-7">
               <Hash size={10} className="inline" />
               {i + 1}
             </span>
             <input
+              ref={(el) => {
+                inputRefs.current[i] = el;
+              }}
               value={slot}
               onChange={(e) => {
+                captureCursor(e.currentTarget);
                 const next = [...variables];
                 next[i] = e.target.value;
                 onChange(next);
               }}
+              onFocus={(e) => {
+                setActiveIdx(i);
+                captureCursor(e.currentTarget);
+              }}
+              onClick={(e) => captureCursor(e.currentTarget)}
+              onKeyUp={(e) => captureCursor(e.currentTarget)}
+              onBlur={(e) => captureCursor(e.currentTarget)}
               placeholder="{{order.customerName}} or literal text"
               className="flex-1 border border-gray-200 rounded-md px-2 py-1 text-[11px] font-mono"
             />
             <button
               type="button"
-              onClick={() => onChange(variables.filter((_, j) => j !== i))}
+              onClick={() => {
+                onChange(variables.filter((_, j) => j !== i));
+                if (activeIdx === i) setActiveIdx(null);
+              }}
               className="text-gray-400 hover:text-red-600 p-1"
               title="Remove"
             >
@@ -1415,26 +1487,162 @@ function TemplateVariablesEditor({
           </div>
         ))}
       </div>
-      <DataPointHelper dataPoints={dataPoints} />
+      <DataPointHelper
+        dataPoints={dataPoints}
+        onInsert={insertToken}
+        targetLabel={
+          variables.length === 0
+            ? "a new slot"
+            : `slot #${(activeIdx ?? variables.length - 1) + 1}`
+        }
+      />
     </div>
   );
 }
 
-function DataPointHelper({ dataPoints }: { dataPoints: DataPoint[] }) {
+/**
+ * Hook that adds click-to-insert behaviour to any single text input or
+ * textarea. Tracks the most recent cursor position so a chip click drops
+ * the token in at the caret rather than appending. Used by free-form
+ * fields (message text, note, webhook body, webhook URL).
+ */
+function useTextFieldTokenInsertion(
+  value: string,
+  onValueChange: (next: string) => void
+) {
+  const ref = useRef<HTMLInputElement | HTMLTextAreaElement | null>(null);
+  const cursorRef = useRef<{ start: number; end: number }>({ start: value.length, end: value.length });
+
+  const capture = (el: HTMLInputElement | HTMLTextAreaElement) => {
+    cursorRef.current = {
+      start: el.selectionStart ?? el.value.length,
+      end: el.selectionEnd ?? el.value.length,
+    };
+  };
+
+  const setFieldRef = (el: HTMLInputElement | HTMLTextAreaElement | null) => {
+    ref.current = el;
+  };
+  const fieldEventHandlers = {
+    onFocus: (e: FocusEvent<HTMLInputElement | HTMLTextAreaElement>) =>
+      capture(e.currentTarget),
+    onClick: (e: MouseEvent<HTMLInputElement | HTMLTextAreaElement>) =>
+      capture(e.currentTarget),
+    onKeyUp: (e: KeyboardEvent<HTMLInputElement | HTMLTextAreaElement>) =>
+      capture(e.currentTarget),
+    onBlur: (e: FocusEvent<HTMLInputElement | HTMLTextAreaElement>) =>
+      capture(e.currentTarget),
+  };
+
+  const insertToken = (token: string) => {
+    const start = Math.min(cursorRef.current.start, value.length);
+    const end = Math.min(cursorRef.current.end, value.length);
+    const next = value.slice(0, start) + token + value.slice(end);
+    onValueChange(next);
+    setTimeout(() => {
+      const el = ref.current;
+      if (el) {
+        el.focus();
+        const newPos = start + token.length;
+        try {
+          el.setSelectionRange(newPos, newPos);
+        } catch {
+          /* ignore */
+        }
+        cursorRef.current = { start: newPos, end: newPos };
+      }
+    }, 0);
+  };
+
+  return { setFieldRef, fieldEventHandlers, insertToken };
+}
+
+function TextareaWithDataPoints({
+  label,
+  value,
+  rows,
+  placeholder,
+  dataPoints,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  rows: number;
+  placeholder?: string;
+  dataPoints: DataPoint[];
+  onChange: (next: string) => void;
+}) {
+  const { setFieldRef, fieldEventHandlers, insertToken } =
+    useTextFieldTokenInsertion(value, onChange);
   return (
-    <details className="text-[10px] text-gray-500 mt-1">
+    <>
+      <label className="text-[12px] text-gray-700 block">
+        {label}
+        <textarea
+          ref={setFieldRef}
+          {...fieldEventHandlers}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          rows={rows}
+          placeholder={placeholder}
+          className="mt-1 w-full border border-gray-200 rounded-md px-2 py-1 text-[12px]"
+        />
+      </label>
+      <DataPointHelper
+        dataPoints={dataPoints}
+        onInsert={insertToken}
+        targetLabel={`"${label}"`}
+      />
+    </>
+  );
+}
+
+function DataPointHelper({
+  dataPoints,
+  onInsert,
+  targetLabel,
+}: {
+  dataPoints: DataPoint[];
+  /** If provided, chips become click-to-insert buttons. */
+  onInsert?: (token: string) => void;
+  /** Description of where the token will land, e.g. "slot #1". */
+  targetLabel?: string;
+}) {
+  return (
+    <details className="text-[10px] text-gray-500 mt-1" open={!!onInsert}>
       <summary className="cursor-pointer text-[11px] text-gray-600 hover:text-gray-900">
         Available data points ({dataPoints.length})
+        {onInsert && (
+          <span className="text-[10px] text-gray-500">
+            {" "}
+            — click to insert into {targetLabel ?? "the active field"}
+          </span>
+        )}
       </summary>
       <div className="mt-2 grid grid-cols-1 gap-0.5 max-h-48 overflow-y-auto pr-1">
-        {dataPoints.map((dp) => (
-          <code
-            key={dp.path}
-            className="bg-gray-50 hover:bg-gray-100 px-1 py-0.5 rounded font-mono text-[10px] text-gray-700 cursor-text select-all"
-          >
-            {`{{${dp.path}}}`}
-          </code>
-        ))}
+        {dataPoints.map((dp) =>
+          onInsert ? (
+            <button
+              type="button"
+              key={dp.path}
+              onClick={() => onInsert(`{{${dp.path}}}`)}
+              className="bg-gray-50 hover:bg-blue-100 active:bg-blue-200 px-1 py-0.5 rounded font-mono text-[10px] text-gray-700 cursor-pointer text-left flex items-center justify-between gap-2"
+              title={`Insert {{${dp.path}}} — ${dp.label}`}
+            >
+              <code className="font-mono">{`{{${dp.path}}}`}</code>
+              <span className="text-[9px] text-gray-400 truncate">
+                {dp.label}
+              </span>
+            </button>
+          ) : (
+            <code
+              key={dp.path}
+              className="bg-gray-50 hover:bg-gray-100 px-1 py-0.5 rounded font-mono text-[10px] text-gray-700 cursor-text select-all"
+            >
+              {`{{${dp.path}}}`}
+            </code>
+          )
+        )}
       </div>
     </details>
   );
@@ -1451,6 +1659,21 @@ interface MediaAsset {
   url: string;
   metaMediaId: string | null;
   createdAt: string;
+}
+
+/**
+ * Build the public URL Meta should fetch the image from. The gallery's
+ * upload endpoint stores files as base64 data-URIs on `MediaAsset.url`,
+ * which Meta rejects as a header image source — so the editor stores
+ * a `/api/media-assets/{id}/raw` URL instead. That route streams the
+ * raw bytes back with the right Content-Type.
+ */
+function publicUrlForAsset(assetId: string): string {
+  const origin =
+    typeof window !== "undefined" && window.location?.origin
+      ? window.location.origin
+      : "";
+  return `${origin}/api/media-assets/${assetId}/raw`;
 }
 
 function HeaderImagePicker({
@@ -1496,7 +1719,7 @@ function HeaderImagePicker({
       }
       const data = (await res.json()) as { asset: MediaAsset };
       setGallery((prev) => [data.asset, ...prev]);
-      onChange(data.asset.url);
+      onChange(publicUrlForAsset(data.asset.id));
       setShowGallery(false);
     } catch (err) {
       setUploadError(err instanceof Error ? err.message : "Upload failed");
@@ -1577,29 +1800,35 @@ function HeaderImagePicker({
             </div>
           )}
           <div className="grid grid-cols-3 gap-1">
-            {gallery.map((asset) => (
-              <button
-                key={asset.id}
-                type="button"
-                onClick={() => {
-                  onChange(asset.url);
-                  setShowGallery(false);
-                }}
-                className={`relative rounded border-2 overflow-hidden ${
-                  value === asset.url ? "border-blue-500" : "border-transparent hover:border-gray-300"
-                }`}
-              >
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img
-                  src={asset.url}
-                  alt={asset.filename}
-                  className="w-full aspect-square object-cover"
-                />
-                <div className="absolute bottom-0 inset-x-0 bg-black/50 text-white text-[8px] px-1 py-0.5 truncate">
-                  {asset.filename}
-                </div>
-              </button>
-            ))}
+            {gallery.map((asset) => {
+              const publicUrl = publicUrlForAsset(asset.id);
+              const isSelected =
+                value === publicUrl || value === asset.url ||
+                value.endsWith(`/api/media-assets/${asset.id}/raw`);
+              return (
+                <button
+                  key={asset.id}
+                  type="button"
+                  onClick={() => {
+                    onChange(publicUrl);
+                    setShowGallery(false);
+                  }}
+                  className={`relative rounded border-2 overflow-hidden ${
+                    isSelected ? "border-blue-500" : "border-transparent hover:border-gray-300"
+                  }`}
+                >
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={asset.url}
+                    alt={asset.filename}
+                    className="w-full aspect-square object-cover"
+                  />
+                  <div className="absolute bottom-0 inset-x-0 bg-black/50 text-white text-[8px] px-1 py-0.5 truncate">
+                    {asset.filename}
+                  </div>
+                </button>
+              );
+            })}
           </div>
         </div>
       )}
