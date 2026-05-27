@@ -8,6 +8,10 @@
  *   1. Reach a node with no outgoing edge → finish (`SUCCESS`).
  *   2. Hit an `action.stop` node → finish (`STOPPED`).
  *   3. An action throws → finish (`FAILED`) and record the error.
+ *   4. Hit a `wait_for_reply` action → park the run (`WAITING`). A row
+ *      is inserted into `automation_flow_waits` keyed by the customer's
+ *      phone; the WhatsApp webhook resumes the run from the matched
+ *      branch when the next inbound message arrives.
  *
  * For `action.wait`, the engine sleeps in-process using `setTimeout` and
  * then continues. The runner is in-process (same model as the existing
@@ -248,8 +252,155 @@ function triggerFiltersMatch(
 }
 
 /**
+ * Internal node-walk loop. Used by both `executeFlow` (fresh runs) and
+ * `resumeFlow` (parked runs that the webhook is waking back up). The
+ * caller is responsible for creating the AutomationFlowRun row and
+ * appending the trigger step (if any); we just walk the graph from
+ * `startNodeId` and accumulate `steps`.
+ */
+async function walkFromNode(
+  graph: FlowGraph,
+  startNodeId: string | null,
+  context: FlowExecutionContext,
+  steps: FlowRunStep[]
+): Promise<
+  | { status: "SUCCESS" | "STOPPED" | "FAILED"; errorMessage?: string }
+  | {
+      status: "WAITING";
+      wait: {
+        waitingNodeId: string;
+        yesKeywords: string[];
+        noKeywords: string[];
+        timeoutHours: number;
+      };
+    }
+> {
+  let currentNodeId: string | null = startNodeId;
+  const visitCount: Record<string, number> = {};
+  const MAX_VISITS = 200;
+
+  while (currentNodeId) {
+    visitCount[currentNodeId] = (visitCount[currentNodeId] ?? 0) + 1;
+    if (visitCount[currentNodeId] > MAX_VISITS) {
+      const last = steps[steps.length - 1];
+      if (last) last.error = (last.error ?? "") + " | aborted: cycle detected";
+      return { status: "FAILED", errorMessage: `Cycle detected at node ${currentNodeId}` };
+    }
+    const node: FlowNode | null = nodeById(graph, currentNodeId);
+    if (!node) {
+      return { status: "FAILED", errorMessage: `Missing node ${currentNodeId}` };
+    }
+
+    if (node.data.kind === "condition") {
+      const condData = node.data as ConditionNodeData;
+      let branch: "true" | "false";
+      try {
+        branch = evaluateCondition(condData, context) ? "true" : "false";
+        steps.push({
+          nodeId: node.id,
+          nodeType: "condition",
+          nodeKind: "condition",
+          status: "success",
+          branch,
+          output: `Condition (${condData.field} ${condData.operator} ${condData.value ?? ""}) → ${branch}`,
+          ranAt: new Date().toISOString(),
+        });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        steps.push({
+          nodeId: node.id,
+          nodeType: "condition",
+          nodeKind: "condition",
+          status: "failed",
+          error: msg,
+          ranAt: new Date().toISOString(),
+        });
+        return { status: "FAILED", errorMessage: msg };
+      }
+      currentNodeId = nextNodeAfter(graph, node.id, branch);
+      continue;
+    }
+
+    if (node.data.kind === "action") {
+      const actionData = node.data as ActionNodeData;
+
+      // `wait_for_reply` is special: park the entire run state so the
+      // webhook can resume it later. We don't call `executeAction` here
+      // because the action handler can't terminate the engine on its
+      // own.
+      if (actionData.action === "wait_for_reply") {
+        const yesKeywords = (actionData.waitForReplyYesKeywords ?? []).filter(
+          (k) => k.trim() !== ""
+        );
+        const noKeywords = (actionData.waitForReplyNoKeywords ?? []).filter(
+          (k) => k.trim() !== ""
+        );
+        const timeoutHours = Math.max(
+          0.05,
+          actionData.waitForReplyTimeoutHours ?? 24
+        );
+        steps.push({
+          nodeId: node.id,
+          nodeType: "action",
+          nodeKind: "wait_for_reply",
+          status: "success",
+          output: `Waiting for customer reply (timeout ${timeoutHours}h)`,
+          ranAt: new Date().toISOString(),
+        });
+        return {
+          status: "WAITING",
+          wait: {
+            waitingNodeId: node.id,
+            yesKeywords,
+            noKeywords,
+            timeoutHours,
+          },
+        };
+      }
+
+      try {
+        const result = await executeAction(actionData, context);
+        steps.push({
+          nodeId: node.id,
+          nodeType: "action",
+          nodeKind: actionData.action,
+          status: "success",
+          output: result.output,
+          ranAt: new Date().toISOString(),
+        });
+        if (result.stop) {
+          return { status: "STOPPED" };
+        }
+        if (result.delayMs && result.delayMs > 0) {
+          await sleep(result.delayMs);
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        steps.push({
+          nodeId: node.id,
+          nodeType: "action",
+          nodeKind: actionData.action,
+          status: "failed",
+          error: msg,
+          ranAt: new Date().toISOString(),
+        });
+        return { status: "FAILED", errorMessage: msg };
+      }
+      currentNodeId = nextNodeAfter(graph, node.id);
+      continue;
+    }
+
+    return { status: "FAILED", errorMessage: `Unknown node kind at ${node.id}` };
+  }
+
+  return { status: "SUCCESS" };
+}
+
+/**
  * Run a single flow against the given context, recording a step-by-step
- * timeline on `AutomationFlowRun.stepsJson`.
+ * timeline on `AutomationFlowRun.stepsJson`. If the flow hits a
+ * `wait_for_reply` action, returns with status `WAITING` and the run row
+ * stays in that state until the WhatsApp webhook resumes it.
  */
 export async function executeFlow(
   flow: AutomationFlow,
@@ -260,7 +411,11 @@ export async function executeFlow(
     trackingFromStatus?: string | null;
     trackingToStatus?: string | null;
   }
-): Promise<{ runId: string; status: "SUCCESS" | "FAILED" | "STOPPED"; steps: FlowRunStep[] }> {
+): Promise<{
+  runId: string;
+  status: "SUCCESS" | "FAILED" | "STOPPED" | "WAITING";
+  steps: FlowRunStep[];
+}> {
   const graph = parseGraph(flow.graphJson);
   const triggerNode = findTriggerNode(graph);
 
@@ -305,97 +460,184 @@ export async function executeFlow(
     ranAt: new Date().toISOString(),
   });
 
-  // Walk from the trigger forward.
-  let currentNodeId: string | null = nextNodeAfter(graph, triggerNode.id);
-  // Safety: avoid infinite loops if the user wires a cycle.
-  const visitCount: Record<string, number> = {};
-  const MAX_VISITS = 200;
+  const result = await walkFromNode(
+    graph,
+    nextNodeAfter(graph, triggerNode.id),
+    context,
+    steps
+  );
 
-  while (currentNodeId) {
-    visitCount[currentNodeId] = (visitCount[currentNodeId] ?? 0) + 1;
-    if (visitCount[currentNodeId] > MAX_VISITS) {
-      const last = steps[steps.length - 1];
-      if (last) last.error = (last.error ?? "") + " | aborted: cycle detected";
-      return finishRun(
-        run.id,
-        "FAILED",
-        steps,
-        `Cycle detected at node ${currentNodeId}`
+  if (result.status === "WAITING") {
+    await parkRunForReply(run.id, flow.id, context, steps, result.wait);
+    return { runId: run.id, status: "WAITING", steps };
+  }
+  return finishRun(run.id, result.status, steps, result.errorMessage);
+}
+
+/**
+ * Persist a paused run + a matching `automation_flow_waits` row, so the
+ * WhatsApp webhook can route the customer's next inbound message back
+ * into the flow.
+ */
+async function parkRunForReply(
+  runId: string,
+  flowId: string,
+  context: FlowExecutionContext,
+  steps: FlowRunStep[],
+  wait: {
+    waitingNodeId: string;
+    yesKeywords: string[];
+    noKeywords: string[];
+    timeoutHours: number;
+  }
+): Promise<void> {
+  const fromPhone =
+    context.order?.customerPhone ?? context.message?.fromPhone ?? null;
+  if (!fromPhone) {
+    // Nothing to wait on — fail the run with a clear message rather than
+    // creating an orphan wait row.
+    await prisma.automationFlowRun.update({
+      where: { id: runId },
+      data: {
+        status: "FAILED",
+        stepsJson: steps as unknown as Prisma.InputJsonValue,
+        errorMessage:
+          "wait_for_reply: no customer phone in context — cannot wait for a reply",
+        finishedAt: new Date(),
+      },
+    });
+    return;
+  }
+  const expiresAt = new Date(Date.now() + wait.timeoutHours * 3600 * 1000);
+  await prisma.automationFlowRun.update({
+    where: { id: runId },
+    data: {
+      status: "WAITING",
+      stepsJson: steps as unknown as Prisma.InputJsonValue,
+    },
+  });
+  await prisma.automationFlowWait.create({
+    data: {
+      runId,
+      flowId,
+      orderId: context.order?.id ?? null,
+      fromPhone,
+      waitingNodeId: wait.waitingNodeId,
+      contextJson: serializeContext(context) as unknown as Prisma.InputJsonValue,
+      stepsJson: steps as unknown as Prisma.InputJsonValue,
+      yesKeywords: wait.yesKeywords.join(","),
+      noKeywords: wait.noKeywords.join(","),
+      expiresAt,
+      status: "WAITING",
+    },
+  });
+}
+
+/**
+ * Resume a parked run after the customer replied (or the wait timed
+ * out). Walks the graph from the matched output handle of the
+ * `wait_for_reply` node and continues until completion / next pause.
+ */
+export async function resumeFlow(
+  waitId: string,
+  matchedHandle: "yes" | "no" | "timeout",
+  inboundMessageText: string | null
+): Promise<{
+  runId: string;
+  status: "SUCCESS" | "FAILED" | "STOPPED" | "WAITING";
+  steps: FlowRunStep[];
+} | null> {
+  const wait = await prisma.automationFlowWait.findUnique({
+    where: { id: waitId },
+  });
+  if (!wait) return null;
+  if (wait.status !== "WAITING") return null;
+
+  const flow = await prisma.automationFlow.findUnique({
+    where: { id: wait.flowId },
+  });
+  if (!flow) return null;
+  const graph = parseGraph(flow.graphJson);
+
+  // Mark the wait row as MATCHED first so concurrent webhook deliveries
+  // can't double-resume.
+  await prisma.automationFlowWait.update({
+    where: { id: waitId },
+    data: {
+      status: matchedHandle === "timeout" ? "EXPIRED" : "MATCHED",
+      matchedHandle,
+      matchedAt: new Date(),
+      matchedMessageText: inboundMessageText,
+    },
+  });
+
+  // Rehydrate context. Attach the inbound message so condition nodes can
+  // inspect `message.text` if the operator wants extra branching after
+  // the wait.
+  const context = wait.contextJson as unknown as FlowExecutionContext;
+  context.message = {
+    fromPhone: wait.fromPhone,
+    text: inboundMessageText,
+    type: "text",
+  };
+
+  const steps: FlowRunStep[] = Array.isArray(wait.stepsJson)
+    ? (wait.stepsJson as unknown as FlowRunStep[])
+    : [];
+
+  steps.push({
+    nodeId: wait.waitingNodeId,
+    nodeType: "action",
+    nodeKind: "wait_for_reply",
+    status: "success",
+    branch: matchedHandle,
+    output:
+      matchedHandle === "timeout"
+        ? `Wait expired — taking "timeout" branch`
+        : `Customer replied → taking "${matchedHandle}" branch`,
+    ranAt: new Date().toISOString(),
+  });
+
+  const result = await walkFromNode(
+    graph,
+    nextNodeAfter(graph, wait.waitingNodeId, matchedHandle),
+    context,
+    steps
+  );
+
+  if (result.status === "WAITING") {
+    // Chained wait — park again on the new node.
+    await parkRunForReply(wait.runId, wait.flowId, context, steps, result.wait);
+    return { runId: wait.runId, status: "WAITING", steps };
+  }
+  return finishRun(wait.runId, result.status, steps, result.errorMessage);
+}
+
+/**
+ * Sweep `WAITING` rows whose `expires_at` has passed and resume them
+ * down the "timeout" branch. Called opportunistically from the webhook
+ * + run-listing endpoints — keeps the table tidy without a dedicated
+ * cron.
+ */
+export async function sweepExpiredWaits(): Promise<number> {
+  const now = new Date();
+  const overdue = await prisma.automationFlowWait.findMany({
+    where: { status: "WAITING", expiresAt: { lt: now } },
+    select: { id: true },
+  });
+  let resumed = 0;
+  for (const row of overdue) {
+    try {
+      await resumeFlow(row.id, "timeout", null);
+      resumed++;
+    } catch (err) {
+      console.error(
+        `[automation-flow] failed to expire wait ${row.id}:`,
+        err instanceof Error ? err.message : err
       );
     }
-    const node: FlowNode | null = nodeById(graph, currentNodeId);
-    if (!node) {
-      return finishRun(run.id, "FAILED", steps, `Missing node ${currentNodeId}`);
-    }
-
-    if (node.data.kind === "condition") {
-      const condData = node.data as ConditionNodeData;
-      let branch: "true" | "false";
-      try {
-        branch = evaluateCondition(condData, context) ? "true" : "false";
-        steps.push({
-          nodeId: node.id,
-          nodeType: "condition",
-          nodeKind: "condition",
-          status: "success",
-          branch,
-          output: `Condition (${condData.field} ${condData.operator} ${condData.value ?? ""}) → ${branch}`,
-          ranAt: new Date().toISOString(),
-        });
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        steps.push({
-          nodeId: node.id,
-          nodeType: "condition",
-          nodeKind: "condition",
-          status: "failed",
-          error: msg,
-          ranAt: new Date().toISOString(),
-        });
-        return finishRun(run.id, "FAILED", steps, msg);
-      }
-      currentNodeId = nextNodeAfter(graph, node.id, branch);
-      continue;
-    }
-
-    if (node.data.kind === "action") {
-      const actionData = node.data as ActionNodeData;
-      try {
-        const result = await executeAction(actionData, context);
-        steps.push({
-          nodeId: node.id,
-          nodeType: "action",
-          nodeKind: actionData.action,
-          status: "success",
-          output: result.output,
-          ranAt: new Date().toISOString(),
-        });
-        if (result.stop) {
-          return finishRun(run.id, "STOPPED", steps);
-        }
-        if (result.delayMs && result.delayMs > 0) {
-          await sleep(result.delayMs);
-        }
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        steps.push({
-          nodeId: node.id,
-          nodeType: "action",
-          nodeKind: actionData.action,
-          status: "failed",
-          error: msg,
-          ranAt: new Date().toISOString(),
-        });
-        return finishRun(run.id, "FAILED", steps, msg);
-      }
-      currentNodeId = nextNodeAfter(graph, node.id);
-      continue;
-    }
-
-    return finishRun(run.id, "FAILED", steps, `Unknown node kind at ${node.id}`);
   }
-
-  return finishRun(run.id, "SUCCESS", steps);
+  return resumed;
 }
 
 function nextNodeAfter(

@@ -17,7 +17,9 @@
 "use client";
 
 import {
+  createContext,
   useCallback,
+  useContext,
   useEffect,
   useMemo,
   useRef,
@@ -37,12 +39,17 @@ import {
   addEdge,
   applyNodeChanges,
   applyEdgeChanges,
+  useReactFlow,
+  BaseEdge,
+  EdgeLabelRenderer,
+  getBezierPath,
   type Node,
   type Edge,
   type Connection,
   type NodeChange,
   type EdgeChange,
   type NodeProps,
+  type EdgeProps,
   Handle,
   Position,
   MarkerType,
@@ -70,6 +77,9 @@ import {
   PhoneCall,
   CheckCircle2,
   Upload,
+  Eye,
+  MessageCircleQuestion,
+  X,
 } from "lucide-react";
 import { api } from "@/lib/api-client";
 
@@ -112,6 +122,7 @@ type ActionKind =
   | "pin_conversation"
   | "queue_call_agent"
   | "wait"
+  | "wait_for_reply"
   | "webhook"
   | "stop";
 
@@ -144,6 +155,9 @@ interface ActionData {
   targetStatus?: string | null;
   note?: string | null;
   waitSeconds?: number | null;
+  waitForReplyYesKeywords?: string[] | null;
+  waitForReplyNoKeywords?: string[] | null;
+  waitForReplyTimeoutHours?: number | null;
   webhookUrl?: string | null;
   webhookMethod?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE" | null;
   webhookHeadersJson?: string | null;
@@ -254,6 +268,7 @@ const ACTION_LABELS: Record<ActionKind, string> = {
   pin_conversation: "Pin conversation",
   queue_call_agent: "Queue call agent",
   wait: "Wait",
+  wait_for_reply: "Wait for customer reply (yes / no)",
   webhook: "Call webhook",
   stop: "Stop flow",
 };
@@ -266,6 +281,7 @@ const ACTION_ICONS: Record<ActionKind, typeof Mail> = {
   pin_conversation: Pin,
   queue_call_agent: PhoneCall,
   wait: Clock,
+  wait_for_reply: MessageCircleQuestion,
   webhook: Webhook,
   stop: StopCircle,
 };
@@ -297,6 +313,27 @@ const OPERATOR_LABELS: Record<ConditionOperator, string> = {
 // ----------------------------------------------------------------------------
 
 const HANDLE_SIZE: React.CSSProperties = { width: 14, height: 14 };
+
+// ----------------------------------------------------------------------------
+// Cross-component plumbing
+//
+// Both `ActionNode` (read-only, used by react-flow's nodeTypes registry)
+// and `InsertEdge` (the "+ between nodes" button) need access to data
+// owned by the page-level `FlowEditorInner` (the cached template list,
+// the "insert node on this edge" callback). React Flow registers
+// `nodeTypes` / `edgeTypes` once at module scope, so we can't close over
+// the page state directly — instead we expose it via these contexts and
+// every render of the canvas wraps its children with a fresh provider.
+// ----------------------------------------------------------------------------
+const TemplatesContext = createContext<TemplateRow[]>([]);
+const InsertOnEdgeContext = createContext<
+  (
+    edgeId: string,
+    variant: "condition" | "action",
+    action?: ActionKind
+  ) => void
+>(() => {});
+
 
 function TriggerNode({ data, selected }: NodeProps) {
   const d = data as unknown as TriggerData;
@@ -365,9 +402,69 @@ function ConditionNode({ data, selected }: NodeProps) {
 function ActionNode({ data, selected }: NodeProps) {
   const d = data as unknown as ActionData;
   const Icon = ACTION_ICONS[d.action] ?? Mail;
+  const templates = useContext(TemplatesContext);
+  const [expanded, setExpanded] = useState(false);
+
+  // `wait_for_reply` renders as a branching block with three output
+  // handles (yes / no / timeout), styled green/red/gray to mirror the
+  // condition node's true/false handles.
+  if (d.action === "wait_for_reply") {
+    return (
+      <div
+        className={`relative rounded-2xl border-2 shadow-sm bg-gradient-to-br from-teal-50 to-cyan-100 ${
+          selected ? "border-blue-500 ring-2 ring-blue-200" : "border-teal-300"
+        } min-w-[240px]`}
+      >
+        <Handle type="target" position={Position.Top} className="!bg-teal-500" style={HANDLE_SIZE} />
+        <div className="px-4 py-3">
+          <div className="flex items-center gap-2 text-teal-700 font-semibold text-[12px]">
+            <MessageCircleQuestion size={14} /> WAIT FOR REPLY
+          </div>
+          <div className="text-[13px] font-medium text-gray-900 mt-1">
+            Customer reply (yes / no)
+          </div>
+          <div className="text-[11px] text-gray-500 mt-0.5">
+            timeout: {d.waitForReplyTimeoutHours ?? 24}h
+          </div>
+          <div className="flex justify-between text-[10px] mt-2">
+            <span className="text-green-700">yes ↓</span>
+            <span className="text-gray-500">timeout ↓</span>
+            <span className="text-red-700">no ↓</span>
+          </div>
+        </div>
+        <Handle
+          id="yes"
+          type="source"
+          position={Position.Bottom}
+          style={{ left: "15%", ...HANDLE_SIZE }}
+          className="!bg-green-500"
+        />
+        <Handle
+          id="timeout"
+          type="source"
+          position={Position.Bottom}
+          style={{ left: "50%", ...HANDLE_SIZE }}
+          className="!bg-gray-400"
+        />
+        <Handle
+          id="no"
+          type="source"
+          position={Position.Bottom}
+          style={{ left: "85%", ...HANDLE_SIZE }}
+          className="!bg-red-500"
+        />
+      </div>
+    );
+  }
+
+  const matchedTemplate =
+    d.action === "send_template" && d.templateName
+      ? templates.find((t) => t.name === d.templateName)
+      : null;
+
   return (
     <div
-      className={`px-4 py-3 rounded-2xl border-2 shadow-sm bg-gradient-to-br from-blue-50 to-sky-100 ${
+      className={`group relative px-4 py-3 rounded-2xl border-2 shadow-sm bg-gradient-to-br from-blue-50 to-sky-100 ${
         selected ? "border-blue-500 ring-2 ring-blue-200" : "border-blue-300"
       } min-w-[220px]`}
     >
@@ -379,8 +476,22 @@ function ActionNode({ data, selected }: NodeProps) {
         {ACTION_LABELS[d.action] ?? d.action}
       </div>
       {d.action === "send_template" && d.templateName && (
-        <div className="text-[11px] text-gray-500 mt-0.5">
-          template: <span className="font-mono">{d.templateName}</span>
+        <div className="text-[11px] text-gray-500 mt-0.5 flex items-center gap-1">
+          <span>template:</span>
+          <span className="font-mono">{d.templateName}</span>
+          {matchedTemplate?.bodyText && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                setExpanded(true);
+              }}
+              title="Show full template text"
+              className="opacity-0 group-hover:opacity-100 transition-opacity ml-1 inline-flex items-center justify-center w-5 h-5 rounded bg-blue-100 hover:bg-blue-200 text-blue-700"
+            >
+              <Eye size={11} />
+            </button>
+          )}
         </div>
       )}
       {d.action === "change_order_status" && d.targetStatus && (
@@ -390,6 +501,180 @@ function ActionNode({ data, selected }: NodeProps) {
         <div className="text-[11px] text-gray-500 mt-0.5">{d.waitSeconds}s</div>
       )}
       <Handle type="source" position={Position.Bottom} className="!bg-blue-500" style={HANDLE_SIZE} />
+
+      {expanded && matchedTemplate?.bodyText && (
+        <TemplatePreviewOverlay
+          template={matchedTemplate}
+          onClose={() => setExpanded(false)}
+        />
+      )}
+    </div>
+  );
+}
+
+/**
+ * Popover that renders the full body text of a WhatsApp template,
+ * triggered from the eye/expand button on a `send_template` action
+ * node. Rendered inline (so it visually anchors to the node) but with
+ * pointer-events isolated so a click on the overlay doesn't drag the
+ * node. Closes on backdrop click or the X button.
+ */
+function TemplatePreviewOverlay({
+  template,
+  onClose,
+}: {
+  template: TemplateRow;
+  onClose: () => void;
+}) {
+  return (
+    <div
+      className="absolute z-20 top-full left-0 mt-2 w-[320px] nodrag nopan"
+      onMouseDown={(e) => e.stopPropagation()}
+      onClick={(e) => e.stopPropagation()}
+    >
+      <div className="bg-white border border-blue-300 rounded-lg shadow-lg p-3">
+        <div className="flex items-start justify-between gap-2 mb-2">
+          <div className="text-[11px] font-semibold text-blue-700 uppercase tracking-wide">
+            Template preview
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="text-gray-400 hover:text-gray-700"
+            title="Close preview"
+          >
+            <X size={14} />
+          </button>
+        </div>
+        <div className="text-[11px] text-gray-500 mb-1 font-mono">
+          {template.name} ({template.language})
+        </div>
+        <div className="text-[12px] text-gray-900 whitespace-pre-wrap leading-relaxed border-l-2 border-blue-300 pl-2 max-h-60 overflow-y-auto">
+          {template.bodyText ?? "(empty body)"}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Custom edge that draws the standard bezier path and overlays a small
+ * "+" button at the midpoint. Clicking the button pops a menu where the
+ * user can pick a Condition or Action — the new node is inserted on
+ * this edge (the edge is split into two: source → new → target).
+ *
+ * `nopan` / `nodrag` classes prevent the React Flow background from
+ * grabbing pointer events while the menu is open.
+ */
+function InsertEdge({
+  id,
+  sourceX,
+  sourceY,
+  targetX,
+  targetY,
+  sourcePosition,
+  targetPosition,
+  markerEnd,
+  style,
+}: EdgeProps) {
+  const [edgePath, labelX, labelY] = getBezierPath({
+    sourceX,
+    sourceY,
+    targetX,
+    targetY,
+    sourcePosition,
+    targetPosition,
+  });
+  const [open, setOpen] = useState(false);
+  const insertOnEdge = useContext(InsertOnEdgeContext);
+
+  const handleInsert = (variant: "condition" | "action", action?: ActionKind) => {
+    insertOnEdge(id, variant, action);
+    setOpen(false);
+  };
+
+  return (
+    <>
+      <BaseEdge id={id} path={edgePath} markerEnd={markerEnd} style={style} />
+      <EdgeLabelRenderer>
+        <div
+          className="nopan nodrag absolute"
+          style={{
+            transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)`,
+            pointerEvents: "all",
+          }}
+        >
+          {!open ? (
+            <button
+              type="button"
+              title="Insert step here"
+              onClick={(e) => {
+                e.stopPropagation();
+                setOpen(true);
+              }}
+              className="w-6 h-6 rounded-full bg-white border-2 border-gray-300 hover:border-blue-500 hover:bg-blue-50 text-gray-500 hover:text-blue-600 flex items-center justify-center shadow-sm transition-colors"
+            >
+              <Plus size={14} />
+            </button>
+          ) : (
+            <InsertEdgeMenu
+              onPick={handleInsert}
+              onClose={() => setOpen(false)}
+            />
+          )}
+        </div>
+      </EdgeLabelRenderer>
+    </>
+  );
+}
+
+function InsertEdgeMenu({
+  onPick,
+  onClose,
+}: {
+  onPick: (variant: "condition" | "action", action?: ActionKind) => void;
+  onClose: () => void;
+}) {
+  return (
+    <div className="bg-white border border-gray-200 rounded-lg shadow-xl p-2 w-56">
+      <div className="flex items-center justify-between mb-1 px-1">
+        <span className="text-[11px] font-semibold text-gray-500 uppercase tracking-wide">
+          Insert step
+        </span>
+        <button
+          type="button"
+          onClick={onClose}
+          className="text-gray-400 hover:text-gray-700"
+          title="Cancel"
+        >
+          <X size={12} />
+        </button>
+      </div>
+      <button
+        type="button"
+        onClick={() => onPick("condition")}
+        className="w-full text-left rounded-md border border-purple-200 bg-white hover:bg-purple-50 px-2 py-1.5 text-[12px] text-purple-700 flex items-center gap-2 mb-2"
+      >
+        <Filter size={13} /> Condition
+      </button>
+      <div className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide px-1 mb-1">
+        Action
+      </div>
+      <div className="max-h-56 overflow-y-auto space-y-1">
+        {(Object.keys(ACTION_LABELS) as ActionKind[]).map((k) => {
+          const Icon = ACTION_ICONS[k];
+          return (
+            <button
+              key={k}
+              type="button"
+              onClick={() => onPick("action", k)}
+              className="w-full text-left rounded-md border border-blue-200 bg-white hover:bg-blue-50 px-2 py-1 text-[12px] text-blue-700 flex items-center gap-2"
+            >
+              <Icon size={12} /> {ACTION_LABELS[k]}
+            </button>
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -398,6 +683,10 @@ const nodeTypes = {
   trigger: TriggerNode,
   condition: ConditionNode,
   action: ActionNode,
+};
+
+const edgeTypes = {
+  insert: InsertEdge,
 };
 
 // ----------------------------------------------------------------------------
@@ -435,6 +724,15 @@ function FlowEditorInner() {
   const dirtyRef = useRef(false);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const persistRef = useRef<() => Promise<void>>(() => Promise.resolve());
+  const reactFlow = useReactFlow();
+  // Set once we've performed the initial fit-to-view after the graph
+  // loads. We want the *whole* workflow framed when the editor first
+  // opens — not the previously-saved viewport — so the operator always
+  // sees the full top-to-bottom shape of the flow at a glance. The
+  // ReactFlow `fitView` prop fires too eagerly (before custom nodes
+  // measure their sizes), so we trigger a second pass on a
+  // requestAnimationFrame once nodes are mounted.
+  const didInitialFitRef = useRef(false);
 
   // ---- initial load ------------------------------------------------------
   useEffect(() => {
@@ -470,6 +768,7 @@ function FlowEditorInner() {
             sourceHandle: e.sourceHandle ?? undefined,
             targetHandle: e.targetHandle ?? undefined,
             label: e.label,
+            type: "insert",
             markerEnd: { type: MarkerType.ArrowClosed, color: "#94a3b8" },
             style: { stroke: "#94a3b8", strokeWidth: 2, cursor: "pointer" },
           }))
@@ -581,6 +880,101 @@ function FlowEditorInner() {
       setSelectedId(selNodes[0]?.id ?? null);
     },
     []
+  );
+
+  // ---- always frame the entire workflow on first open --------------------
+  // Even though `<ReactFlow fitView />` runs once on mount, custom nodes
+  // measure their own size on first paint, so a second fitView pass on
+  // the next animation frame guarantees the full graph is in view —
+  // including any nodes that grew due to long template names / labels.
+  useEffect(() => {
+    if (didInitialFitRef.current) return;
+    if (nodes.length === 0) return;
+    const raf = requestAnimationFrame(() => {
+      reactFlow.fitView({ padding: 0.3, duration: 250 });
+      didInitialFitRef.current = true;
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [nodes.length, reactFlow]);
+
+  // ---- contextual "+" button between nodes -------------------------------
+  // Splits the clicked edge into source → newNode → target, positioning
+  // the new node at the midpoint so the operator immediately sees it
+  // dropped in place (no random teleport-to-corner like `addNode`).
+  const insertNodeOnEdge = useCallback(
+    (edgeId: string, variant: "condition" | "action", action?: ActionKind) => {
+      setEdges((eds) => {
+        const edge = eds.find((e) => e.id === edgeId);
+        if (!edge) return eds;
+        const id = `n-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+
+        const sourceNode = nodes.find((n) => n.id === edge.source);
+        const targetNode = nodes.find((n) => n.id === edge.target);
+        const midX =
+          sourceNode && targetNode
+            ? Math.round((sourceNode.position.x + targetNode.position.x) / 2)
+            : randomPosition().x;
+        const midY =
+          sourceNode && targetNode
+            ? Math.round((sourceNode.position.y + targetNode.position.y) / 2)
+            : randomPosition().y;
+
+        const baseData: FlowNodeData =
+          variant === "condition"
+            ? {
+                kind: "condition",
+                field: "order.status",
+                operator: "equals",
+                value: "",
+              }
+            : {
+                kind: "action",
+                action: action ?? "send_template",
+                templateLanguage: "en",
+                templateVariables: [],
+                webhookMethod: "POST",
+              };
+        const newNode: Node = {
+          id,
+          type: variant,
+          position: { x: midX, y: midY + 60 },
+          data: baseData as unknown as Record<string, unknown>,
+        };
+        // Stage the new node and edge replacement together so React
+        // commits them in the same paint — avoids a flicker where the
+        // old edge briefly disappears before the new pair appears.
+        setNodes((nds) => [...nds, newNode]);
+        setSelectedId(id);
+
+        // Pick a default downstream handle for branching nodes so the
+        // new node has somewhere to go. Condition + wait_for_reply
+        // both wire to their primary success path.
+        let outgoingHandle: string | undefined;
+        if (variant === "condition") outgoingHandle = "true";
+
+        const inEdge: Edge = {
+          ...edge,
+          id: `e-${edge.source}-${id}-${edge.sourceHandle ?? "n"}`,
+          target: id,
+          targetHandle: undefined,
+        };
+        const outEdge: Edge = {
+          id: `e-${id}-${edge.target}-${outgoingHandle ?? "n"}`,
+          source: id,
+          target: edge.target,
+          sourceHandle: outgoingHandle,
+          targetHandle: edge.targetHandle,
+          type: "insert",
+          markerEnd: { type: MarkerType.ArrowClosed, color: "#94a3b8" },
+          style: { stroke: "#94a3b8", strokeWidth: 2, cursor: "pointer" },
+        };
+        const next = eds.filter((e) => e.id !== edgeId);
+        next.push(inEdge, outEdge);
+        return next;
+      });
+      queueSave();
+    },
+    [nodes, queueSave]
   );
 
   // ---- node mutations from the inspector --------------------------------
@@ -850,32 +1244,32 @@ function FlowEditorInner() {
 
         {/* Canvas */}
         <div className="flex-1 min-w-0 bg-[radial-gradient(circle,_#e2e8f0_1px,_transparent_1px)] [background-size:18px_18px] relative">
-          <ReactFlow
-            nodes={nodes}
-            edges={edges}
-            onNodesChange={onNodesChange}
-            onEdgesChange={onEdgesChange}
-            onConnect={onConnect}
-            onSelectionChange={onSelectionChange}
-            onEdgeClick={(_event, edge) => {
-              if (confirm("Delete this connection?")) {
-                setEdges((eds) => eds.filter((e) => e.id !== edge.id));
-                queueSave();
-              }
-            }}
-            nodeTypes={nodeTypes}
-            deleteKeyCode={["Backspace", "Delete"]}
-            fitView
-            fitViewOptions={{ padding: 0.3 }}
-            defaultEdgeOptions={{
-              markerEnd: { type: MarkerType.ArrowClosed, color: "#94a3b8" },
-              style: { stroke: "#94a3b8", strokeWidth: 2, cursor: "pointer" },
-            }}
-          >
-            <Background gap={18} size={1} />
-            <Controls position="bottom-right" />
-            <MiniMap pannable zoomable className="!bg-white !border !border-gray-200" />
-          </ReactFlow>
+          <TemplatesContext.Provider value={templates}>
+            <InsertOnEdgeContext.Provider value={insertNodeOnEdge}>
+              <ReactFlow
+                nodes={nodes}
+                edges={edges}
+                onNodesChange={onNodesChange}
+                onEdgesChange={onEdgesChange}
+                onConnect={onConnect}
+                onSelectionChange={onSelectionChange}
+                nodeTypes={nodeTypes}
+                edgeTypes={edgeTypes}
+                deleteKeyCode={["Backspace", "Delete"]}
+                fitView
+                fitViewOptions={{ padding: 0.3 }}
+                defaultEdgeOptions={{
+                  type: "insert",
+                  markerEnd: { type: MarkerType.ArrowClosed, color: "#94a3b8" },
+                  style: { stroke: "#94a3b8", strokeWidth: 2, cursor: "pointer" },
+                }}
+              >
+                <Background gap={18} size={1} />
+                <Controls position="bottom-right" />
+                <MiniMap pannable zoomable className="!bg-white !border !border-gray-200" />
+              </ReactFlow>
+            </InsertOnEdgeContext.Provider>
+          </TemplatesContext.Provider>
         </div>
 
         {/* Right inspector */}
@@ -1295,6 +1689,46 @@ function ActionInspector({
             } as Partial<FlowNodeData>);
           }}
         />
+      )}
+
+      {data.action === "wait_for_reply" && (
+        <>
+          <div className="text-[11px] text-gray-500 leading-relaxed -mt-1">
+            Parks this flow run until the customer replies on WhatsApp.
+            Their next inbound message is classified against the keyword
+            lists below and the flow continues down the matching branch.
+            If they never reply within the timeout window the flow
+            continues down the <span className="text-gray-700 font-medium">timeout</span>{" "}
+            branch instead.
+          </div>
+          <KeywordListField
+            label="Yes keywords"
+            help="Words / phrases that route to the “yes ↓” branch. Leave blank to use sensible defaults (yes / oui / نعم / 1 …)."
+            value={data.waitForReplyYesKeywords ?? []}
+            onChange={(v) =>
+              onChange({ waitForReplyYesKeywords: v } as Partial<FlowNodeData>)
+            }
+          />
+          <KeywordListField
+            label="No keywords"
+            help="Words / phrases that route to the “no ↓” branch. Defaults to no / non / لا / 0 …"
+            value={data.waitForReplyNoKeywords ?? []}
+            onChange={(v) =>
+              onChange({ waitForReplyNoKeywords: v } as Partial<FlowNodeData>)
+            }
+          />
+          <LabeledInput
+            label="Timeout (hours)"
+            type="number"
+            value={String(data.waitForReplyTimeoutHours ?? 24)}
+            onChange={(v) => {
+              const n = parseFloat(v);
+              onChange({
+                waitForReplyTimeoutHours: Number.isFinite(n) && n > 0 ? n : 24,
+              } as Partial<FlowNodeData>);
+            }}
+          />
+        </>
       )}
 
       {data.action === "webhook" && (
@@ -1846,6 +2280,42 @@ function countTemplateVariables(bodyText: string): number {
   if (!matches) return 0;
   const nums = matches.map((m) => parseInt(m.replace(/[{}]/g, "").trim(), 10));
   return Math.max(...nums);
+}
+
+/**
+ * Comma-separated keyword editor used by the wait_for_reply inspector.
+ * Stores the list of trimmed, non-empty keywords; trailing commas /
+ * extra whitespace from the operator are normalized away on commit.
+ */
+function KeywordListField({
+  label,
+  help,
+  value,
+  onChange,
+}: {
+  label: string;
+  help: string;
+  value: string[];
+  onChange: (v: string[]) => void;
+}) {
+  return (
+    <label className="text-[12px] text-gray-700 block">
+      {label}
+      <input
+        value={value.join(", ")}
+        onChange={(e) => {
+          const parts = e.target.value
+            .split(",")
+            .map((p) => p.trim())
+            .filter((p) => p.length > 0);
+          onChange(parts);
+        }}
+        placeholder="yes, oui, نعم, 1"
+        className="mt-1 w-full border border-gray-200 rounded-md px-2 py-1 text-[12px]"
+      />
+      <div className="text-[10px] text-gray-500 leading-snug mt-1">{help}</div>
+    </label>
+  );
 }
 
 function LabeledInput({

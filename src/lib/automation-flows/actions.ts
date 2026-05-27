@@ -46,6 +46,14 @@ export async function executeAction(
       return executeQueueCall(context);
     case "wait":
       return executeWait(action);
+    case "wait_for_reply":
+      // The engine intercepts this case before calling executeAction
+      // (it has to park the run + persist state across processes), so
+      // reaching this branch means a misconfigured caller. Surface a
+      // clear error instead of silently no-op-ing.
+      throw new Error(
+        "wait_for_reply is handled by the engine, not the action executor"
+      );
     case "webhook":
       return executeWebhook(action, context);
     case "stop":

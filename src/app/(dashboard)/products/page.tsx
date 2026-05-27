@@ -99,8 +99,16 @@ export default function ProductsPage() {
     }
   }, []);
 
-  const myProducts = products.filter((p) => !p.isDropProduct);
-  const dropProducts = products.filter((p) => p.isDropProduct);
+  // Sort so that products with the AI agent enabled bubble to the top of
+  // each list (My Products / COD Drop). Array.prototype.sort is stable in
+  // modern engines, so the existing API order is preserved within each
+  // group.
+  const sortByAiAgent = (a: Product, b: Product): number => {
+    if (a.aiAgentEnabled === b.aiAgentEnabled) return 0;
+    return a.aiAgentEnabled ? -1 : 1;
+  };
+  const myProducts = products.filter((p) => !p.isDropProduct).slice().sort(sortByAiAgent);
+  const dropProducts = products.filter((p) => p.isDropProduct).slice().sort(sortByAiAgent);
   const displayProducts = activeTab === "my" ? myProducts : dropProducts;
 
   return (
