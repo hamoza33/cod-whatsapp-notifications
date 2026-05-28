@@ -299,21 +299,21 @@ model AutomationRun {
 /// outgoing edge or an explicit `action.stop` node. Each execution attempt
 /// is recorded as an `AutomationFlowRun` row.
 model AutomationFlow {
-  id          String   @id @default(cuid())
+  id          String    @id @default(cuid())
   name        String
   description String?
-  isEnabled   Boolean  @default(false) @map("is_enabled")
+  isEnabled   Boolean   @default(false) @map("is_enabled")
   /// One of: ORDER_CREATED, ORDER_STATUS_CHANGED, TRACKING_STATUS_CHANGED,
   /// MESSAGE_RECEIVED, MANUAL. Used by the engine to know which event
   /// streams should evaluate this flow without parsing the JSON graph.
-  triggerType String   @map("trigger_type")
+  triggerType String    @map("trigger_type")
   /// Full graph definition: `{ nodes: [...], edges: [...], viewport: {...} }`
   /// Matches the @xyflow/react shape so the canvas can hydrate directly.
-  graphJson   Json     @map("graph_json")
+  graphJson   Json      @map("graph_json")
   lastFiredAt DateTime? @map("last_fired_at")
-  runCount    Int      @default(0) @map("run_count")
-  createdAt   DateTime @default(now()) @map("created_at")
-  updatedAt   DateTime @updatedAt @map("updated_at")
+  runCount    Int       @default(0) @map("run_count")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
 
   runs AutomationFlowRun[]
 
@@ -326,26 +326,70 @@ model AutomationFlow {
 /// can render a step-by-step timeline and the operator can debug why a
 /// flow stopped where it did.
 model AutomationFlowRun {
-  id          String   @id @default(cuid())
-  flowId      String   @map("flow_id")
-  orderId     String?  @map("order_id")
+  id           String    @id @default(cuid())
+  flowId       String    @map("flow_id")
+  orderId      String?   @map("order_id")
   /// Free-form initial context — the order snapshot, tracking snapshot,
   /// inbound message text, etc. — captured at the moment the trigger fired.
-  contextJson Json     @map("context_json")
+  contextJson  Json      @map("context_json")
   /// RUNNING, SUCCESS, FAILED, STOPPED
-  status      String
+  status       String
   /// Per-node execution log:
   /// `[{ nodeId, nodeType, status, output?, error?, ranAt }]`
-  stepsJson   Json     @map("steps_json")
-  errorMessage String? @map("error_message")
-  startedAt   DateTime @default(now()) @map("started_at")
-  finishedAt  DateTime? @map("finished_at")
+  stepsJson    Json      @map("steps_json")
+  errorMessage String?   @map("error_message")
+  startedAt    DateTime  @default(now()) @map("started_at")
+  finishedAt   DateTime? @map("finished_at")
 
-  flow AutomationFlow @relation(fields: [flowId], references: [id], onDelete: Cascade)
+  flow  AutomationFlow       @relation(fields: [flowId], references: [id], onDelete: Cascade)
+  waits AutomationFlowWait[]
 
   @@index([flowId, startedAt])
   @@index([orderId])
   @@map("automation_flow_runs")
+}
+
+/// A paused execution of an AutomationFlow that's blocked on a customer
+/// reply. Created when the engine reaches a `wait_for_reply` action node;
+/// matched (or expired) by the WhatsApp webhook when the next inbound
+/// message from `fromPhone` arrives, at which point the engine resumes
+/// the flow from the matched branch.
+model AutomationFlowWait {
+  id                 String    @id @default(cuid())
+  runId              String    @map("run_id")
+  flowId             String    @map("flow_id")
+  orderId            String?   @map("order_id")
+  /// Normalized E.164 phone number we're waiting on a reply from.
+  fromPhone          String    @map("from_phone")
+  /// Node id of the `wait_for_reply` action node that paused the run.
+  waitingNodeId      String    @map("waiting_node_id")
+  /// Serialized FlowExecutionContext at the time of the pause. Reused
+  /// verbatim when the run resumes — we deliberately don't refetch order
+  /// state so the resume reflects the moment the customer was asked.
+  contextJson        Json      @map("context_json")
+  /// Cumulative `stepsJson` snapshot at pause time. We append further
+  /// steps to this array on resume and write the merged log back onto
+  /// AutomationFlowRun.stepsJson.
+  stepsJson          Json      @map("steps_json")
+  /// Comma-separated keyword lists copied from the wait_for_reply node,
+  /// so a later schema change to the flow graph doesn't break parked
+  /// runs that were created before the edit.
+  yesKeywords        String    @default("") @map("yes_keywords")
+  noKeywords         String    @default("") @map("no_keywords")
+  expiresAt          DateTime  @map("expires_at")
+  /// WAITING, MATCHED, EXPIRED, CANCELLED
+  status             String    @default("WAITING")
+  matchedHandle      String?   @map("matched_handle")
+  matchedAt          DateTime? @map("matched_at")
+  matchedMessageText String?   @map("matched_message_text")
+  createdAt          DateTime  @default(now()) @map("created_at")
+
+  run AutomationFlowRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  @@index([fromPhone, status])
+  @@index([flowId])
+  @@index([status, expiresAt])
+  @@map("automation_flow_waits")
 }
 
 /// Cached catalog of products pulled from COD Network's seller API

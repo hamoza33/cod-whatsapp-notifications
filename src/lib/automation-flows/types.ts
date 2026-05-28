@@ -128,6 +128,7 @@ export type ActionKind =
   | "pin_conversation"
   | "queue_call_agent"
   | "wait"
+  | "wait_for_reply"
   | "webhook"
   | "stop";
 
@@ -139,6 +140,7 @@ export const ACTION_KINDS: ReadonlyArray<ActionKind> = [
   "pin_conversation",
   "queue_call_agent",
   "wait",
+  "wait_for_reply",
   "webhook",
   "stop",
 ] as const;
@@ -160,6 +162,14 @@ export interface ActionNodeData {
   note?: string | null;
   // wait
   waitSeconds?: number | null;
+  // wait_for_reply — pause the flow until the customer replies. The
+  // engine emits one of three branches keyed on `sourceHandle`:
+  //   - "yes"     → reply matched one of `yesKeywords`
+  //   - "no"      → reply matched one of `noKeywords`
+  //   - "timeout" → no reply received within `waitForReplyTimeoutHours`
+  waitForReplyYesKeywords?: string[] | null;
+  waitForReplyNoKeywords?: string[] | null;
+  waitForReplyTimeoutHours?: number | null;
   // webhook
   webhookUrl?: string | null;
   webhookMethod?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE" | null;
@@ -273,8 +283,12 @@ export interface FlowRunStep {
   nodeType: "trigger" | "condition" | "action";
   nodeKind: string;
   status: "success" | "failed" | "skipped";
-  /** For condition nodes: which branch was taken. */
-  branch?: "true" | "false";
+  /**
+   * For branching nodes: which output handle was taken.
+   *   - Condition nodes use `"true"` / `"false"`.
+   *   - `wait_for_reply` action nodes use `"yes"` / `"no"` / `"timeout"`.
+   */
+  branch?: "true" | "false" | "yes" | "no" | "timeout";
   /** Human-readable summary of what the node did. */
   output?: string;
   error?: string;

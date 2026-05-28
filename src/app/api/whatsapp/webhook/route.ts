@@ -8,6 +8,7 @@ import {
   fireMessageReceivedFlows,
   safeFireFlows,
 } from "@/lib/automation-flows/triggers";
+import { routeInboundReplyToWaits } from "@/lib/automation-flows/waits";
 
 export const dynamic = "force-dynamic";
 
@@ -273,6 +274,13 @@ export async function POST(request: NextRequest) {
           : null;
         handleAiAutoReply(fromPhone, text, order).catch((err) =>
           console.error("[webhook] AI auto-reply error:", err)
+        );
+        // Route the reply to any parked flow runs waiting on this
+        // customer's phone (yes/no branching). Runs before
+        // MESSAGE_RECEIVED so the flow continuation takes priority over
+        // a separate top-level "message received" rule.
+        routeInboundReplyToWaits(fromPhone, text).catch((err) =>
+          console.error("[webhook] route inbound reply to waits failed:", err)
         );
         // Also fire any visual-builder flows whose trigger is
         // MESSAGE_RECEIVED. Runs in best-effort mode so a misconfigured

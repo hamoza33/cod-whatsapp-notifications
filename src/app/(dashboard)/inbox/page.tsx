@@ -582,9 +582,16 @@ export default function InboxPage() {
 
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center justify-between gap-2">
-                    <span className={`text-[15px] truncate ${c.unreadCount > 0 ? "font-bold text-[#111B21]" : "font-medium text-[#111B21]"}`}>
-                      {c.contactName || c.order?.customerName || c.phoneNumber}
-                    </span>
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className={`text-[15px] truncate ${c.unreadCount > 0 ? "font-bold text-[#111B21]" : "font-medium text-[#111B21]"}`}>
+                        {c.contactName || c.order?.customerName || c.phoneNumber}
+                      </span>
+                      {(c.contactName || c.order?.customerName) && (
+                        <span className="text-[12px] text-[#667781] font-mono shrink-0">
+                          {c.phoneNumber}
+                        </span>
+                      )}
+                    </div>
                     <div className="flex items-center gap-1.5 shrink-0">
                       <span className={`text-xs ${c.unreadCount > 0 ? "text-[#25D366] font-medium" : "text-[#667781]"}`}>
                         {formatTime(c.lastReceivedAt)}
