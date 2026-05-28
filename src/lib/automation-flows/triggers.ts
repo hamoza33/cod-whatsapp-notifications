@@ -24,6 +24,33 @@ export async function fireOrderCreatedFlows(orderId: string): Promise<void> {
   );
 }
 
+/**
+ * Fires when an order is observed to have a tracking number for the first
+ * time — either at creation (if tracking is already present) or on the
+ * first sync/webhook update that fills in a previously-empty tracking
+ * field. Use this when an automation depends on `order.trackingNumber`
+ * being non-empty (e.g. "send the courier-tracking link to the customer").
+ *
+ * The `ORDER_CREATED` trigger fires unconditionally on every newly-synced
+ * order, so for orders where tracking arrives in a later sync the
+ * tracking-number condition would otherwise evaluate `false` at fire time
+ * and the flow would silently skip the action. Wiring a separate trigger
+ * keeps `ORDER_CREATED` semantics intact while still letting the operator
+ * react to the "tracking just appeared" moment.
+ */
+export async function fireOrderTrackingAssignedFlows(
+  orderId: string
+): Promise<void> {
+  await runFlowsForTrigger(
+    "ORDER_TRACKING_ASSIGNED",
+    () =>
+      buildContextForOrder(orderId, {
+        type: "ORDER_TRACKING_ASSIGNED",
+        firedAt: new Date(),
+      })
+  );
+}
+
 export async function fireOrderStatusChangedFlows(
   orderId: string,
   fromStatus: OrderStatus | null,

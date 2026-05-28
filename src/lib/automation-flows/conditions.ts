@@ -9,13 +9,24 @@
  *   - Numeric operators (`gt`, `gte`, `lt`, `lte`) coerce both sides via
  *     `parseFloat`. Returns false when either side isn't a finite number.
  *   - `in` / `not_in` split the operand on commas.
- *   - `exists` / `not_exists` ignore the operand.
+ *   - `exists` / `not_exists` ignore the operand. They treat empty strings
+ *     the same as null/undefined — "tracking number exists" means a
+ *     non-empty string, not just a non-null one. This matches the way
+ *     operators most-commonly read it: a blank tracking number is not
+ *     "present".
  *   - `is_empty` / `is_not_empty` treat null, undefined, and empty
  *     strings as empty.
  */
 
 import type { ConditionNodeData, FlowExecutionContext } from "./types";
 import { resolveDataPoint } from "./data-points";
+
+function isPresent(raw: unknown): boolean {
+  if (raw === null || raw === undefined) return false;
+  if (typeof raw === "string") return raw.trim() !== "";
+  if (typeof raw === "number") return Number.isFinite(raw);
+  return true;
+}
 
 export function evaluateCondition(
   cond: ConditionNodeData,
@@ -26,13 +37,11 @@ export function evaluateCondition(
 
   switch (cond.operator) {
     case "exists":
-      return raw !== null && raw !== undefined;
-    case "not_exists":
-      return raw === null || raw === undefined;
-    case "is_empty":
-      return raw === null || raw === undefined || String(raw).trim() === "";
     case "is_not_empty":
-      return raw !== null && raw !== undefined && String(raw).trim() !== "";
+      return isPresent(raw);
+    case "not_exists":
+    case "is_empty":
+      return !isPresent(raw);
   }
 
   // For everything below we need a stringified value

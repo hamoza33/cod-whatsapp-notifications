@@ -826,7 +826,7 @@ function Card({
               {createdAt && <span>{createdAt}</span>}
               {order.codNetworkLeadId && (
                 <span className="font-mono" title={`Lead ID ${order.codNetworkLeadId}`}>
-                  lead #{order.codNetworkLeadId.slice(-6)}
+                  lead #{order.codNetworkLeadId}
                 </span>
               )}
             </div>

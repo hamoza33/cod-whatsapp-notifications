@@ -15,6 +15,7 @@ import { OrderStatus, TrackingStatus } from "@prisma/client";
 /** Top-level trigger event that causes a flow to fire. */
 export type FlowTriggerType =
   | "ORDER_CREATED"
+  | "ORDER_TRACKING_ASSIGNED"
   | "ORDER_STATUS_CHANGED"
   | "TRACKING_STATUS_CHANGED"
   | "MESSAGE_RECEIVED"
@@ -22,6 +23,7 @@ export type FlowTriggerType =
 
 export const FLOW_TRIGGER_TYPES: ReadonlyArray<FlowTriggerType> = [
   "ORDER_CREATED",
+  "ORDER_TRACKING_ASSIGNED",
   "ORDER_STATUS_CHANGED",
   "TRACKING_STATUS_CHANGED",
   "MESSAGE_RECEIVED",
