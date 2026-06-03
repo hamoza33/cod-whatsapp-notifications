@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api-client";
-import { Save, RefreshCw, AlertTriangle, Trash2, Star, Plus } from "lucide-react";
+import { Save, RefreshCw, AlertTriangle, Trash2, Star, Plus, Eye, EyeOff } from "lucide-react";
 import { looksLikePhoneNumber } from "@/lib/whatsapp-validation";
 
 interface SettingsData {
@@ -205,6 +205,7 @@ export default function SettingsPage() {
             onChange={(v) => updateSetting("cod_network_api_email", v)}
             type="email"
             configuredPreview={sensitivePreviews.cod_network_api_email}
+            settingKey="cod_network_api_email"
             placeholder={
               configuredSecrets.has("cod_network_api_email")
                 ? "Currently configured — enter a new value to replace"
@@ -218,6 +219,7 @@ export default function SettingsPage() {
             onChange={(v) => updateSetting("cod_network_api_password", v)}
             type="password"
             configuredPreview={sensitivePreviews.cod_network_api_password}
+            settingKey="cod_network_api_password"
             placeholder={
               configuredSecrets.has("cod_network_api_password")
                 ? "Currently configured — enter a new value to replace"
@@ -230,6 +232,7 @@ export default function SettingsPage() {
             onChange={(v) => updateSetting("cod_network_api_token", v)}
             type="password"
             configuredPreview={sensitivePreviews.cod_network_api_token}
+            settingKey="cod_network_api_token"
             placeholder={
               configuredSecrets.has("cod_network_api_token")
                 ? "Currently configured — enter a new value to replace"
@@ -256,6 +259,7 @@ export default function SettingsPage() {
             onChange={(v) => updateSetting("cod_network_webhook_secret", v)}
             type="password"
             configuredPreview={sensitivePreviews.cod_network_webhook_secret}
+            settingKey="cod_network_webhook_secret"
             placeholder={
               configuredSecrets.has("cod_network_webhook_secret")
                 ? "Currently configured — enter a new value to replace"
@@ -293,6 +297,7 @@ export default function SettingsPage() {
             value={settings.whatsapp_phone_number_id || ""}
             onChange={(v) => updateSetting("whatsapp_phone_number_id", v)}
             configuredPreview={sensitivePreviews.whatsapp_phone_number_id}
+            settingKey="whatsapp_phone_number_id"
             placeholder={
               configuredSecrets.has("whatsapp_phone_number_id")
                 ? "Currently configured — enter a new value to replace"
@@ -310,6 +315,7 @@ export default function SettingsPage() {
             onChange={(v) => updateSetting("whatsapp_access_token", v)}
             type="password"
             configuredPreview={sensitivePreviews.whatsapp_access_token}
+            settingKey="whatsapp_access_token"
             placeholder={configuredSecrets.has("whatsapp_access_token") ? "Currently configured — enter new value to replace" : "Your WhatsApp Access Token"}
           />
           <SettingsField
@@ -323,6 +329,7 @@ export default function SettingsPage() {
             value={settings.whatsapp_template_name || ""}
             onChange={(v) => updateSetting("whatsapp_template_name", v)}
             configuredPreview={sensitivePreviews.whatsapp_template_name}
+            settingKey="whatsapp_template_name"
             placeholder={
               configuredSecrets.has("whatsapp_template_name")
                 ? "Currently configured — enter a new value to replace"
@@ -341,6 +348,7 @@ export default function SettingsPage() {
             value={settings.whatsapp_business_account_id || ""}
             onChange={(v) => updateSetting("whatsapp_business_account_id", v)}
             configuredPreview={sensitivePreviews.whatsapp_business_account_id}
+            settingKey="whatsapp_business_account_id"
             placeholder={
               configuredSecrets.has("whatsapp_business_account_id")
                 ? "Currently configured — enter a new value to replace"
@@ -363,6 +371,7 @@ export default function SettingsPage() {
             onChange={(v) => updateSetting("whatsapp_webhook_verify_token", v)}
             type="password"
             configuredPreview={sensitivePreviews.whatsapp_webhook_verify_token}
+            settingKey="whatsapp_webhook_verify_token"
             placeholder="any random string, e.g. cod-wa-verify-2026"
             help="Pasted into Meta App → WhatsApp → Configuration → Verify Token."
           />
@@ -373,6 +382,7 @@ export default function SettingsPage() {
             placeholder="From Meta App → Settings → Basic → App Secret"
             type="password"
             configuredPreview={sensitivePreviews.whatsapp_app_secret}
+            settingKey="whatsapp_app_secret"
             help="Used to verify X-Hub-Signature-256 on inbound webhook payloads. If blank, the webhook accepts any payload."
           />
         </SettingsSection>
@@ -597,6 +607,7 @@ export default function SettingsPage() {
             onChange={(v) => updateSetting("captcha_api_key", v)}
             type="password"
             configuredPreview={sensitivePreviews.captcha_api_key}
+            settingKey="captcha_api_key"
             placeholder={
               configuredSecrets.has("captcha_api_key")
                 ? "Currently configured — enter a new value to replace"
@@ -659,6 +670,7 @@ export default function SettingsPage() {
             onChange={(v) => updateSetting("openai_api_key", v)}
             type="password"
             configuredPreview={sensitivePreviews.openai_api_key}
+            settingKey="openai_api_key"
             placeholder={
               configuredSecrets.has("openai_api_key")
                 ? "Currently configured — enter a new value to replace"
@@ -854,6 +866,7 @@ export default function SettingsPage() {
             onChange={(v) => updateSetting("voice_agent_api_key", v)}
             type="password"
             configuredPreview={sensitivePreviews.voice_agent_api_key}
+            settingKey="voice_agent_api_key"
             placeholder={
               configuredSecrets.has("voice_agent_api_key")
                 ? "Currently configured — enter a new value to replace"
@@ -922,6 +935,7 @@ export default function SettingsPage() {
               onChange={(v) => updateSetting("voice_agent_llm_api_key", v)}
               type="password"
               configuredPreview={sensitivePreviews.voice_agent_llm_api_key}
+              settingKey="voice_agent_llm_api_key"
               placeholder={
                 configuredSecrets.has("voice_agent_llm_api_key")
                   ? "Currently configured — enter a new value to replace"
@@ -1195,6 +1209,7 @@ function SettingsField({
   help,
   warning,
   configuredPreview,
+  settingKey,
 }: {
   label: string;
   value: string;
@@ -1204,31 +1219,88 @@ function SettingsField({
   help?: string;
   warning?: string;
   configuredPreview?: string;
+  settingKey?: string;
 }) {
+  const isSecret = type === "password";
+  const [revealed, setRevealed] = useState(false);
+  // Full saved value, fetched on demand from /settings/reveal when the eye is
+  // clicked on an already-configured (masked) field. Null until requested.
+  const [revealedValue, setRevealedValue] = useState<string | null>(null);
+  const [revealing, setRevealing] = useState(false);
+
+  // The eye is available for secret fields, and for any masked field with a
+  // saved value the operator may want to read back in full.
+  const canReveal = isSecret || !!configuredPreview;
+  const inputType = isSecret && !revealed ? "password" : "text";
+
+  const toggleReveal = async () => {
+    const next = !revealed;
+    setRevealed(next);
+    // When revealing a saved-but-empty field, pull the full value once so the
+    // chip can show the real credential instead of the mask.
+    if (
+      next &&
+      configuredPreview &&
+      settingKey &&
+      revealedValue === null &&
+      !revealing
+    ) {
+      setRevealing(true);
+      try {
+        const data = await api.get<{ value: string | null }>(
+          `/settings/reveal?key=${encodeURIComponent(settingKey)}`
+        );
+        setRevealedValue(data.value ?? "");
+      } catch {
+        setRevealedValue("");
+      } finally {
+        setRevealing(false);
+      }
+    }
+  };
+
+  const chipText =
+    revealed && revealedValue !== null ? revealedValue : configuredPreview;
+
   return (
     <div className="mb-4">
       <div className="flex items-center justify-between mb-1 gap-3">
         <label className="block text-sm font-medium text-gray-700">
           {label}
         </label>
-        {configuredPreview && (
+        {chipText && (
           <span
-            className="font-mono text-xs px-2 py-0.5 rounded bg-gray-100 text-gray-600 border border-gray-200"
-            title="Currently saved value, masked"
+            className={`font-mono text-xs px-2 py-0.5 rounded bg-gray-100 text-gray-600 border border-gray-200 ${
+              revealed ? "break-all" : ""
+            }`}
+            title={revealed ? "Currently saved value" : "Currently saved value, masked"}
           >
-            {configuredPreview}
+            {revealing ? "Revealing…" : chipText}
           </span>
         )}
       </div>
-      <input
-        type={type}
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        placeholder={placeholder}
-        className={`w-full px-3 py-2 border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent ${
-          warning ? "border-amber-400 bg-amber-50" : "border-gray-300"
-        }`}
-      />
+      <div className="relative">
+        <input
+          type={inputType}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder={placeholder}
+          className={`w-full px-3 py-2 ${canReveal ? "pr-10" : ""} border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent ${
+            warning ? "border-amber-400 bg-amber-50" : "border-gray-300"
+          }`}
+        />
+        {canReveal && (
+          <button
+            type="button"
+            onClick={toggleReveal}
+            aria-label={revealed ? "Hide value" : "Reveal value"}
+            title={revealed ? "Hide value" : "Reveal value"}
+            className="absolute inset-y-0 right-0 flex items-center px-3 text-gray-400 hover:text-gray-600"
+          >
+            {revealed ? <EyeOff size={16} /> : <Eye size={16} />}
+          </button>
+        )}
+      </div>
       {warning && (
         <p className="mt-1 flex items-start gap-1 text-xs text-amber-700">
           <AlertTriangle size={14} className="mt-0.5 shrink-0" />

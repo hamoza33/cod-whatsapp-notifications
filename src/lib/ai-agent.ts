@@ -29,18 +29,20 @@ export async function handleAiAutoReply(
   const apiKey = await getSetting(SETTING_KEYS.OPENAI_API_KEY);
   if (!apiKey) return { replied: false, error: "OpenAI API key not configured" };
 
-  // Check per-product AI agent toggle: if the order's product exists in the
-  // products table, only auto-reply when `aiAgentEnabled` is true for that
-  // product. Orders whose product isn't tracked are allowed through so the
-  // agent still works for ad-hoc / unlinked conversations.
-  if (order?.productName) {
-    const product = await prisma.product.findFirst({
-      where: { name: order.productName },
-      select: { aiAgentEnabled: true },
-    });
-    if (product && !product.aiAgentEnabled) {
-      return { replied: false, error: "AI agent not enabled for this product" };
-    }
+  // Two-level opt-in: the agent only replies when BOTH the global toggle
+  // (checked above) AND the per-product toggle are enabled. Auto-reply is
+  // therefore silent unless the inbound message maps to a known product whose
+  // `aiAgentEnabled` flag is true — conversations with no product context, or
+  // a product that isn't tracked / isn't enabled, get no automatic response.
+  if (!order?.productName) {
+    return { replied: false, error: "No product context for AI auto-reply" };
+  }
+  const product = await prisma.product.findFirst({
+    where: { name: order.productName },
+    select: { aiAgentEnabled: true },
+  });
+  if (!product || !product.aiAgentEnabled) {
+    return { replied: false, error: "AI agent not enabled for this product" };
   }
 
   const model = (await getSetting(SETTING_KEYS.AI_AGENT_MODEL)) || "gpt-4o-mini";

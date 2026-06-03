@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback, useRef, useMemo } from "react";
+import { useEffect, useState, useCallback, useRef, useMemo, Fragment } from "react";
 import { api } from "@/lib/api-client";
 import {
   RefreshCw,
@@ -104,6 +104,28 @@ function formatMessageTime(dateStr: string) {
   return new Date(dateStr).toLocaleTimeString(undefined, {
     hour: "2-digit",
     minute: "2-digit",
+  });
+}
+
+/**
+ * WhatsApp-style date label for a message-group divider: "Today" for messages
+ * from the current day, "Yesterday" for the day before, and the full date
+ * (day, month, year) for anything older.
+ */
+function formatDateDivider(dateStr: string) {
+  const d = new Date(dateStr);
+  const now = new Date();
+  const isToday = d.toDateString() === now.toDateString();
+  const yesterday = new Date(now);
+  yesterday.setDate(yesterday.getDate() - 1);
+  const isYesterday = d.toDateString() === yesterday.toDateString();
+
+  if (isToday) return "Today";
+  if (isYesterday) return "Yesterday";
+  return d.toLocaleDateString(undefined, {
+    day: "numeric",
+    month: "long",
+    year: "numeric",
   });
 }
 
@@ -737,13 +759,24 @@ export default function InboxPage() {
                   </span>
                 </div>
               )}
-              {thread?.thread.map((m) =>
-                m.kind === "inbound" ? (
-                  <InboundBubble key={m.id} msg={m} />
-                ) : (
-                  <OutboundBubble key={m.id} msg={m} />
-                )
-              )}
+              {(() => {
+                let lastDay: string | null = null;
+                return thread?.thread.map((m) => {
+                  const day = new Date(m.at).toDateString();
+                  const showDivider = day !== lastDay;
+                  lastDay = day;
+                  return (
+                    <Fragment key={m.id}>
+                      {showDivider && <DateDivider at={m.at} />}
+                      {m.kind === "inbound" ? (
+                        <InboundBubble msg={m} />
+                      ) : (
+                        <OutboundBubble msg={m} />
+                      )}
+                    </Fragment>
+                  );
+                });
+              })()}
               <div ref={threadEndRef} />
             </div>
 
@@ -979,6 +1012,20 @@ function DeliveryBadge({
       ) : null}
       {label}
     </span>
+  );
+}
+
+/**
+ * WhatsApp-style centered date chip shown above the first message of each
+ * day in the conversation thread.
+ */
+function DateDivider({ at }: { at: string }) {
+  return (
+    <div className="flex justify-center my-2">
+      <span className="bg-white/90 text-[#54656F] text-[11px] font-medium uppercase tracking-wide px-3 py-1 rounded-lg shadow-sm">
+        {formatDateDivider(at)}
+      </span>
+    </div>
   );
 }
 
