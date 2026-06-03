@@ -230,6 +230,29 @@ export default function PipelinePage() {
     fetchOrders();
   }, [fetchOrders]);
 
+  // Auto-sync with the COD platform: poll the orders feed on an interval and
+  // whenever the tab regains focus so status changes pushed by the COD
+  // Network webhook are reflected in the pipeline without a manual refresh.
+  // Polls are skipped while a card is mid-drag or the tab is hidden so we
+  // never yank a card out from under the operator or waste requests in the
+  // background.
+  useEffect(() => {
+    const POLL_MS = 15_000;
+    const maybeRefresh = () => {
+      if (document.visibilityState !== "visible") return;
+      if (draggingIdRef.current) return;
+      fetchOrders();
+    };
+    const interval = setInterval(maybeRefresh, POLL_MS);
+    document.addEventListener("visibilitychange", maybeRefresh);
+    window.addEventListener("focus", maybeRefresh);
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener("visibilitychange", maybeRefresh);
+      window.removeEventListener("focus", maybeRefresh);
+    };
+  }, [fetchOrders]);
+
   const filteredOrders = useMemo(() => {
     if (!searchQuery.trim()) return orders;
     const q = searchQuery.toLowerCase();

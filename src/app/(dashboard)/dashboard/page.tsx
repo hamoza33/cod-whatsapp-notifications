@@ -51,7 +51,24 @@ export default function DashboardPage() {
       }
     }
     fetchStats();
-    return () => { cancelled = true; };
+
+    // Keep the dashboard counts in sync with COD-platform status changes:
+    // refresh on an interval and whenever the tab regains focus, skipping
+    // polls while the tab is hidden.
+    const POLL_MS = 30_000;
+    const maybeRefresh = () => {
+      if (document.visibilityState !== "visible") return;
+      fetchStats();
+    };
+    const interval = setInterval(maybeRefresh, POLL_MS);
+    document.addEventListener("visibilitychange", maybeRefresh);
+    window.addEventListener("focus", maybeRefresh);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+      document.removeEventListener("visibilitychange", maybeRefresh);
+      window.removeEventListener("focus", maybeRefresh);
+    };
   }, []);
 
   const handleSync = async () => {

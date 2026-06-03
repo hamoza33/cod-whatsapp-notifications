@@ -11,7 +11,7 @@
 import type { ParsedEvent, ProviderResult } from "./types";
 import { TrackingCarrier } from "@prisma/client";
 
-const DEFAULT_API_URL = "https://courier-tracking-api.fly.dev";
+const DEFAULT_API_URL = "https://tracking.shopinzo.bond";
 
 /**
  * Map from our internal TrackingCarrier enum to the courier-api carrier codes.
@@ -50,11 +50,36 @@ interface CourierApiResult {
   carrierName: string;
   waybillNo: string;
   found: boolean;
+  // In the current API `latestStatus` is the canonical category (one of
+  // "In Transit" | "Out for Delivery" | "Delivered" | "Returned") while the
+  // raw carrier-side text lives in `latestStatusDetail`. `normalizedStatus`
+  // carries the same canonical value explicitly. Older deployments only set
+  // `latestStatus` (raw) and omit the other two, so both are optional.
   latestStatus: string | null;
+  latestStatusDetail?: string | null;
+  normalizedStatus?: string | null;
   latestTime: string | null;
   events: CourierApiEvent[];
   extra?: Record<string, unknown>;
   warnings?: string[];
+}
+
+/**
+ * Pull the raw carrier-side status text out of a result, preferring the
+ * dedicated `latestStatusDetail` field (new API) and falling back to
+ * `latestStatus` (older API where it still held the raw text).
+ */
+function rawStatusOf(data: CourierApiResult): string | null {
+  return data.latestStatusDetail ?? data.latestStatus;
+}
+
+/**
+ * Pull the canonical category out of a result. Prefers the explicit
+ * `normalizedStatus` field; on the current API `latestStatus` is also the
+ * canonical value, so it's an equivalent fallback.
+ */
+function normalizedStatusOf(data: CourierApiResult): string | null {
+  return data.normalizedStatus ?? null;
 }
 
 interface CourierApiError {
@@ -78,7 +103,7 @@ function parseEvent(evt: CourierApiEvent): ParsedEvent {
  * @param trackingNumber The waybill / tracking number
  * @param carrier Optional internal TrackingCarrier enum — maps to the API's carrier code.
  *                When omitted, the API auto-detects the carrier.
- * @param apiUrl Override the API base URL (defaults to the Fly.io deployment)
+ * @param apiUrl Override the API base URL (defaults to tracking.shopinzo.bond)
  */
 export async function fetchCourierApiTracking(
   trackingNumber: string,
@@ -132,7 +157,8 @@ export async function fetchCourierApiTracking(
   if (!data.found || data.events.length === 0) {
     return {
       events: [],
-      rawStatus: data.latestStatus,
+      rawStatus: rawStatusOf(data),
+      normalizedStatus: normalizedStatusOf(data),
       error: `not_found_on_courier_api`,
     };
   }
@@ -140,7 +166,8 @@ export async function fetchCourierApiTracking(
   const events = data.events.map(parseEvent);
   return {
     events,
-    rawStatus: data.latestStatus,
+    rawStatus: rawStatusOf(data),
+    normalizedStatus: normalizedStatusOf(data),
   };
 }
 
@@ -274,14 +301,16 @@ export async function fetchCourierApiBulk(
       if (!result || !result.found || result.events.length === 0) {
         map.set(waybill, {
           events: [],
-          rawStatus: result?.latestStatus ?? null,
+          rawStatus: result ? rawStatusOf(result) : null,
+          normalizedStatus: result ? normalizedStatusOf(result) : null,
           error: "not_found_on_courier_api",
         });
         continue;
       }
       map.set(waybill, {
         events: result.events.map(parseEvent),
-        rawStatus: result.latestStatus,
+        rawStatus: rawStatusOf(result),
+        normalizedStatus: normalizedStatusOf(result),
       });
     }
 

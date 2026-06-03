@@ -187,6 +187,31 @@ async function fetchTrackingByCarrier(
  * the description and leaves status empty, while iMile puts them in the
  * status. We honour whichever signal hints at a terminal state first.
  */
+/**
+ * Map the courier-tracking-api's canonical category string to our internal
+ * TrackingStatus enum. The aggregator already applies per-carrier return
+ * rules server-side, so when it returns one of these four values we trust it
+ * directly and skip the local heuristic. Returns null for an unrecognized /
+ * absent value so the caller can fall back to {@link mapToTrackingStatus}.
+ */
+function canonicalToTrackingStatus(
+  normalized: string | null | undefined
+): TrackingStatus | null {
+  if (!normalized) return null;
+  switch (normalized.trim().toLowerCase()) {
+    case "in transit":
+      return TrackingStatus.IN_TRANSIT;
+    case "out for delivery":
+      return TrackingStatus.OUT_FOR_DELIVERY;
+    case "delivered":
+      return TrackingStatus.DELIVERED;
+    case "returned":
+      return TrackingStatus.RETURNED;
+    default:
+      return null;
+  }
+}
+
 function mapToTrackingStatus(
   _carrier: TrackingCarrier,
   rawStatus: string | null,
@@ -397,7 +422,7 @@ async function applyTrackingResult(
   opts: ApplyOpts,
   result: ProviderResult
 ): Promise<{ status: TrackingStatus; eventsCount: number }> {
-  const { events, rawStatus, error } = result;
+  const { events, rawStatus, normalizedStatus, error } = result;
 
   for (const evt of events) {
     await prisma.trackingEvent.upsert({
@@ -443,11 +468,13 @@ async function applyTrackingResult(
   // signal — "returned to the sender", "Receiver signed" — appears).
   let status = opts.currentStatus;
   if (latestEvent) {
-    const mapped = mapToTrackingStatus(
-      opts.carrier,
-      rawStatus,
-      latestEvent.description
-    );
+    // Prefer the courier-tracking-api's canonical category when present — it
+    // already encodes the per-carrier return rules. Fall back to the local
+    // heuristic mapper for older API deployments / unclassified values.
+    const canonical = canonicalToTrackingStatus(normalizedStatus);
+    const mapped =
+      canonical ??
+      mapToTrackingStatus(opts.carrier, rawStatus, latestEvent.description);
     if (mapped !== TrackingStatus.UNKNOWN) {
       status = mapped;
     }

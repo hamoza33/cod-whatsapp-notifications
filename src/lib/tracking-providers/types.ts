@@ -30,5 +30,13 @@ export interface ParsedEvent {
 export interface ProviderResult {
   events: ParsedEvent[];
   rawStatus: string | null;
+  /**
+   * Canonical category computed server-side by the courier-tracking-api —
+   * one of "In Transit" | "Out for Delivery" | "Delivered" | "Returned"
+   * (or null when the API couldn't classify / is an older deployment). The
+   * orchestrator prefers this over the local heuristic mapper so order
+   * grouping follows the aggregator's per-carrier return rules.
+   */
+  normalizedStatus?: string | null;
   error?: string;
 }
