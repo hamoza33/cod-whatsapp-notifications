@@ -14,6 +14,7 @@ const TABS = [
   { id: "webhooks", label: "Webhooks" },
   { id: "whatsapp", label: "WhatsApp" },
   { id: "wa_numbers", label: "WA Numbers" },
+  { id: "wa_support", label: "WA Support" },
   { id: "sync", label: "Order Sync" },
   { id: "tracking", label: "Tracking" },
   { id: "automation", label: "Automation" },
@@ -385,6 +386,116 @@ export default function SettingsPage() {
             settingKey="whatsapp_app_secret"
             help="Used to verify X-Hub-Signature-256 on inbound webhook payloads. If blank, the webhook accepts any payload."
           />
+        </SettingsSection>
+      )}
+
+      {/* WhatsApp Support */}
+      {activeTab === "wa_support" && (
+        <SettingsSection
+          title="WhatsApp Support"
+          description="Configure a separate WhatsApp account for customer support. This uses independent credentials from the main WhatsApp setup, allowing a dedicated support line."
+          onSave={() =>
+            handleSave("WhatsApp Support", [
+              "wa_support_phone_number_id",
+              "wa_support_access_token",
+              "wa_support_api_key",
+              "wa_support_ai_enabled",
+              "wa_support_ai_api_key",
+              "wa_support_ai_system_prompt",
+              "wa_support_ai_model",
+            ])
+          }
+          saving={saving}
+        >
+          <SettingsField
+            label="Phone Number ID"
+            value={settings.wa_support_phone_number_id || ""}
+            onChange={(v) => updateSetting("wa_support_phone_number_id", v)}
+            configuredPreview={sensitivePreviews.wa_support_phone_number_id}
+            settingKey="wa_support_phone_number_id"
+            placeholder={
+              configuredSecrets.has("wa_support_phone_number_id")
+                ? "Currently configured — enter a new value to replace"
+                : "e.g. 906139205908177"
+            }
+          />
+          <SettingsField
+            label="Access Token"
+            value={settings.wa_support_access_token || ""}
+            onChange={(v) => updateSetting("wa_support_access_token", v)}
+            type="password"
+            configuredPreview={sensitivePreviews.wa_support_access_token}
+            settingKey="wa_support_access_token"
+            placeholder={configuredSecrets.has("wa_support_access_token") ? "Currently configured — enter new value to replace" : "Your WhatsApp Support Access Token"}
+          />
+          <SettingsField
+            label="API Key"
+            value={settings.wa_support_api_key || ""}
+            onChange={(v) => updateSetting("wa_support_api_key", v)}
+            type="password"
+            configuredPreview={sensitivePreviews.wa_support_api_key}
+            settingKey="wa_support_api_key"
+            placeholder={configuredSecrets.has("wa_support_api_key") ? "Currently configured — enter new value to replace" : "API key for WhatsApp Support line"}
+          />
+          <div className="border-t border-gray-200 pt-4 mt-4">
+            <h4 className="text-sm font-semibold text-gray-800 mb-3">Support AI Agent</h4>
+            <div className="flex items-center gap-3 mb-4">
+              <label className="text-sm font-medium text-gray-700">
+                Enable Auto-Reply
+              </label>
+              <button
+                onClick={() =>
+                  updateSetting(
+                    "wa_support_ai_enabled",
+                    settings.wa_support_ai_enabled === "true" ? "false" : "true"
+                  )
+                }
+                className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                  settings.wa_support_ai_enabled === "true"
+                    ? "bg-blue-600"
+                    : "bg-gray-300"
+                }`}
+              >
+                <span
+                  className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                    settings.wa_support_ai_enabled === "true"
+                      ? "translate-x-6"
+                      : "translate-x-1"
+                  }`}
+                />
+              </button>
+            </div>
+            <SettingsField
+              label="AI API Key"
+              value={settings.wa_support_ai_api_key || ""}
+              onChange={(v) => updateSetting("wa_support_ai_api_key", v)}
+              type="password"
+              configuredPreview={sensitivePreviews.wa_support_ai_api_key}
+              settingKey="wa_support_ai_api_key"
+              placeholder={configuredSecrets.has("wa_support_ai_api_key") ? "Currently configured — enter new value to replace" : "OpenAI API Key for support agent"}
+            />
+            <SettingsField
+              label="AI Model"
+              value={settings.wa_support_ai_model || "gpt-4o-mini"}
+              onChange={(v) => updateSetting("wa_support_ai_model", v)}
+              placeholder="gpt-4o-mini"
+            />
+            <div className="mb-4">
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                System Prompt
+              </label>
+              <textarea
+                value={settings.wa_support_ai_system_prompt || ""}
+                onChange={(e) => updateSetting("wa_support_ai_system_prompt", e.target.value)}
+                rows={5}
+                className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                placeholder="You are a helpful customer support agent..."
+              />
+              <p className="mt-1 text-xs text-gray-500">
+                Instructions for the support AI agent. This is independent of the main AI agent.
+              </p>
+            </div>
+          </div>
         </SettingsSection>
       )}
 

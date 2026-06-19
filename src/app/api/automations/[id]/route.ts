@@ -61,6 +61,10 @@ interface UpdateAutomationBody {
   andMinPrice?: string | null;
   andMaxPrice?: string | null;
   andTrackingStatusContains?: string | null;
+  andMinCallAttempts?: number | null;
+  andMaxCallAttempts?: number | null;
+  scheduledSendHour?: number | null;
+  incrementCallAttempts?: boolean;
   thenMoveToStatus?: string | null;
   thenSendTemplateName?: string | null;
   thenSendTemplateLanguage?: string | null;
@@ -123,6 +127,14 @@ export async function PATCH(request: NextRequest, context: RouteContext) {
     data.andMaxPrice = body.andMaxPrice?.trim() || null;
   if (body.andTrackingStatusContains !== undefined)
     data.andTrackingStatusContains = body.andTrackingStatusContains?.trim() || null;
+  if (body.andMinCallAttempts !== undefined)
+    data.andMinCallAttempts = body.andMinCallAttempts;
+  if (body.andMaxCallAttempts !== undefined)
+    data.andMaxCallAttempts = body.andMaxCallAttempts;
+  if (body.scheduledSendHour !== undefined)
+    data.scheduledSendHour = body.scheduledSendHour;
+  if (body.incrementCallAttempts !== undefined)
+    data.incrementCallAttempts = body.incrementCallAttempts;
 
   try {
     const automation = await prisma.automation.update({
@@ -204,6 +216,7 @@ export async function POST(request: NextRequest, context: RouteContext) {
         customerCity: true,
         productPrice: true,
         status: true,
+        callAttempts: true,
         trackingOrders: { select: { latestEvent: true }, take: 1 },
       },
     });

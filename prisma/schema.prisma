@@ -37,13 +37,20 @@ enum OrderStatus {
   RETURNED
   CANCELLED
   UNKNOWN
-  // Additional lead statuses from COD Network dashboard
+  // Lead statuses (COD Network lead API codes 1-12)
   NEW
   NO_REPLY
   WRONG
   EXPIRED
   CALL_LATER
+  CALL_LATER_SCHEDULED
   CANCELLED_PRICE
+  DELAYED
+  BLACK_LISTED
+  // Order statuses (COD Network order API codes)
+  ASSIGNED
+  OUT_OF_STOCK
+  RETURN_ON_PROCESS
 }
 
 model Order {
@@ -86,6 +93,8 @@ model Order {
   whatsappSentAt    DateTime?   @map("whatsapp_sent_at")
   // Whether this order has been queued for the AI voice agent to call.
   callAgentQueued   Boolean     @default(false) @map("call_agent_queued")
+  // Number of call attempts made for this lead (incremented by automation/webhook).
+  callAttempts      Int         @default(0) @map("call_attempts")
   // Free-form notes the operator can attach to an order from the Pipeline
   // (e.g. "called customer, no answer"). Not synced from COD Network.
   pipelineNote      String?     @map("pipeline_note")
@@ -257,6 +266,15 @@ model Automation {
   // must contain this substring for the automation to fire. Enables rules
   // like "when tracking status contains 'location changed' → send template".
   andTrackingStatusContains String?      @map("and_tracking_status_contains")
+  // Call attempts conditions — fire only when the order's callAttempts
+  // is >= min and/or <= max. Enables rules like "after 4 calls, send template".
+  andMinCallAttempts        Int?         @map("and_min_call_attempts")
+  andMaxCallAttempts        Int?         @map("and_max_call_attempts")
+  // Time-based scheduling — if set, the automation action is deferred until
+  // this hour (0-23, UTC). E.g. "6" means the template is sent at 6:00 AM.
+  scheduledSendHour         Int?         @map("scheduled_send_hour")
+  // Whether to increment call attempts counter when this automation fires.
+  incrementCallAttempts     Boolean      @default(false) @map("increment_call_attempts")
   createdAt                 DateTime     @default(now()) @map("created_at")
   updatedAt                 DateTime     @updatedAt @map("updated_at")
 

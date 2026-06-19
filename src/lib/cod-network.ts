@@ -542,24 +542,54 @@ export interface CodNetworkProduct {
  *  1=New, 2=Assigned, 3=Shipped, 4=Delivered, 5=Return, 6=Cancel,
  *  7=Out of stock, 8=Pending, 9=Return on process, 10=Processing
  */
-const STATUS_CODE_MAP: Record<number, string> = {
-  1: "PENDING",
-  2: "CONFIRMED",
+const ORDER_STATUS_CODE_MAP: Record<number, string> = {
+  1: "NEW",
+  2: "ASSIGNED",
   3: "SHIPPED",
   4: "DELIVERED",
   5: "RETURNED",
   6: "CANCELLED",
-  7: "CANCELLED",
+  7: "OUT_OF_STOCK",
   8: "PENDING",
-  9: "PROCESSING",
+  9: "RETURN_ON_PROCESS",
   10: "PROCESSING",
 };
+
+/**
+ * COD Network seller lead status codes
+ * (https://developer.cod.network/v2/api-seller-leads).
+ *  1=New, 2=Confirmed, 3=Call later, 4=Call later scheduled,
+ *  5=No reply, 6=Cancelled, 7=Wrong, 8=Expired,
+ *  9=Processing, 10=Delayed, 11=Cancelled price, 12=Black listed
+ */
+const LEAD_STATUS_CODE_MAP: Record<number, string> = {
+  1: "NEW",
+  2: "CONFIRMED",
+  3: "CALL_LATER",
+  4: "CALL_LATER_SCHEDULED",
+  5: "NO_REPLY",
+  6: "CANCELLED",
+  7: "WRONG",
+  8: "EXPIRED",
+  9: "PROCESSING",
+  10: "DELAYED",
+  11: "CANCELLED_PRICE",
+  12: "BLACK_LISTED",
+};
+
+/** Combined code map — order codes take priority, lead codes fill gaps. */
+const STATUS_CODE_MAP: Record<number, string> = {
+  ...LEAD_STATUS_CODE_MAP,
+  ...ORDER_STATUS_CODE_MAP,
+};
+
+export { LEAD_STATUS_CODE_MAP, ORDER_STATUS_CODE_MAP };
 
 const STATUS_STRING_MAP: Record<string, string> = {
   new: "NEW",
   "new lead": "NEW",
   pending: "PENDING",
-  assigned: "CONFIRMED",
+  assigned: "ASSIGNED",
   confirmed: "CONFIRMED",
   processing: "PROCESSING",
   shipped: "SHIPPED",
@@ -569,11 +599,13 @@ const STATUS_STRING_MAP: Record<string, string> = {
   delivered: "DELIVERED",
   returned: "RETURNED",
   return: "RETURNED",
-  "return on process": "PROCESSING",
+  "return on process": "RETURN_ON_PROCESS",
+  return_on_process: "RETURN_ON_PROCESS",
   cancelled: "CANCELLED",
   canceled: "CANCELLED",
   cancel: "CANCELLED",
-  "out of stock": "CANCELLED",
+  "out of stock": "OUT_OF_STOCK",
+  out_of_stock: "OUT_OF_STOCK",
   "no reply": "NO_REPLY",
   no_reply: "NO_REPLY",
   noreply: "NO_REPLY",
@@ -585,10 +617,16 @@ const STATUS_STRING_MAP: Record<string, string> = {
   "call later": "CALL_LATER",
   call_later: "CALL_LATER",
   callback: "CALL_LATER",
-  scheduled: "CALL_LATER",
+  "call later scheduled": "CALL_LATER_SCHEDULED",
+  call_later_scheduled: "CALL_LATER_SCHEDULED",
+  scheduled: "CALL_LATER_SCHEDULED",
+  delayed: "DELAYED",
   "cancelled price": "CANCELLED_PRICE",
   cancelled_price: "CANCELLED_PRICE",
   "canceled price": "CANCELLED_PRICE",
+  "black listed": "BLACK_LISTED",
+  black_listed: "BLACK_LISTED",
+  blacklisted: "BLACK_LISTED",
 };
 
 export function mapCodStatus(
