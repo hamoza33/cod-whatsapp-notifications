@@ -393,12 +393,15 @@ export default function SettingsPage() {
       {activeTab === "wa_support" && (
         <SettingsSection
           title="WhatsApp Support"
-          description="Configure a separate WhatsApp account for customer support. This uses independent credentials from the main WhatsApp setup, allowing a dedicated support line."
+          description="Configure a separate WhatsApp Business account for customer support. These credentials are entirely independent from the main WhatsApp setup, allowing you to manage support conversations in a dedicated inbox."
           onSave={() =>
             handleSave("WhatsApp Support", [
+              "wa_support_business_account_id",
               "wa_support_phone_number_id",
               "wa_support_access_token",
               "wa_support_api_key",
+              "wa_support_app_secret",
+              "wa_support_webhook_verify_token",
               "wa_support_ai_enabled",
               "wa_support_ai_api_key",
               "wa_support_ai_system_prompt",
@@ -407,6 +410,18 @@ export default function SettingsPage() {
           }
           saving={saving}
         >
+          <SettingsField
+            label="WhatsApp Business Account ID"
+            value={settings.wa_support_business_account_id || ""}
+            onChange={(v) => updateSetting("wa_support_business_account_id", v)}
+            configuredPreview={sensitivePreviews.wa_support_business_account_id}
+            settingKey="wa_support_business_account_id"
+            placeholder={
+              configuredSecrets.has("wa_support_business_account_id")
+                ? "Currently configured — enter a new value to replace"
+                : "e.g. 123456789012345"
+            }
+          />
           <SettingsField
             label="Phone Number ID"
             value={settings.wa_support_phone_number_id || ""}
@@ -426,7 +441,7 @@ export default function SettingsPage() {
             type="password"
             configuredPreview={sensitivePreviews.wa_support_access_token}
             settingKey="wa_support_access_token"
-            placeholder={configuredSecrets.has("wa_support_access_token") ? "Currently configured — enter new value to replace" : "Your WhatsApp Support Access Token"}
+            placeholder={configuredSecrets.has("wa_support_access_token") ? "Currently configured — enter new value to replace" : "Permanent access token for support line"}
           />
           <SettingsField
             label="API Key"
@@ -437,8 +452,31 @@ export default function SettingsPage() {
             settingKey="wa_support_api_key"
             placeholder={configuredSecrets.has("wa_support_api_key") ? "Currently configured — enter new value to replace" : "API key for WhatsApp Support line"}
           />
+          <SettingsField
+            label="App Secret"
+            value={settings.wa_support_app_secret || ""}
+            onChange={(v) => updateSetting("wa_support_app_secret", v)}
+            type="password"
+            configuredPreview={sensitivePreviews.wa_support_app_secret}
+            settingKey="wa_support_app_secret"
+            placeholder={configuredSecrets.has("wa_support_app_secret") ? "Currently configured — enter new value to replace" : "Meta App Secret for webhook signature verification"}
+          />
+          <SettingsField
+            label="Webhook Verify Token"
+            value={settings.wa_support_webhook_verify_token || ""}
+            onChange={(v) => updateSetting("wa_support_webhook_verify_token", v)}
+            configuredPreview={sensitivePreviews.wa_support_webhook_verify_token}
+            settingKey="wa_support_webhook_verify_token"
+            placeholder={
+              configuredSecrets.has("wa_support_webhook_verify_token")
+                ? "Currently configured — enter a new value to replace"
+                : "Token to verify webhook subscription"
+            }
+            help="Point your Meta webhook to: /api/whatsapp-support/webhook"
+          />
           <div className="border-t border-gray-200 pt-4 mt-4">
             <h4 className="text-sm font-semibold text-gray-800 mb-3">Support AI Agent</h4>
+            <p className="text-xs text-gray-500 mb-3">This AI agent is independent of the main WhatsApp AI agent. It uses its own API key and system prompt.</p>
             <div className="flex items-center gap-3 mb-4">
               <label className="text-sm font-medium text-gray-700">
                 Enable Auto-Reply
