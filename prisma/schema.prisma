@@ -172,12 +172,30 @@ model InboundMessage {
   receivedAt        DateTime @default(now()) @map("received_at")
   orderId           String?  @map("order_id")
   order             Order?   @relation(fields: [orderId], references: [id])
+  // Support source tag (e.g. "site1", "site2") detected from the WhatsApp link
+  // ?source= parameter. Null for non-support or unknown-source messages.
+  source            String?
 
   @@index([fromPhoneNumber])
   @@index([receivedAt])
   @@index([orderId])
   @@index([phoneNumberId])
+  @@index([source])
   @@map("inbound_messages")
+}
+
+// Each support source represents a website/channel with its own AI system prompt.
+// When a customer chats via ?source=<slug>, the matching prompt is used for auto-reply.
+model SupportSource {
+  id           String   @id @default(cuid())
+  slug         String   @unique
+  name         String
+  systemPrompt String   @map("system_prompt") @db.Text
+  enabled      Boolean  @default(true)
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  @@map("support_sources")
 }
 
 model SyncLog {

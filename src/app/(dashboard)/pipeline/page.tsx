@@ -240,6 +240,7 @@ export default function PipelinePage() {
   const [columnOrder, setColumnOrder] = useState<string[]>(loadColumnOrder);
   const [dragColumnKey, setDragColumnKey] = useState<string | null>(null);
   const [pipelineView, setPipelineView] = useState<PipelineView>("leads");
+  const [dateFilter, setDateFilter] = useState<"today" | "all">("today");
 
   // Derive column order based on active pipeline view
   const activeColumnOrder = useMemo(() => {
@@ -262,8 +263,10 @@ export default function PipelinePage() {
 
   const fetchOrders = useCallback(async () => {
     try {
+      const params = new URLSearchParams({ pageSize: "1000" });
+      if (dateFilter === "today") params.set("dateFilter", "today");
       const data = await api.get<{ orders: PipelineOrder[] }>(
-        "/orders?pageSize=500"
+        `/orders?${params.toString()}`
       );
       setOrders(data.orders);
       setError(null);
@@ -273,7 +276,7 @@ export default function PipelinePage() {
       setLoading(false);
       setRefreshing(false);
     }
-  }, []);
+  }, [dateFilter]);
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
@@ -567,6 +570,28 @@ export default function PipelinePage() {
               }`}
             >
               Order Pipeline (10)
+            </button>
+          </div>
+          <div className="flex items-center gap-1 bg-gray-50 rounded-lg p-0.5 ml-2">
+            <button
+              onClick={() => setDateFilter("today")}
+              className={`px-3 py-1 text-xs font-medium rounded-md transition-colors ${
+                dateFilter === "today"
+                  ? "bg-green-600 text-white"
+                  : "bg-gray-100 text-gray-600 hover:bg-gray-200"
+              }`}
+            >
+              Today
+            </button>
+            <button
+              onClick={() => setDateFilter("all")}
+              className={`px-3 py-1 text-xs font-medium rounded-md transition-colors ${
+                dateFilter === "all"
+                  ? "bg-green-600 text-white"
+                  : "bg-gray-100 text-gray-600 hover:bg-gray-200"
+              }`}
+            >
+              All
             </button>
           </div>
         </div>
@@ -974,6 +999,18 @@ function Card({
               <span className="truncate">{order.customerCity}</span>
             </div>
           )}
+          {order.customerAddress && (
+            <div className="flex items-center gap-1.5 text-gray-600">
+              <MapPin size={11} className="shrink-0 text-gray-400" />
+              <span className="truncate text-[10px]">{order.customerAddress}</span>
+            </div>
+          )}
+          {order.deliveryCompany && (
+            <div className="flex items-center gap-1.5 text-gray-600">
+              <PackageIcon size={11} className="shrink-0 text-gray-400" />
+              <span className="truncate text-[10px]">{order.deliveryCompany}</span>
+            </div>
+          )}
           {order.trackingNumber && (
             <div className="flex items-center gap-1.5 text-gray-600">
               <Hash size={11} className="shrink-0 text-gray-400" />
@@ -994,6 +1031,12 @@ function Card({
                   <Copy size={10} className="text-gray-400" />
                 )}
               </button>
+            </div>
+          )}
+          {order.callAttempts > 0 && (
+            <div className="flex items-center gap-1.5 text-gray-600">
+              <Phone size={11} className="shrink-0 text-orange-400" />
+              <span className="text-[10px]">{order.callAttempts} call attempt{order.callAttempts === 1 ? "" : "s"}</span>
             </div>
           )}
           {sentAt && (
@@ -1055,9 +1098,30 @@ function SendDialog({
   const [imageLibrary, setImageLibrary] = useState<Array<{ id: string; url: string; name: string; mediaId: string | null }>>([]);
   const [showImageLibrary, setShowImageLibrary] = useState(false);
   const variableInputRef = useRef<HTMLInputElement>(null);
+  const [allTemplates, setAllTemplates] = useState<Array<{
+    name: string; language: string; status: string; category: string;
+    bodyParamCount: number; bodyText: string | null; headerType: string | null;
+  }>>([]);
+  const [loadingTemplates, setLoadingTemplates] = useState(true);
 
   useEffect(() => {
-    const run = async () => {
+    // Load all approved templates
+    const loadAll = async () => {
+      setLoadingTemplates(true);
+      try {
+        const data = await api.get<{ templates: Array<{
+          name: string; language: string; status: string; category: string;
+          bodyParamCount: number; bodyText: string | null; headerType: string | null;
+        }> }>("/whatsapp/templates/cached?status=APPROVED");
+        setAllTemplates(data.templates);
+      } catch {
+        // ignore
+      } finally {
+        setLoadingTemplates(false);
+      }
+    };
+
+    const detectDefault = async () => {
       setDetecting(true);
       setTemplateError(null);
       try {
@@ -1073,7 +1137,9 @@ function SendDialog({
         setDetecting(false);
       }
     };
-    run();
+
+    loadAll();
+    detectDefault();
 
     // Load image library
     fetch("/api/images")
@@ -1083,6 +1149,21 @@ function SendDialog({
       })
       .catch(() => {});
   }, []);
+
+  const selectTemplate = (tpl: typeof allTemplates[number]) => {
+    setTemplateName(tpl.name);
+    setTemplateLanguage(tpl.language);
+    setTemplateInfo({
+      name: tpl.name,
+      language: tpl.language,
+      status: tpl.status,
+      category: tpl.category,
+      bodyParameterCount: tpl.bodyParamCount,
+      bodyText: tpl.bodyText,
+      header: tpl.headerType ? { format: tpl.headerType as "TEXT" | "IMAGE" | "VIDEO" | "DOCUMENT" | "LOCATION" } : null,
+    });
+    setVariableInput("");
+  };
 
   const insertVariable = (key: string) => {
     const value = VARIABLES.find((v) => v.key === key)?.resolve(order) ?? "";
@@ -1210,10 +1291,43 @@ function SendDialog({
             </div>
           )}
 
-          {detecting && (
+          {/* Template Selector */}
+          <div>
+            <label className="block text-xs font-medium text-gray-700 mb-1">
+              Select Template
+            </label>
+            {loadingTemplates ? (
+              <p className="text-xs text-gray-400 flex items-center gap-1.5">
+                <RefreshCw size={11} className="animate-spin" /> Loading templates…
+              </p>
+            ) : allTemplates.length === 0 ? (
+              <p className="text-xs text-gray-400">No approved templates found. Import templates first.</p>
+            ) : (
+              <select
+                value={templateName ? `${templateName}|${templateLanguage}` : ""}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  if (!val) return;
+                  const tpl = allTemplates.find((t) => `${t.name}|${t.language}` === val);
+                  if (tpl) selectTemplate(tpl);
+                }}
+                className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+              >
+                <option value="">— Choose a template —</option>
+                {allTemplates.map((tpl) => (
+                  <option key={`${tpl.name}|${tpl.language}`} value={`${tpl.name}|${tpl.language}`}>
+                    {tpl.name} ({tpl.language}) — {tpl.bodyParamCount} var{tpl.bodyParamCount === 1 ? "" : "s"}
+                    {tpl.headerType ? ` · ${tpl.headerType} header` : ""}
+                  </option>
+                ))}
+              </select>
+            )}
+          </div>
+
+          {detecting && !templateInfo && (
             <p className="text-xs text-gray-500 flex items-center gap-1.5">
               <RefreshCw size={11} className="animate-spin" />
-              Looking up template…
+              Looking up default template…
             </p>
           )}
           {templateError && (

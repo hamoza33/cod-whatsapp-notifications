@@ -18,13 +18,41 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ conversations: [] });
   }
 
+  // Optional source filter: ?source=site1
+  const url = new URL(request.url);
+  const sourceFilter = url.searchParams.get("source");
+
+  const inboundWhere: Record<string, unknown> = { phoneNumberId: supportPni };
+  if (sourceFilter) {
+    inboundWhere.source = sourceFilter;
+  }
+
   // Inbound conversations scoped to the support phone number ID
   const inbound = await prisma.inboundMessage.groupBy({
     by: ["fromPhoneNumber"],
-    where: { phoneNumberId: supportPni },
+    where: inboundWhere,
     _max: { receivedAt: true, text: true, type: true, contactName: true },
     _count: { id: true },
   });
+
+  // Fetch source for each conversation (from latest inbound message)
+  const phoneNumbers = inbound.map((r) => r.fromPhoneNumber);
+  const sourceByPhone = new Map<string, string | null>();
+  if (phoneNumbers.length > 0) {
+    const sourceRows = await prisma.inboundMessage.findMany({
+      where: {
+        fromPhoneNumber: { in: phoneNumbers },
+        phoneNumberId: supportPni,
+        source: { not: null },
+      },
+      distinct: ["fromPhoneNumber"],
+      orderBy: { receivedAt: "desc" },
+      select: { fromPhoneNumber: true, source: true },
+    });
+    for (const r of sourceRows) {
+      sourceByPhone.set(r.fromPhoneNumber, r.source);
+    }
+  }
 
   const conversations = inbound.map((row) => ({
     phoneNumber: row.fromPhoneNumber,
@@ -39,6 +67,7 @@ export async function GET(request: NextRequest) {
     lastOutboundStatus: null,
     lastOutboundError: null,
     order: null,
+    source: sourceByPhone.get(row.fromPhoneNumber) ?? null,
   }));
 
   // Also include outbound-only messages sent from the support PNI
@@ -66,6 +95,7 @@ export async function GET(request: NextRequest) {
       lastOutboundStatus: null,
       lastOutboundError: null,
       order: null,
+      source: null,
     });
   }
 

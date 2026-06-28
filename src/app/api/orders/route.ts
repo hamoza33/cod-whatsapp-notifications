@@ -26,8 +26,15 @@ export async function GET(request: NextRequest) {
   const status = searchParams.get("status");
   const search = searchParams.get("search");
   const sentFilter = searchParams.get("sent"); // "true" | "false" | null
+  const dateFilter = searchParams.get("dateFilter"); // "today" | null
 
   const where: Record<string, unknown> = {};
+
+  if (dateFilter === "today") {
+    const now = new Date();
+    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    where.codCreatedAt = { gte: todayStart };
+  }
 
   if (status && status !== "ALL") {
     if (status === "ELIGIBLE") {

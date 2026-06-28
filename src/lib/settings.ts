@@ -92,6 +92,17 @@ export const SETTING_KEYS = {
   // 4tracking.net and provides direct carrier API access for iMile, Injaz,
   // JT Express (with captcha solving), and JDW Logistics.
   COURIER_TRACKING_API_URL: "courier_tracking_api_url",
+  // WhatsApp Support — separate credentials for the support inbox
+  WA_SUPPORT_BUSINESS_ACCOUNT_ID: "wa_support_business_account_id",
+  WA_SUPPORT_PHONE_NUMBER_ID: "wa_support_phone_number_id",
+  WA_SUPPORT_ACCESS_TOKEN: "wa_support_access_token",
+  WA_SUPPORT_API_KEY: "wa_support_api_key",
+  WA_SUPPORT_APP_SECRET: "wa_support_app_secret",
+  WA_SUPPORT_WEBHOOK_VERIFY_TOKEN: "wa_support_webhook_verify_token",
+  WA_SUPPORT_AI_ENABLED: "wa_support_ai_enabled",
+  WA_SUPPORT_AI_API_KEY: "wa_support_ai_api_key",
+  WA_SUPPORT_AI_SYSTEM_PROMPT: "wa_support_ai_system_prompt",
+  WA_SUPPORT_AI_MODEL: "wa_support_ai_model",
 } as const;
 
 export const SENSITIVE_SETTING_KEYS: readonly string[] = [
@@ -105,6 +116,11 @@ export const SENSITIVE_SETTING_KEYS: readonly string[] = [
   SETTING_KEYS.VOICE_AGENT_API_KEY,
   SETTING_KEYS.VOICE_AGENT_LLM_API_KEY,
   SETTING_KEYS.CAPTCHA_API_KEY,
+  SETTING_KEYS.WA_SUPPORT_ACCESS_TOKEN,
+  SETTING_KEYS.WA_SUPPORT_API_KEY,
+  SETTING_KEYS.WA_SUPPORT_APP_SECRET,
+  SETTING_KEYS.WA_SUPPORT_WEBHOOK_VERIFY_TOKEN,
+  SETTING_KEYS.WA_SUPPORT_AI_API_KEY,
 ];
 
 /**
@@ -120,6 +136,8 @@ export const MASKABLE_SETTING_KEYS: readonly string[] = [
   SETTING_KEYS.WHATSAPP_PHONE_NUMBER_ID,
   SETTING_KEYS.WHATSAPP_BUSINESS_ACCOUNT_ID,
   SETTING_KEYS.WHATSAPP_TEMPLATE_NAME,
+  SETTING_KEYS.WA_SUPPORT_BUSINESS_ACCOUNT_ID,
+  SETTING_KEYS.WA_SUPPORT_PHONE_NUMBER_ID,
 ];
 
 export const INTERNAL_SETTING_KEYS: readonly string[] = [

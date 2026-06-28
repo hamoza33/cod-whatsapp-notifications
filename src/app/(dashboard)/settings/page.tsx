@@ -15,6 +15,7 @@ const TABS = [
   { id: "whatsapp", label: "WhatsApp" },
   { id: "wa_numbers", label: "WA Numbers" },
   { id: "wa_support", label: "WA Support" },
+  { id: "wa_sources", label: "Sources" },
   { id: "sync", label: "Order Sync" },
   { id: "tracking", label: "Tracking" },
   { id: "automation", label: "Automation" },
@@ -512,12 +513,29 @@ export default function SettingsPage() {
               settingKey="wa_support_ai_api_key"
               placeholder={configuredSecrets.has("wa_support_ai_api_key") ? "Currently configured — enter new value to replace" : "OpenAI API Key for support agent"}
             />
-            <SettingsField
-              label="AI Model"
-              value={settings.wa_support_ai_model || "gpt-4o-mini"}
-              onChange={(v) => updateSetting("wa_support_ai_model", v)}
-              placeholder="gpt-4o-mini"
-            />
+            <div className="mb-4">
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                AI Model
+              </label>
+              <select
+                value={settings.wa_support_ai_model || "gpt-4o-mini"}
+                onChange={(e) => updateSetting("wa_support_ai_model", e.target.value)}
+                className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
+              >
+                <option value="gpt-4o-mini">GPT-4o Mini</option>
+                <option value="gpt-4o">GPT-4o</option>
+                <option value="gpt-4.1-mini">GPT-4.1 Mini</option>
+                <option value="gpt-4.1">GPT-4.1</option>
+                <option value="gpt-4.1-nano">GPT-4.1 Nano</option>
+                <option value="gpt-4-turbo">GPT-4 Turbo</option>
+                <option value="gpt-3.5-turbo">GPT-3.5 Turbo</option>
+                <option value="o4-mini">o4-mini</option>
+                <option value="o3-mini">o3-mini</option>
+                <option value="claude-sonnet-4-20250514">Claude Sonnet 4</option>
+                <option value="claude-3-5-sonnet-20241022">Claude 3.5 Sonnet</option>
+                <option value="claude-3-5-haiku-20241022">Claude 3.5 Haiku</option>
+              </select>
+            </div>
             <div className="mb-4">
               <label className="block text-sm font-medium text-gray-700 mb-1">
                 System Prompt
@@ -536,6 +554,9 @@ export default function SettingsPage() {
           </div>
         </SettingsSection>
       )}
+
+      {/* Support Sources */}
+      {activeTab === "wa_sources" && <SupportSourcesManager />}
 
       {/* Order Sync */}
       {activeTab === "sync" && (
@@ -1498,6 +1519,198 @@ function WebhookUrlReadout({ name, path }: { name: string; path: string }) {
           {copied ? "Copied" : "Copy"}
         </button>
       </div>
+    </div>
+  );
+}
+
+interface SupportSourceRecord {
+  id: string;
+  slug: string;
+  name: string;
+  systemPrompt: string;
+  enabled: boolean;
+}
+
+function SupportSourcesManager() {
+  const [sources, setSources] = useState<SupportSourceRecord[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [adding, setAdding] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [form, setForm] = useState({ slug: "", name: "", systemPrompt: "", enabled: true });
+  const [notification, setNotification] = useState<{ type: "success" | "error"; message: string } | null>(null);
+
+  const fetchSources = async () => {
+    try {
+      const data = await api.get<{ sources: SupportSourceRecord[] }>("/whatsapp-support/sources");
+      setSources(data.sources);
+    } catch {
+      // ignore
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { fetchSources(); }, []);
+
+  const handleSave = async () => {
+    if (!form.slug.trim() || !form.name.trim() || !form.systemPrompt.trim()) {
+      setNotification({ type: "error", message: "Slug, name, and system prompt are required." });
+      return;
+    }
+    try {
+      if (editingId) {
+        await api.patch(`/whatsapp-support/sources/${editingId}`, form);
+        setNotification({ type: "success", message: "Source updated." });
+      } else {
+        await api.post("/whatsapp-support/sources", form);
+        setNotification({ type: "success", message: "Source created." });
+      }
+      setAdding(false);
+      setEditingId(null);
+      setForm({ slug: "", name: "", systemPrompt: "", enabled: true });
+      await fetchSources();
+    } catch (err) {
+      setNotification({ type: "error", message: err instanceof Error ? err.message : "Save failed" });
+    }
+  };
+
+  const handleDelete = async (id: string) => {
+    if (!confirm("Delete this source?")) return;
+    try {
+      await api.del(`/whatsapp-support/sources/${id}`);
+      setNotification({ type: "success", message: "Source deleted." });
+      await fetchSources();
+    } catch {
+      setNotification({ type: "error", message: "Delete failed." });
+    }
+  };
+
+  const startEdit = (s: SupportSourceRecord) => {
+    setEditingId(s.id);
+    setForm({ slug: s.slug, name: s.name, systemPrompt: s.systemPrompt, enabled: s.enabled });
+    setAdding(true);
+  };
+
+  if (loading) {
+    return <div className="flex items-center justify-center py-12"><RefreshCw className="animate-spin h-5 w-5 text-gray-400" /></div>;
+  }
+
+  return (
+    <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
+      <div className="flex items-center justify-between mb-4">
+        <div>
+          <h3 className="text-lg font-semibold text-gray-900">Support Sources</h3>
+          <p className="text-sm text-gray-500 mt-1">
+            Manage website sources for WhatsApp Support auto-reply. Each source has its own AI system prompt.
+            Use <code className="bg-gray-100 px-1 rounded text-xs">?source=slug</code> in your WhatsApp link to route customers.
+          </p>
+        </div>
+        {!adding && (
+          <button
+            onClick={() => { setAdding(true); setEditingId(null); setForm({ slug: "", name: "", systemPrompt: "", enabled: true }); }}
+            className="flex items-center gap-1.5 px-3 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700"
+          >
+            <Plus size={14} /> Add Source
+          </button>
+        )}
+      </div>
+
+      {notification && (
+        <div className={`mb-4 p-3 rounded-lg text-sm ${notification.type === "success" ? "bg-green-50 text-green-800" : "bg-red-50 text-red-800"}`}>
+          {notification.message}
+        </div>
+      )}
+
+      {adding && (
+        <div className="mb-6 p-4 bg-gray-50 rounded-lg border border-gray-200">
+          <h4 className="text-sm font-semibold text-gray-800 mb-3">{editingId ? "Edit Source" : "New Source"}</h4>
+          <div className="grid grid-cols-2 gap-4 mb-3">
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">Slug</label>
+              <input
+                value={form.slug}
+                onChange={(e) => setForm({ ...form, slug: e.target.value.toLowerCase().replace(/[^a-z0-9_-]/g, "") })}
+                className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm"
+                placeholder="e.g. site1"
+                disabled={!!editingId}
+              />
+              <p className="text-[10px] text-gray-400 mt-0.5">Used in ?source=slug</p>
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">Display Name</label>
+              <input
+                value={form.name}
+                onChange={(e) => setForm({ ...form, name: e.target.value })}
+                className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm"
+                placeholder="e.g. My Store Website"
+              />
+            </div>
+          </div>
+          <div className="mb-3">
+            <label className="block text-xs font-medium text-gray-600 mb-1">AI System Prompt</label>
+            <textarea
+              value={form.systemPrompt}
+              onChange={(e) => setForm({ ...form, systemPrompt: e.target.value })}
+              rows={5}
+              className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm"
+              placeholder="You are a customer support agent for [website name]. Help customers with their orders..."
+            />
+          </div>
+          <div className="flex items-center gap-3 mb-4">
+            <label className="text-xs font-medium text-gray-600">Enabled</label>
+            <button
+              onClick={() => setForm({ ...form, enabled: !form.enabled })}
+              className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${form.enabled ? "bg-blue-600" : "bg-gray-300"}`}
+            >
+              <span className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${form.enabled ? "translate-x-4" : "translate-x-0.5"}`} />
+            </button>
+          </div>
+          <div className="flex gap-2">
+            <button onClick={handleSave} className="px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700">
+              <Save size={14} className="inline mr-1" />{editingId ? "Update" : "Create"}
+            </button>
+            <button onClick={() => { setAdding(false); setEditingId(null); }} className="px-4 py-2 bg-gray-200 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-300">
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+
+      {sources.length === 0 && !adding && (
+        <div className="text-center py-8 text-gray-400 text-sm">
+          No sources configured. Add a source to enable per-website AI auto-reply prompts.
+        </div>
+      )}
+
+      {sources.length > 0 && (
+        <div className="space-y-3">
+          {sources.map((s) => (
+            <div key={s.id} className="flex items-start justify-between p-4 bg-gray-50 rounded-lg border border-gray-200">
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2">
+                  <span className="font-medium text-sm text-gray-900">{s.name}</span>
+                  <code className="text-[10px] bg-gray-200 px-1.5 py-0.5 rounded text-gray-600">{s.slug}</code>
+                  <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${s.enabled ? "bg-green-100 text-green-700" : "bg-gray-200 text-gray-500"}`}>
+                    {s.enabled ? "Active" : "Disabled"}
+                  </span>
+                </div>
+                <p className="text-xs text-gray-500 mt-1 line-clamp-2">{s.systemPrompt}</p>
+                <p className="text-[10px] text-gray-400 mt-1">
+                  Link: https://api.whatsapp.com/send?phone=YOUR_NUMBER&text=source:{s.slug}
+                </p>
+              </div>
+              <div className="flex gap-1 ml-3">
+                <button onClick={() => startEdit(s)} className="p-1.5 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded">
+                  <Eye size={14} />
+                </button>
+                <button onClick={() => handleDelete(s.id)} className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded">
+                  <Trash2 size={14} />
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

@@ -168,6 +168,8 @@ export default function SupportInboxPage() {
   const mediaFileInputRef = useRef<HTMLInputElement>(null);
   const [sortMode, setSortMode] = useState<InboxSort>("recent");
   const [deliveryFilter, setDeliveryFilter] = useState<DeliveryFilter>("all");
+  const [sourceFilter, setSourceFilter] = useState<string>("all");
+  const [availableSources, setAvailableSources] = useState<Array<{ slug: string; name: string }>>([]);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const threadEndRef = useRef<HTMLDivElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
@@ -182,9 +184,11 @@ export default function SupportInboxPage() {
 
   const fetchConversations = useCallback(async () => {
     try {
-      const path = selectedNumberId
-        ? `/whatsapp-support/inbox?numberId=${encodeURIComponent(selectedNumberId)}`
-        : "/whatsapp-support/inbox";
+      const params = new URLSearchParams();
+      if (selectedNumberId) params.set("numberId", selectedNumberId);
+      if (sourceFilter && sourceFilter !== "all") params.set("source", sourceFilter);
+      const qs = params.toString();
+      const path = `/whatsapp-support/inbox${qs ? `?${qs}` : ""}`;
       const data = await api.get<{ conversations: Conversation[] }>(path);
       setConversations(data.conversations);
       setError(null);
@@ -194,7 +198,7 @@ export default function SupportInboxPage() {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [selectedNumberId]);
+  }, [selectedNumberId, sourceFilter]);
 
   const fetchThread = useCallback(
     async (phone: string) => {
@@ -239,6 +243,18 @@ export default function SupportInboxPage() {
       }
     }
     loadNumbers();
+  }, []);
+
+  useEffect(() => {
+    async function loadSources() {
+      try {
+        const data = await api.get<{ sources: Array<{ slug: string; name: string }> }>("/whatsapp-support/sources");
+        setAvailableSources(data.sources);
+      } catch {
+        // ignore
+      }
+    }
+    loadSources();
   }, []);
 
   // Reset the right pane when the operator switches accounts so we don't keep
@@ -548,6 +564,20 @@ export default function SupportInboxPage() {
               </button>
             ))}
           </div>
+          {availableSources.length > 0 && (
+            <div className="flex items-center gap-1">
+              <select
+                value={sourceFilter}
+                onChange={(e) => setSourceFilter(e.target.value)}
+                className="px-2 py-1 rounded-md text-[11px] font-medium border border-gray-200 bg-white text-[#54656F] focus:outline-none focus:ring-1 focus:ring-[#008069]"
+              >
+                <option value="all">All Sources</option>
+                {availableSources.map((s) => (
+                  <option key={s.slug} value={s.slug}>{s.name}</option>
+                ))}
+              </select>
+            </div>
+          )}
         </div>
 
         {/* Conversation list */}
