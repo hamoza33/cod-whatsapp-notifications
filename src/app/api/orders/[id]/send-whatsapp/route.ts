@@ -118,12 +118,17 @@ export async function POST(
 
   let variables = coerceVariables(body.templateVariables);
   if (variables === undefined) {
-    // Sensible default for the legacy `order_out_for_delivery` template that
-    // takes (customer name, order id).
-    variables = buildTemplateVariables(
-      order.customerName || "Customer",
-      order.codNetworkOrderId
-    );
+    // If the caller explicitly chose a template, send empty variables (the
+    // template may have zero params).  Only fall back to auto-generated
+    // variables when no template name was provided (legacy auto-send).
+    if (body.templateName && body.templateName.trim()) {
+      variables = [];
+    } else {
+      variables = buildTemplateVariables(
+        order.customerName || "Customer",
+        order.codNetworkOrderId
+      );
+    }
   }
 
   let header: WhatsAppTemplateHeader | undefined;

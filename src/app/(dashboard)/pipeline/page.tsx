@@ -239,8 +239,12 @@ export default function PipelinePage() {
   const [searchQuery, setSearchQuery] = useState("");
   const [columnOrder, setColumnOrder] = useState<string[]>(loadColumnOrder);
   const [dragColumnKey, setDragColumnKey] = useState<string | null>(null);
-  const [pipelineView, setPipelineView] = useState<PipelineView>("leads");
-  const [dateFilter, setDateFilter] = useState<"today" | "all">("today");
+  const [pipelineView, setPipelineView] = useState<PipelineView>(() => {
+    if (typeof window === "undefined") return "leads";
+    const saved = localStorage.getItem("pipeline_view");
+    return (saved === "orders" || saved === "leads") ? saved : "leads";
+  });
+  const [dateFilter, setDateFilter] = useState<"today" | "all">("all");
 
   // Derive column order based on active pipeline view
   const activeColumnOrder = useMemo(() => {
@@ -552,7 +556,7 @@ export default function PipelinePage() {
           {/* Pipeline view tabs */}
           <div className="flex gap-1 mt-2">
             <button
-              onClick={() => setPipelineView("leads")}
+              onClick={() => { setPipelineView("leads"); localStorage.setItem("pipeline_view", "leads"); }}
               className={`px-3 py-1 text-xs font-medium rounded-md transition-colors ${
                 pipelineView === "leads"
                   ? "bg-blue-600 text-white"
@@ -562,7 +566,7 @@ export default function PipelinePage() {
               Lead Pipeline (12)
             </button>
             <button
-              onClick={() => setPipelineView("orders")}
+              onClick={() => { setPipelineView("orders"); localStorage.setItem("pipeline_view", "orders"); }}
               className={`px-3 py-1 text-xs font-medium rounded-md transition-colors ${
                 pipelineView === "orders"
                   ? "bg-blue-600 text-white"

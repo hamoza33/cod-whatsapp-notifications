@@ -35,9 +35,10 @@ export async function GET(request: NextRequest) {
     _count: { id: true },
   });
 
-  // Fetch source for each conversation (from latest inbound message)
+  // Fetch source history for each conversation (ordered chronologically)
   const phoneNumbers = inbound.map((r) => r.fromPhoneNumber);
   const sourceByPhone = new Map<string, string | null>();
+  const sourceHistoryByPhone = new Map<string, string[]>();
   if (phoneNumbers.length > 0) {
     const sourceRows = await prisma.inboundMessage.findMany({
       where: {
@@ -45,11 +46,18 @@ export async function GET(request: NextRequest) {
         phoneNumberId: supportPni,
         source: { not: null },
       },
-      distinct: ["fromPhoneNumber"],
-      orderBy: { receivedAt: "desc" },
+      orderBy: { receivedAt: "asc" },
       select: { fromPhoneNumber: true, source: true },
     });
     for (const r of sourceRows) {
+      if (!r.source) continue;
+      // Track the ordered source history (deduplicate consecutive duplicates)
+      const history = sourceHistoryByPhone.get(r.fromPhoneNumber) ?? [];
+      if (history.length === 0 || history[history.length - 1] !== r.source) {
+        history.push(r.source);
+      }
+      sourceHistoryByPhone.set(r.fromPhoneNumber, history);
+      // Most recent source
       sourceByPhone.set(r.fromPhoneNumber, r.source);
     }
   }
@@ -68,6 +76,7 @@ export async function GET(request: NextRequest) {
     lastOutboundError: null,
     order: null,
     source: sourceByPhone.get(row.fromPhoneNumber) ?? null,
+    sourceHistory: sourceHistoryByPhone.get(row.fromPhoneNumber) ?? [],
   }));
 
   // Also include outbound-only messages sent from the support PNI
@@ -96,6 +105,7 @@ export async function GET(request: NextRequest) {
       lastOutboundError: null,
       order: null,
       source: null,
+      sourceHistory: [],
     });
   }
 

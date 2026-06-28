@@ -142,26 +142,30 @@ export async function POST(request: NextRequest) {
         const text = extractText(msg);
         const { id: mediaId, mimeType } = extractMedia(msg);
 
-        // Detect source from referral URL (?source=site1) or from
-        // previous messages by the same phone number.
+        // Detect source from referral, raw payload, or message text.
+        // The user wants dynamic switching: each message carries its own
+        // source. If a new source is detected it overrides the previous one.
         let source: string | null = null;
+
+        // 1. Check referral source_url (Meta sends this on click-to-chat)
         if (msg.referral?.source_url) {
-          try {
-            const refUrl = new URL(msg.referral.source_url);
-            source = refUrl.searchParams.get("source") ?? null;
-          } catch {
-            // Try regex fallback for malformed URLs
-            const match = msg.referral.source_url.match(/[?&]source=([^&]+)/);
-            if (match) source = decodeURIComponent(match[1]);
-          }
+          source = extractSourceParam(msg.referral.source_url);
         }
-        // If no source in referral, check the message text for the first
-        // message (some click-to-chat URLs embed source in the pre-filled text)
+        // 2. Check referral body (some click-to-chat links embed it here)
+        if (!source && msg.referral?.body) {
+          source = extractSourceParam(msg.referral.body);
+        }
+        // 3. Deep-scan the raw payload for any source field
+        if (!source) {
+          source = findSourceInPayload(msg as unknown as Record<string, unknown>);
+        }
+        // 4. Check the message text for source= or source: pattern
         if (!source && text) {
           const match = text.match(/source[=:]\s*(\S+)/i);
           if (match) source = match[1];
         }
-        // Inherit source from the customer's previous messages if not detected
+        // 5. If no source detected on this message, inherit the most recent
+        //    source from this customer (continuity within the same chat)
         if (!source) {
           const prev = await prisma.inboundMessage.findFirst({
             where: {
@@ -351,4 +355,40 @@ async function handleSupportAutoReply(
   } catch (err) {
     console.error("[support-webhook] AI auto-reply failed:", err);
   }
+}
+
+/** Extract `source` query parameter from a URL string or text containing a URL. */
+function extractSourceParam(input: string): string | null {
+  // Try parsing as a full URL first
+  try {
+    const url = new URL(input);
+    const src = url.searchParams.get("source");
+    if (src) return src;
+  } catch {
+    // not a valid URL
+  }
+  // Regex fallback for partial URLs or text containing source=
+  const match = input.match(/[?&]source=([^&\s]+)/);
+  if (match) return decodeURIComponent(match[1]);
+  return null;
+}
+
+/** Recursively scan a webhook payload object for a "source" field. */
+function findSourceInPayload(obj: Record<string, unknown>): string | null {
+  if (!obj || typeof obj !== "object") return null;
+  // Check direct "source" key
+  if (typeof obj.source === "string" && obj.source.trim()) return obj.source.trim();
+  // Check referral.source_url
+  const referral = obj.referral as Record<string, unknown> | undefined;
+  if (referral?.source_url && typeof referral.source_url === "string") {
+    const src = extractSourceParam(referral.source_url);
+    if (src) return src;
+  }
+  // Check context
+  const context = obj.context as Record<string, unknown> | undefined;
+  if (context) {
+    const src = findSourceInPayload(context);
+    if (src) return src;
+  }
+  return null;
 }

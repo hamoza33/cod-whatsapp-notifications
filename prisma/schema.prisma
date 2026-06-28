@@ -60,7 +60,7 @@ model Order {
   // primary order reference; for others it's a separate field surfaced via
   // the Webhook Lead Status events. Nullable+unique so historical orders can
   // be back-filled when a webhook eventually delivers the lead id.
-  codNetworkLeadId  String?     @unique @map("cod_network_lead_id")
+  codNetworkLeadId  String?     @map("cod_network_lead_id")
   // Manually-created order — never reset by a sync from COD Network. The
   // `codNetworkOrderId` for manual orders is a generated `MANUAL-<random>`
   // string so the unique index is preserved.

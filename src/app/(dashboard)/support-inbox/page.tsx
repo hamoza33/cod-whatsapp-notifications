@@ -41,6 +41,10 @@ interface Conversation {
     productName: string | null;
     status: string;
   } | null;
+  /** Current (most recent) source for this conversation. */
+  source?: string | null;
+  /** Ordered list of sources this customer came from. */
+  sourceHistory?: string[];
 }
 
 type InboxSort = "recent" | "unread" | "unreplied";
@@ -692,6 +696,24 @@ export default function SupportInboxPage() {
                         status={c.lastOutboundStatus}
                         error={c.lastOutboundError ?? null}
                       />
+                    </div>
+                  )}
+                  {c.sourceHistory && c.sourceHistory.length > 0 && (
+                    <div className="flex items-center gap-1 mt-1 flex-wrap">
+                      {c.sourceHistory.map((src, i) => (
+                        <span
+                          key={`${src}-${i}`}
+                          className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${
+                            i === c.sourceHistory!.length - 1
+                              ? "bg-[#25D366]/15 text-[#008069] ring-1 ring-[#25D366]/30"
+                              : "bg-gray-100 text-gray-500"
+                          }`}
+                          title={i === c.sourceHistory!.length - 1 ? "Current source" : `Source #${i + 1}`}
+                        >
+                          {i > 0 && <span className="text-gray-300 mr-0.5">&rarr;</span>}
+                          {src}
+                        </span>
+                      ))}
                     </div>
                   )}
                 </div>
