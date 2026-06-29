@@ -198,6 +198,23 @@ model SupportSource {
   @@map("support_sources")
 }
 
+// Tracks landing-page visits for time-window source detection.
+// When a customer visits /wa/<source>, we log it here. If a new WhatsApp
+// message arrives from an unknown phone within a short window, the source
+// is auto-assigned.
+model SourceVisit {
+  id        String   @id @default(cuid())
+  source    String
+  ip        String?
+  userAgent String?  @map("user_agent")
+  matched   Boolean  @default(false)
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([source])
+  @@index([createdAt])
+  @@map("source_visits")
+}
+
 model SyncLog {
   id            String   @id @default(cuid())
   syncType      String   @map("sync_type")

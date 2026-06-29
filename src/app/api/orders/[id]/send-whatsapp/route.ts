@@ -155,10 +155,11 @@ export async function POST(
     body.templateHeaderText.trim()
   ) {
     header = { type: "text", value: body.templateHeaderText.trim() };
-  } else {
-    // Fall back to the configured default header image, if any. Templates
-    // without an IMAGE header simply ignore it (we only set this if the user
-    // configured one).
+  } else if (!(body.templateName && body.templateName.trim())) {
+    // Fall back to the configured default header image ONLY when no template
+    // was explicitly chosen (legacy auto-send). When the user picks a specific
+    // template, we trust their selection — if the template has no header
+    // component, sending one causes Meta error #132018.
     const defaultImage = await getSetting(
       SETTING_KEYS.WHATSAPP_DEFAULT_TEMPLATE_HEADER_IMAGE_URL
     );

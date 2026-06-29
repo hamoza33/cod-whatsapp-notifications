@@ -407,6 +407,7 @@ export default function SettingsPage() {
               "wa_support_ai_api_key",
               "wa_support_ai_system_prompt",
               "wa_support_ai_model",
+              "wa_support_display_phone",
             ])
           }
           saving={saving}
@@ -474,6 +475,13 @@ export default function SettingsPage() {
                 : "Token to verify webhook subscription"
             }
             help="Point your Meta webhook to: /api/whatsapp-support/webhook"
+          />
+          <SettingsField
+            label="Display Phone Number (for /wa/ redirect links)"
+            value={settings.wa_support_display_phone || ""}
+            onChange={(v) => updateSetting("wa_support_display_phone", v)}
+            placeholder="+447830607451"
+            help="The actual phone number customers will message (with country code). Used for /wa/<source> redirect links. E.g. +447830607451"
           />
           <div className="border-t border-gray-200 pt-4 mt-4">
             <h4 className="text-sm font-semibold text-gray-800 mb-3">Support AI Agent</h4>
@@ -968,22 +976,14 @@ export default function SettingsPage() {
 
       {activeTab === "voice" && (
         <SettingsSection
-          title="Voice Agent (Call Agent)"
-          description="Configure the AI voice agent that automatically calls customers when orders are dropped into the Call Agent column. Supports ElevenLabs Conversational AI or a custom provider."
+          title="Voice Agent — Vapi"
+          description="Integrate Vapi for automated voice calls. When a lead or order is moved to the 'Call Agent' pipeline column, the system initiates a call via Vapi with all customer variables. Configure your assistant at dashboard.vapi.ai."
           onSave={() =>
             handleSave("Voice Agent", [
               "voice_agent_enabled",
-              "voice_agent_provider",
-              "voice_agent_api_key",
-              "voice_agent_voice_id",
-              "voice_agent_model",
-              "voice_agent_system_prompt",
-              "voice_agent_caller_id",
-              "voice_agent_language",
-              "voice_agent_llm_provider",
-              "voice_agent_llm_api_key",
-              "voice_agent_llm_model",
-              "voice_agent_webhook_url",
+              "vapi_api_key",
+              "vapi_phone_number_id",
+              "vapi_assistant_id",
             ])
           }
           saving={saving}
@@ -1014,112 +1014,64 @@ export default function SettingsPage() {
               />
             </button>
           </div>
-          <div className="mb-4">
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              Provider
-            </label>
-            <select
-              value={settings.voice_agent_provider || "elevenlabs"}
-              onChange={(e) => updateSetting("voice_agent_provider", e.target.value)}
-              className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm bg-white focus:outline-none focus:ring-2 focus:ring-purple-500"
-            >
-              <option value="elevenlabs">ElevenLabs Conversational AI</option>
-              <option value="bland">Bland AI</option>
-            </select>
-            <p className="mt-1 text-xs text-gray-500">
-              Select the voice AI platform that will handle phone calls.
-            </p>
-          </div>
           <SettingsField
-            label="Voice API Key"
-            value={settings.voice_agent_api_key || ""}
-            onChange={(v) => updateSetting("voice_agent_api_key", v)}
+            label="Vapi API Key (Private Key)"
+            value={settings.vapi_api_key || ""}
+            onChange={(v) => updateSetting("vapi_api_key", v)}
             type="password"
-            configuredPreview={sensitivePreviews.voice_agent_api_key}
-            settingKey="voice_agent_api_key"
+            configuredPreview={sensitivePreviews.vapi_api_key}
+            settingKey="vapi_api_key"
             placeholder={
-              configuredSecrets.has("voice_agent_api_key")
+              configuredSecrets.has("vapi_api_key")
                 ? "Currently configured — enter a new value to replace"
-                : "Your ElevenLabs or provider API key"
+                : "Your Vapi private API key from dashboard.vapi.ai"
             }
-            help="API key from your voice agent provider (e.g. xi-api-key for ElevenLabs, or Bearer token for Bland AI)."
+            help="Private API key from Vapi (dashboard.vapi.ai → Organization Settings → API Keys)."
           />
           <SettingsField
-            label="Voice ID"
-            value={settings.voice_agent_voice_id || ""}
-            onChange={(v) => updateSetting("voice_agent_voice_id", v)}
-            placeholder="21m00Tcm4TlvDq8ikWAM"
-            help="The voice to use for calls (ElevenLabs voice ID). Leave empty for the default voice."
+            label="Vapi Phone Number ID"
+            value={settings.vapi_phone_number_id || ""}
+            onChange={(v) => updateSetting("vapi_phone_number_id", v)}
+            configuredPreview={sensitivePreviews.vapi_phone_number_id}
+            settingKey="vapi_phone_number_id"
+            placeholder={
+              configuredSecrets.has("vapi_phone_number_id")
+                ? "Currently configured — enter a new value to replace"
+                : "Phone Number ID from Vapi dashboard"
+            }
+            help="The Vapi phone number ID to use for outbound calls. Find it in Vapi dashboard → Phone Numbers."
           />
           <SettingsField
-            label="Caller ID / From Number"
-            value={settings.voice_agent_caller_id || ""}
-            onChange={(v) => updateSetting("voice_agent_caller_id", v)}
-            placeholder="+1234567890"
-            help="The phone number that will appear as the caller ID. Must be a verified number with your provider."
-          />
-          <div className="mb-4">
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              Language
-            </label>
-            <select
-              value={settings.voice_agent_language || "ar"}
-              onChange={(e) => updateSetting("voice_agent_language", e.target.value)}
-              className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm bg-white focus:outline-none focus:ring-2 focus:ring-purple-500"
-            >
-              <option value="ar">Arabic</option>
-              <option value="en">English</option>
-              <option value="fr">French</option>
-              <option value="es">Spanish</option>
-              <option value="de">German</option>
-              <option value="tr">Turkish</option>
-            </select>
-          </div>
-          <div className="mb-4">
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              Call Script / System Prompt
-            </label>
-            <textarea
-              value={settings.voice_agent_system_prompt || ""}
-              onChange={(e) => updateSetting("voice_agent_system_prompt", e.target.value)}
-              rows={6}
-              placeholder={`You are a professional customer service agent for a delivery company.\nYou are calling the customer to confirm their order.\n- Greet them by name: {customer_name}\n- Confirm their order: {product}\n- Current status: {order_status}\n- Be polite and professional\n- Speak in Arabic by default`}
-              className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-purple-500"
-            />
-            <p className="mt-1 text-xs text-gray-500">
-              Instructions for the voice agent. Use {"{customer_name}"}, {"{product}"}, {"{order_status}"}, {"{tracking}"} as placeholders.
-            </p>
-          </div>
-          <SettingsField
-            label="Webhook URL (optional)"
-            value={settings.voice_agent_webhook_url || ""}
-            onChange={(v) => updateSetting("voice_agent_webhook_url", v)}
-            placeholder="https://your-app.com/api/voice-agent/webhook"
-            help="URL to receive call status updates and transcripts."
+            label="Vapi Assistant ID"
+            value={settings.vapi_assistant_id || ""}
+            onChange={(v) => updateSetting("vapi_assistant_id", v)}
+            configuredPreview={sensitivePreviews.vapi_assistant_id}
+            settingKey="vapi_assistant_id"
+            placeholder={
+              configuredSecrets.has("vapi_assistant_id")
+                ? "Currently configured — enter a new value to replace"
+                : "Assistant ID from Vapi dashboard"
+            }
+            help="The Vapi assistant to use for calls. Configure the assistant's prompt and behaviour at dashboard.vapi.ai."
           />
           <div className="border-t border-gray-200 pt-4 mt-4">
-            <h3 className="text-sm font-semibold text-gray-800 mb-3">LLM Configuration (for conversation logic)</h3>
-            <SettingsField
-              label="LLM API Key"
-              value={settings.voice_agent_llm_api_key || ""}
-              onChange={(v) => updateSetting("voice_agent_llm_api_key", v)}
-              type="password"
-              configuredPreview={sensitivePreviews.voice_agent_llm_api_key}
-              settingKey="voice_agent_llm_api_key"
-              placeholder={
-                configuredSecrets.has("voice_agent_llm_api_key")
-                  ? "Currently configured — enter a new value to replace"
-                  : "OpenAI or other LLM API key"
-              }
-              help="API key for the LLM that drives the voice agent's conversation logic. Often not needed if using ElevenLabs' built-in agent."
-            />
-            <SettingsField
-              label="LLM Model"
-              value={settings.voice_agent_llm_model || ""}
-              onChange={(v) => updateSetting("voice_agent_llm_model", v)}
-              placeholder="gpt-4o-mini"
-              help="The LLM model to use for conversation (e.g. gpt-4o-mini, gpt-4o). Only needed if provider requires a separate LLM."
-            />
+            <h3 className="text-sm font-semibold text-gray-800 mb-3">Variables passed to Vapi</h3>
+            <p className="text-xs text-gray-500 mb-2">
+              When a call is initiated, these variables are sent to Vapi as <code className="bg-gray-100 px-1 rounded">assistantOverrides.variableValues</code>.
+              Use them in your Vapi assistant prompt with {"{{variable_name}}"} syntax.
+            </p>
+            <div className="flex flex-wrap gap-1.5">
+              {[
+                "customer_name", "customer_phone", "customer_city", "customer_address",
+                "product_name", "product_price", "product_quantity", "product_description",
+                "order_id", "lead_id", "order_status", "delivery_status",
+                "tracking_number", "delivery_company", "call_attempts",
+              ].map((v) => (
+                <span key={v} className="text-[11px] px-2 py-1 bg-purple-50 text-purple-700 rounded-md font-mono border border-purple-200">
+                  {`{{${v}}}`}
+                </span>
+              ))}
+            </div>
           </div>
         </SettingsSection>
       )}

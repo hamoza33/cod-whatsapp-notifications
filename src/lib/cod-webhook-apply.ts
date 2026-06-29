@@ -117,7 +117,7 @@ export async function applyWebhookEvent(
         })
       : null) ||
     (declaredLeadId
-      ? await prisma.order.findUnique({
+      ? await prisma.order.findFirst({
           where: { codNetworkLeadId: declaredLeadId },
         })
       : null);

@@ -164,7 +164,37 @@ export async function POST(request: NextRequest) {
           const match = text.match(/source[=:]\s*(\S+)/i);
           if (match) source = match[1];
         }
-        // 5. If no source detected on this message, inherit the most recent
+        // 5. Time-window matching: check if this phone number has never
+        //    messaged before AND a recent /wa/<source> page visit exists
+        //    within the last 3 minutes (landing-page redirect approach).
+        if (!source) {
+          const hasHistory = await prisma.inboundMessage.findFirst({
+            where: {
+              fromPhoneNumber: fromPhone,
+              phoneNumberId: receivedOnPhoneNumberId,
+            },
+            select: { id: true },
+          });
+          if (!hasHistory) {
+            const threeMinAgo = new Date(Date.now() - 3 * 60 * 1000);
+            const recentVisit = await prisma.sourceVisit.findFirst({
+              where: {
+                matched: false,
+                createdAt: { gte: threeMinAgo },
+              },
+              orderBy: { createdAt: "desc" },
+              select: { id: true, source: true },
+            });
+            if (recentVisit) {
+              source = recentVisit.source;
+              await prisma.sourceVisit.update({
+                where: { id: recentVisit.id },
+                data: { matched: true },
+              });
+            }
+          }
+        }
+        // 6. If no source detected on this message, inherit the most recent
         //    source from this customer (continuity within the same chat)
         if (!source) {
           const prev = await prisma.inboundMessage.findFirst({

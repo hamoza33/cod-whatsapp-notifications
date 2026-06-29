@@ -78,6 +78,10 @@ export const SETTING_KEYS = {
   VOICE_AGENT_LLM_API_KEY: "voice_agent_llm_api_key",
   VOICE_AGENT_LLM_MODEL: "voice_agent_llm_model",
   VOICE_AGENT_WEBHOOK_URL: "voice_agent_webhook_url",
+  // Vapi integration
+  VAPI_API_KEY: "vapi_api_key",
+  VAPI_PHONE_NUMBER_ID: "vapi_phone_number_id",
+  VAPI_ASSISTANT_ID: "vapi_assistant_id",
   TRACKING_REFRESH_INTERVAL_MINUTES: "tracking_refresh_interval_minutes",
   CAPTCHA_PROVIDER: "captcha_provider",
   CAPTCHA_API_KEY: "captcha_api_key",
@@ -103,6 +107,7 @@ export const SETTING_KEYS = {
   WA_SUPPORT_AI_API_KEY: "wa_support_ai_api_key",
   WA_SUPPORT_AI_SYSTEM_PROMPT: "wa_support_ai_system_prompt",
   WA_SUPPORT_AI_MODEL: "wa_support_ai_model",
+  WA_SUPPORT_DISPLAY_PHONE: "wa_support_display_phone",
 } as const;
 
 export const SENSITIVE_SETTING_KEYS: readonly string[] = [
@@ -115,6 +120,7 @@ export const SENSITIVE_SETTING_KEYS: readonly string[] = [
   SETTING_KEYS.OPENAI_API_KEY,
   SETTING_KEYS.VOICE_AGENT_API_KEY,
   SETTING_KEYS.VOICE_AGENT_LLM_API_KEY,
+  SETTING_KEYS.VAPI_API_KEY,
   SETTING_KEYS.CAPTCHA_API_KEY,
   SETTING_KEYS.WA_SUPPORT_ACCESS_TOKEN,
   SETTING_KEYS.WA_SUPPORT_API_KEY,
@@ -138,6 +144,8 @@ export const MASKABLE_SETTING_KEYS: readonly string[] = [
   SETTING_KEYS.WHATSAPP_TEMPLATE_NAME,
   SETTING_KEYS.WA_SUPPORT_BUSINESS_ACCOUNT_ID,
   SETTING_KEYS.WA_SUPPORT_PHONE_NUMBER_ID,
+  SETTING_KEYS.VAPI_PHONE_NUMBER_ID,
+  SETTING_KEYS.VAPI_ASSISTANT_ID,
 ];
 
 export const INTERNAL_SETTING_KEYS: readonly string[] = [
