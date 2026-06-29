@@ -52,6 +52,8 @@ export function matchesAutomation(
     | "andMinPrice"
     | "andMaxPrice"
     | "andTrackingStatusContains"
+    | "andMinCallAttempts"
+    | "andMaxCallAttempts"
     | "isEnabled"
   >,
   order: Pick<
@@ -63,6 +65,7 @@ export function matchesAutomation(
     | "customerCity"
     | "customerName"
     | "productPrice"
+    | "callAttempts"
   >,
   context?: { latestTrackingEvent?: string | null }
 ): boolean {
@@ -146,6 +149,18 @@ export function matchesAutomation(
   if (automation.andTrackingStatusContains) {
     const trackingEvent = (context?.latestTrackingEvent ?? "").toLowerCase();
     if (!trackingEvent.includes(automation.andTrackingStatusContains.toLowerCase())) {
+      return false;
+    }
+  }
+
+  // Call attempts conditions
+  if (automation.andMinCallAttempts !== null && automation.andMinCallAttempts !== undefined) {
+    if ((order.callAttempts ?? 0) < automation.andMinCallAttempts) {
+      return false;
+    }
+  }
+  if (automation.andMaxCallAttempts !== null && automation.andMaxCallAttempts !== undefined) {
+    if ((order.callAttempts ?? 0) > automation.andMaxCallAttempts) {
       return false;
     }
   }
@@ -325,6 +340,30 @@ export async function runAutomationsForOrder(
     let errorMessage: string | undefined;
 
     try {
+      // Time-based scheduling: if scheduledSendHour is set, only fire during that hour
+      if (automation.scheduledSendHour !== null && automation.scheduledSendHour !== undefined) {
+        const currentHour = new Date().getUTCHours();
+        if (currentHour !== automation.scheduledSendHour) {
+          summaries.push({
+            automationId: automation.id,
+            automationName: automation.name,
+            orderId: order.id,
+            status: "skipped",
+            reason: `scheduled for hour ${automation.scheduledSendHour} UTC, current is ${currentHour}`,
+          });
+          continue;
+        }
+      }
+
+      // Increment call attempts if configured
+      if (automation.incrementCallAttempts && !options.dryRun) {
+        await prisma.order.update({
+          where: { id: order.id },
+          data: { callAttempts: { increment: 1 } },
+        });
+        order.callAttempts = (order.callAttempts ?? 0) + 1;
+      }
+
       if (
         automation.thenMoveToStatus &&
         automation.thenMoveToStatus !== order.status

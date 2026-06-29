@@ -28,23 +28,35 @@ type OrderStatus =
   | "WRONG"
   | "EXPIRED"
   | "CALL_LATER"
-  | "CANCELLED_PRICE";
+  | "CALL_LATER_SCHEDULED"
+  | "CANCELLED_PRICE"
+  | "DELAYED"
+  | "BLACK_LISTED"
+  | "ASSIGNED"
+  | "OUT_OF_STOCK"
+  | "RETURN_ON_PROCESS";
 
 const STATUSES: OrderStatus[] = [
   "NEW",
-  "PENDING",
   "CONFIRMED",
-  "PROCESSING",
   "CALL_LATER",
+  "CALL_LATER_SCHEDULED",
   "NO_REPLY",
-  "SHIPPED",
-  "OUT_FOR_DELIVERY",
-  "DELIVERED",
-  "RETURNED",
   "CANCELLED",
-  "CANCELLED_PRICE",
   "WRONG",
   "EXPIRED",
+  "PROCESSING",
+  "DELAYED",
+  "CANCELLED_PRICE",
+  "BLACK_LISTED",
+  "ASSIGNED",
+  "SHIPPED",
+  "DELIVERED",
+  "RETURNED",
+  "OUT_OF_STOCK",
+  "PENDING",
+  "RETURN_ON_PROCESS",
+  "OUT_FOR_DELIVERY",
   "UNKNOWN",
 ];
 
@@ -81,6 +93,10 @@ interface Automation {
   andMinPrice: string | null;
   andMaxPrice: string | null;
   andTrackingStatusContains: string | null;
+  andMinCallAttempts: number | null;
+  andMaxCallAttempts: number | null;
+  scheduledSendHour: number | null;
+  incrementCallAttempts: boolean;
   thenMoveToStatus: OrderStatus | null;
   thenSendTemplateName: string | null;
   thenSendTemplateLanguage: string | null;
@@ -295,6 +311,10 @@ interface FormState {
   andMinPrice: string;
   andMaxPrice: string;
   andTrackingStatusContains: string;
+  andMinCallAttempts: string;
+  andMaxCallAttempts: string;
+  scheduledSendHour: string;
+  incrementCallAttempts: boolean;
   thenMoveTo: string;
   thenSendTemplate: string;
   thenSendTemplateLanguage: string;
@@ -316,6 +336,10 @@ function buildInitialState(automation?: Automation): FormState {
     andMinPrice: automation?.andMinPrice ?? "",
     andMaxPrice: automation?.andMaxPrice ?? "",
     andTrackingStatusContains: automation?.andTrackingStatusContains ?? "",
+    andMinCallAttempts: automation?.andMinCallAttempts?.toString() ?? "",
+    andMaxCallAttempts: automation?.andMaxCallAttempts?.toString() ?? "",
+    scheduledSendHour: automation?.scheduledSendHour?.toString() ?? "",
+    incrementCallAttempts: automation?.incrementCallAttempts ?? false,
     thenMoveTo: automation?.thenMoveToStatus ?? "",
     thenSendTemplate: automation?.thenSendTemplateName ?? "",
     thenSendTemplateLanguage: automation?.thenSendTemplateLanguage ?? "",
@@ -411,6 +435,10 @@ function AutomationForm({
         andMinPrice: state.andMinPrice.trim() || null,
         andMaxPrice: state.andMaxPrice.trim() || null,
         andTrackingStatusContains: state.andTrackingStatusContains.trim() || null,
+        andMinCallAttempts: state.andMinCallAttempts.trim() ? parseInt(state.andMinCallAttempts) : null,
+        andMaxCallAttempts: state.andMaxCallAttempts.trim() ? parseInt(state.andMaxCallAttempts) : null,
+        scheduledSendHour: state.scheduledSendHour.trim() ? parseInt(state.scheduledSendHour) : null,
+        incrementCallAttempts: state.incrementCallAttempts,
         ...(mode === "create" ? { isEnabled: false } : {}),
       };
       if (mode === "create") {
@@ -584,6 +612,65 @@ function AutomationForm({
               placeholder="e.g. location changed"
               className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm"
             />
+          </Field>
+          <Field
+            label="...and min call attempts"
+            help="Only fire when the lead has at least this many call attempts (e.g. 4)"
+          >
+            <input
+              type="number"
+              min="0"
+              value={state.andMinCallAttempts}
+              onChange={(e) =>
+                setState((s) => ({ ...s, andMinCallAttempts: e.target.value }))
+              }
+              placeholder="e.g. 4"
+              className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm"
+            />
+          </Field>
+          <Field
+            label="...and max call attempts"
+            help="Only fire when the lead has at most this many call attempts"
+          >
+            <input
+              type="number"
+              min="0"
+              value={state.andMaxCallAttempts}
+              onChange={(e) =>
+                setState((s) => ({ ...s, andMaxCallAttempts: e.target.value }))
+              }
+              placeholder="e.g. 10"
+              className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm"
+            />
+          </Field>
+          <Field
+            label="Scheduled send hour (UTC)"
+            help="Defer action until this hour (0-23 UTC). E.g. '6' = send at 6:00 AM UTC. Leave empty to fire immediately."
+          >
+            <input
+              type="number"
+              min="0"
+              max="23"
+              value={state.scheduledSendHour}
+              onChange={(e) =>
+                setState((s) => ({ ...s, scheduledSendHour: e.target.value }))
+              }
+              placeholder="e.g. 6"
+              className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm"
+            />
+          </Field>
+          <Field label="Increment call attempts" help="Increment the lead's call attempt counter each time this automation fires.">
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={state.incrementCallAttempts}
+                onChange={(e) =>
+                  setState((s) => ({ ...s, incrementCallAttempts: e.target.checked }))
+                }
+                className="rounded border-gray-300"
+              />
+              <span className="text-sm text-gray-700">Yes, count this as a call attempt</span>
+            </label>
           </Field>
         </div>
       </details>

@@ -17,6 +17,7 @@ import {
   ShoppingBag,
   Truck,
   Megaphone,
+  Headphones,
 } from "lucide-react";
 import { api } from "@/lib/api-client";
 import { useRouter } from "next/navigation";
@@ -27,6 +28,7 @@ const navItems = [
   { href: "/pipeline", label: "Pipeline", icon: Columns3 },
   { href: "/products", label: "Products", icon: ShoppingBag },
   { href: "/inbox", label: "WhatsApp Inbox", icon: Inbox },
+  { href: "/support-inbox", label: "WhatsApp Support", icon: Headphones },
   { href: "/bulk-messaging", label: "Bulk Messaging", icon: Megaphone },
   { href: "/automations", label: "Automations", icon: Zap },
   { href: "/tracking", label: "Package Tracking", icon: Truck },

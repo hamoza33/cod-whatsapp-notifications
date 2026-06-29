@@ -209,6 +209,26 @@ export class WhatsAppClient {
     return new WhatsAppClient(phoneNumberId, accessToken, apiVersion);
   }
 
+  /**
+   * Build a client from the WhatsApp Support settings (wa_support_*).
+   * Entirely independent of the main WhatsApp credentials.
+   */
+  static async fromSupportSettings(): Promise<WhatsAppClient> {
+    const phoneNumberId =
+      (await getSetting("wa_support_phone_number_id")) || "";
+    const accessToken =
+      (await getSetting("wa_support_access_token")) || "";
+    const apiVersion = "v17.0";
+
+    if (!phoneNumberId || !accessToken) {
+      throw new Error(
+        "WhatsApp Support credentials not configured. Please set them in Settings → WA Support."
+      );
+    }
+
+    return new WhatsAppClient(phoneNumberId, accessToken, apiVersion);
+  }
+
   /** Expose the WABA Phone Number ID this client is sending from. */
   getPhoneNumberId(): string {
     return this.phoneNumberId;

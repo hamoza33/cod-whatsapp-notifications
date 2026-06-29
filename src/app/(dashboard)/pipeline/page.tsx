@@ -40,72 +40,102 @@ type OrderStatus =
   | "WRONG"
   | "EXPIRED"
   | "CALL_LATER"
-  | "CANCELLED_PRICE";
+  | "CALL_LATER_SCHEDULED"
+  | "CANCELLED_PRICE"
+  | "DELAYED"
+  | "BLACK_LISTED"
+  | "ASSIGNED"
+  | "OUT_OF_STOCK"
+  | "RETURN_ON_PROCESS";
 
-const DEFAULT_COLUMN_ORDER: string[] = [
+type PipelineView = "leads" | "orders";
+
+// Lead Pipeline (12 statuses per COD Network lead API)
+const LEAD_STATUSES: OrderStatus[] = [
   "NEW",
-  "PENDING",
   "CONFIRMED",
-  "PROCESSING",
   "CALL_LATER",
+  "CALL_LATER_SCHEDULED",
   "NO_REPLY",
+  "CANCELLED",
+  "WRONG",
+  "EXPIRED",
+  "PROCESSING",
+  "DELAYED",
+  "CANCELLED_PRICE",
+  "BLACK_LISTED",
+];
+
+// Order Pipeline (10 statuses per COD Network order API)
+const ORDER_STATUSES: OrderStatus[] = [
+  "NEW",
+  "ASSIGNED",
   "SHIPPED",
-  "OUT_FOR_DELIVERY",
   "DELIVERED",
   "RETURNED",
   "CANCELLED",
-  "CANCELLED_PRICE",
-  "WRONG",
-  "EXPIRED",
+  "OUT_OF_STOCK",
+  "PENDING",
+  "RETURN_ON_PROCESS",
+  "PROCESSING",
+];
+
+const ALL_STATUSES: OrderStatus[] = [
+  ...new Set([...LEAD_STATUSES, ...ORDER_STATUSES, "OUT_FOR_DELIVERY", "UNKNOWN"]),
+] as OrderStatus[];
+
+const DEFAULT_LEAD_COLUMN_ORDER: string[] = [
+  ...LEAD_STATUSES,
   "UNKNOWN",
   "__SENT__",
   "__CALL_AGENT__",
 ];
 
-const REAL_STATUSES: OrderStatus[] = [
-  "NEW",
-  "PENDING",
-  "CONFIRMED",
-  "PROCESSING",
-  "CALL_LATER",
-  "NO_REPLY",
-  "SHIPPED",
+const DEFAULT_ORDER_COLUMN_ORDER: string[] = [
+  ...ORDER_STATUSES,
   "OUT_FOR_DELIVERY",
-  "DELIVERED",
-  "RETURNED",
-  "CANCELLED",
-  "CANCELLED_PRICE",
-  "WRONG",
-  "EXPIRED",
   "UNKNOWN",
+  "__SENT__",
+  "__CALL_AGENT__",
 ];
 
-const STATUS_LABELS: Record<OrderStatus | "__SENT__" | "__CALL_AGENT__", string> = {
-  NEW: "New Leads",
+const DEFAULT_COLUMN_ORDER: string[] = DEFAULT_LEAD_COLUMN_ORDER;
+
+const REAL_STATUSES: OrderStatus[] = ALL_STATUSES;
+
+const STATUS_LABELS: Record<string, string> = {
+  NEW: "New",
   PENDING: "Pending",
   CONFIRMED: "Confirmed",
   PROCESSING: "Processing",
   CALL_LATER: "Call Later",
+  CALL_LATER_SCHEDULED: "Call Later Scheduled",
   NO_REPLY: "No Reply",
   SHIPPED: "Shipped",
   OUT_FOR_DELIVERY: "Out for Delivery",
   DELIVERED: "Delivered",
-  RETURNED: "Returned",
+  RETURNED: "Return",
   CANCELLED: "Cancelled",
   CANCELLED_PRICE: "Cancelled Price",
-  WRONG: "Wrong Leads",
+  WRONG: "Wrong",
   EXPIRED: "Expired",
+  DELAYED: "Delayed",
+  BLACK_LISTED: "Black Listed",
+  ASSIGNED: "Assigned",
+  OUT_OF_STOCK: "Out of Stock",
+  RETURN_ON_PROCESS: "Return on Process",
   UNKNOWN: "Unknown",
   __SENT__: "WhatsApp Sent",
   __CALL_AGENT__: "Call Agent",
 };
 
-const STATUS_COLORS: Record<OrderStatus, string> = {
+const STATUS_COLORS: Record<string, string> = {
   NEW: "bg-emerald-100 text-emerald-700 border-emerald-300",
   PENDING: "bg-gray-100 text-gray-700 border-gray-300",
   CONFIRMED: "bg-blue-100 text-blue-700 border-blue-300",
   PROCESSING: "bg-indigo-100 text-indigo-700 border-indigo-300",
   CALL_LATER: "bg-cyan-100 text-cyan-700 border-cyan-300",
+  CALL_LATER_SCHEDULED: "bg-teal-100 text-teal-700 border-teal-300",
   NO_REPLY: "bg-yellow-100 text-yellow-700 border-yellow-300",
   SHIPPED: "bg-amber-100 text-amber-700 border-amber-300",
   OUT_FOR_DELIVERY: "bg-orange-100 text-orange-700 border-orange-300",
@@ -115,6 +145,11 @@ const STATUS_COLORS: Record<OrderStatus, string> = {
   CANCELLED_PRICE: "bg-pink-100 text-pink-700 border-pink-300",
   WRONG: "bg-red-200 text-red-800 border-red-400",
   EXPIRED: "bg-stone-100 text-stone-700 border-stone-300",
+  DELAYED: "bg-amber-200 text-amber-800 border-amber-400",
+  BLACK_LISTED: "bg-gray-800 text-white border-gray-900",
+  ASSIGNED: "bg-sky-100 text-sky-700 border-sky-300",
+  OUT_OF_STOCK: "bg-orange-200 text-orange-800 border-orange-400",
+  RETURN_ON_PROCESS: "bg-violet-100 text-violet-700 border-violet-300",
   UNKNOWN: "bg-slate-100 text-slate-700 border-slate-300",
 };
 
@@ -162,6 +197,7 @@ interface PipelineOrder {
   productImageUrl: string | null;
   productImages: string[];
   callAgentQueued: boolean;
+  callAttempts: number;
 }
 
 interface TemplateInfo {
@@ -203,6 +239,25 @@ export default function PipelinePage() {
   const [searchQuery, setSearchQuery] = useState("");
   const [columnOrder, setColumnOrder] = useState<string[]>(loadColumnOrder);
   const [dragColumnKey, setDragColumnKey] = useState<string | null>(null);
+  const [pipelineView, setPipelineView] = useState<PipelineView>(() => {
+    if (typeof window === "undefined") return "leads";
+    const saved = localStorage.getItem("pipeline_view");
+    return (saved === "orders" || saved === "leads") ? saved : "leads";
+  });
+  const [dateFilter, setDateFilter] = useState<"today" | "all">("all");
+
+  // Derive column order based on active pipeline view
+  const activeColumnOrder = useMemo(() => {
+    if (pipelineView === "orders") {
+      return DEFAULT_ORDER_COLUMN_ORDER;
+    }
+    return columnOrder;
+  }, [pipelineView, columnOrder]);
+
+  const activeStatuses = useMemo(() => {
+    if (pipelineView === "orders") return ORDER_STATUSES;
+    return LEAD_STATUSES;
+  }, [pipelineView]);
 
   const showToast = useCallback((kind: "success" | "error", text: string) => {
     setToast({ kind, text });
@@ -212,8 +267,10 @@ export default function PipelinePage() {
 
   const fetchOrders = useCallback(async () => {
     try {
+      const params = new URLSearchParams({ pageSize: "1000" });
+      if (dateFilter === "today") params.set("dateFilter", "today");
       const data = await api.get<{ orders: PipelineOrder[] }>(
-        "/orders?pageSize=500"
+        `/orders?${params.toString()}`
       );
       setOrders(data.orders);
       setError(null);
@@ -223,7 +280,7 @@ export default function PipelinePage() {
       setLoading(false);
       setRefreshing(false);
     }
-  }, []);
+  }, [dateFilter]);
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
@@ -269,11 +326,14 @@ export default function PipelinePage() {
 
   const grouped = useMemo(() => {
     const groups: Record<string, PipelineOrder[]> = { __SENT__: [], __CALL_AGENT__: [] };
-    REAL_STATUSES.forEach((s) => (groups[s] = []));
+    ALL_STATUSES.forEach((s) => (groups[s] = []));
     for (const o of filteredOrders) {
       if (o.callAgentQueued) groups.__CALL_AGENT__.push(o);
       else if (o.whatsappSentAt) groups.__SENT__.push(o);
-      else groups[o.status]?.push(o);
+      else {
+        if (!groups[o.status]) groups[o.status] = [];
+        groups[o.status].push(o);
+      }
     }
     for (const key of Object.keys(groups)) {
       groups[key].sort((a, b) => {
@@ -493,6 +553,51 @@ export default function PipelinePage() {
           <p className="text-sm text-gray-500">
             Drag cards between columns to update status. Use the grip handle to drag; click card text to select it.
           </p>
+          {/* Pipeline view tabs */}
+          <div className="flex gap-1 mt-2">
+            <button
+              onClick={() => { setPipelineView("leads"); localStorage.setItem("pipeline_view", "leads"); }}
+              className={`px-3 py-1 text-xs font-medium rounded-md transition-colors ${
+                pipelineView === "leads"
+                  ? "bg-blue-600 text-white"
+                  : "bg-gray-100 text-gray-600 hover:bg-gray-200"
+              }`}
+            >
+              Lead Pipeline (12)
+            </button>
+            <button
+              onClick={() => { setPipelineView("orders"); localStorage.setItem("pipeline_view", "orders"); }}
+              className={`px-3 py-1 text-xs font-medium rounded-md transition-colors ${
+                pipelineView === "orders"
+                  ? "bg-blue-600 text-white"
+                  : "bg-gray-100 text-gray-600 hover:bg-gray-200"
+              }`}
+            >
+              Order Pipeline (10)
+            </button>
+          </div>
+          <div className="flex items-center gap-1 bg-gray-50 rounded-lg p-0.5 ml-2">
+            <button
+              onClick={() => setDateFilter("today")}
+              className={`px-3 py-1 text-xs font-medium rounded-md transition-colors ${
+                dateFilter === "today"
+                  ? "bg-green-600 text-white"
+                  : "bg-gray-100 text-gray-600 hover:bg-gray-200"
+              }`}
+            >
+              Today
+            </button>
+            <button
+              onClick={() => setDateFilter("all")}
+              className={`px-3 py-1 text-xs font-medium rounded-md transition-colors ${
+                dateFilter === "all"
+                  ? "bg-green-600 text-white"
+                  : "bg-gray-100 text-gray-600 hover:bg-gray-200"
+              }`}
+            >
+              All
+            </button>
+          </div>
         </div>
         <div className="flex items-center gap-2">
           <div className="relative">
@@ -524,13 +629,13 @@ export default function PipelinePage() {
               </button>
               {bulkMoveTarget === "open" && (
                 <div className="absolute right-0 top-full mt-1 bg-white border border-gray-200 rounded-lg shadow-xl z-30 w-56 py-1">
-                  {REAL_STATUSES.map((s) => (
+                  {activeStatuses.map((s) => (
                     <button
                       key={s}
                       onClick={() => handleBulkMove(s)}
                       className="w-full text-left px-3 py-2 text-sm hover:bg-gray-50 text-gray-700"
                     >
-                      {STATUS_LABELS[s]}
+                      {STATUS_LABELS[s] || s}
                     </button>
                   ))}
                 </div>
@@ -571,7 +676,7 @@ export default function PipelinePage() {
 
       <div className="flex-1 overflow-x-auto pb-2">
         <div className="flex gap-3 h-full min-w-max">
-          {columnOrder.map((colKey) => {
+          {activeColumnOrder.map((colKey) => {
             const isSent = colKey === "__SENT__";
             const isCallAgent = colKey === "__CALL_AGENT__";
             const s = colKey as OrderStatus;
@@ -898,6 +1003,18 @@ function Card({
               <span className="truncate">{order.customerCity}</span>
             </div>
           )}
+          {order.customerAddress && (
+            <div className="flex items-center gap-1.5 text-gray-600">
+              <MapPin size={11} className="shrink-0 text-gray-400" />
+              <span className="truncate text-[10px]">{order.customerAddress}</span>
+            </div>
+          )}
+          {order.deliveryCompany && (
+            <div className="flex items-center gap-1.5 text-gray-600">
+              <PackageIcon size={11} className="shrink-0 text-gray-400" />
+              <span className="truncate text-[10px]">{order.deliveryCompany}</span>
+            </div>
+          )}
           {order.trackingNumber && (
             <div className="flex items-center gap-1.5 text-gray-600">
               <Hash size={11} className="shrink-0 text-gray-400" />
@@ -918,6 +1035,12 @@ function Card({
                   <Copy size={10} className="text-gray-400" />
                 )}
               </button>
+            </div>
+          )}
+          {order.callAttempts > 0 && (
+            <div className="flex items-center gap-1.5 text-gray-600">
+              <Phone size={11} className="shrink-0 text-orange-400" />
+              <span className="text-[10px]">{order.callAttempts} call attempt{order.callAttempts === 1 ? "" : "s"}</span>
             </div>
           )}
           {sentAt && (
@@ -979,9 +1102,30 @@ function SendDialog({
   const [imageLibrary, setImageLibrary] = useState<Array<{ id: string; url: string; name: string; mediaId: string | null }>>([]);
   const [showImageLibrary, setShowImageLibrary] = useState(false);
   const variableInputRef = useRef<HTMLInputElement>(null);
+  const [allTemplates, setAllTemplates] = useState<Array<{
+    name: string; language: string; status: string; category: string;
+    bodyParamCount: number; bodyText: string | null; headerType: string | null;
+  }>>([]);
+  const [loadingTemplates, setLoadingTemplates] = useState(true);
 
   useEffect(() => {
-    const run = async () => {
+    // Load all approved templates
+    const loadAll = async () => {
+      setLoadingTemplates(true);
+      try {
+        const data = await api.get<{ templates: Array<{
+          name: string; language: string; status: string; category: string;
+          bodyParamCount: number; bodyText: string | null; headerType: string | null;
+        }> }>("/whatsapp/templates/cached?status=APPROVED");
+        setAllTemplates(data.templates);
+      } catch {
+        // ignore
+      } finally {
+        setLoadingTemplates(false);
+      }
+    };
+
+    const detectDefault = async () => {
       setDetecting(true);
       setTemplateError(null);
       try {
@@ -997,7 +1141,9 @@ function SendDialog({
         setDetecting(false);
       }
     };
-    run();
+
+    loadAll();
+    detectDefault();
 
     // Load image library
     fetch("/api/images")
@@ -1007,6 +1153,21 @@ function SendDialog({
       })
       .catch(() => {});
   }, []);
+
+  const selectTemplate = (tpl: typeof allTemplates[number]) => {
+    setTemplateName(tpl.name);
+    setTemplateLanguage(tpl.language);
+    setTemplateInfo({
+      name: tpl.name,
+      language: tpl.language,
+      status: tpl.status,
+      category: tpl.category,
+      bodyParameterCount: tpl.bodyParamCount,
+      bodyText: tpl.bodyText,
+      header: tpl.headerType ? { format: tpl.headerType as "TEXT" | "IMAGE" | "VIDEO" | "DOCUMENT" | "LOCATION" } : null,
+    });
+    setVariableInput("");
+  };
 
   const insertVariable = (key: string) => {
     const value = VARIABLES.find((v) => v.key === key)?.resolve(order) ?? "";
@@ -1134,10 +1295,43 @@ function SendDialog({
             </div>
           )}
 
-          {detecting && (
+          {/* Template Selector */}
+          <div>
+            <label className="block text-xs font-medium text-gray-700 mb-1">
+              Select Template
+            </label>
+            {loadingTemplates ? (
+              <p className="text-xs text-gray-400 flex items-center gap-1.5">
+                <RefreshCw size={11} className="animate-spin" /> Loading templates…
+              </p>
+            ) : allTemplates.length === 0 ? (
+              <p className="text-xs text-gray-400">No approved templates found. Import templates first.</p>
+            ) : (
+              <select
+                value={templateName ? `${templateName}|${templateLanguage}` : ""}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  if (!val) return;
+                  const tpl = allTemplates.find((t) => `${t.name}|${t.language}` === val);
+                  if (tpl) selectTemplate(tpl);
+                }}
+                className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+              >
+                <option value="">— Choose a template —</option>
+                {allTemplates.map((tpl) => (
+                  <option key={`${tpl.name}|${tpl.language}`} value={`${tpl.name}|${tpl.language}`}>
+                    {tpl.name} ({tpl.language}) — {tpl.bodyParamCount} var{tpl.bodyParamCount === 1 ? "" : "s"}
+                    {tpl.headerType ? ` · ${tpl.headerType} header` : ""}
+                  </option>
+                ))}
+              </select>
+            )}
+          </div>
+
+          {detecting && !templateInfo && (
             <p className="text-xs text-gray-500 flex items-center gap-1.5">
               <RefreshCw size={11} className="animate-spin" />
-              Looking up template…
+              Looking up default template…
             </p>
           )}
           {templateError && (

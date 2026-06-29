@@ -14,6 +14,8 @@ const TABS = [
   { id: "webhooks", label: "Webhooks" },
   { id: "whatsapp", label: "WhatsApp" },
   { id: "wa_numbers", label: "WA Numbers" },
+  { id: "wa_support", label: "WA Support" },
+  { id: "wa_sources", label: "Sources" },
   { id: "sync", label: "Order Sync" },
   { id: "tracking", label: "Tracking" },
   { id: "automation", label: "Automation" },
@@ -387,6 +389,182 @@ export default function SettingsPage() {
           />
         </SettingsSection>
       )}
+
+      {/* WhatsApp Support */}
+      {activeTab === "wa_support" && (
+        <SettingsSection
+          title="WhatsApp Support"
+          description="Configure a separate WhatsApp Business account for customer support. These credentials are entirely independent from the main WhatsApp setup, allowing you to manage support conversations in a dedicated inbox."
+          onSave={() =>
+            handleSave("WhatsApp Support", [
+              "wa_support_business_account_id",
+              "wa_support_phone_number_id",
+              "wa_support_access_token",
+              "wa_support_api_key",
+              "wa_support_app_secret",
+              "wa_support_webhook_verify_token",
+              "wa_support_ai_enabled",
+              "wa_support_ai_api_key",
+              "wa_support_ai_system_prompt",
+              "wa_support_ai_model",
+              "wa_support_display_phone",
+            ])
+          }
+          saving={saving}
+        >
+          <SettingsField
+            label="WhatsApp Business Account ID"
+            value={settings.wa_support_business_account_id || ""}
+            onChange={(v) => updateSetting("wa_support_business_account_id", v)}
+            configuredPreview={sensitivePreviews.wa_support_business_account_id}
+            settingKey="wa_support_business_account_id"
+            placeholder={
+              configuredSecrets.has("wa_support_business_account_id")
+                ? "Currently configured — enter a new value to replace"
+                : "e.g. 123456789012345"
+            }
+          />
+          <SettingsField
+            label="Phone Number ID"
+            value={settings.wa_support_phone_number_id || ""}
+            onChange={(v) => updateSetting("wa_support_phone_number_id", v)}
+            configuredPreview={sensitivePreviews.wa_support_phone_number_id}
+            settingKey="wa_support_phone_number_id"
+            placeholder={
+              configuredSecrets.has("wa_support_phone_number_id")
+                ? "Currently configured — enter a new value to replace"
+                : "e.g. 906139205908177"
+            }
+          />
+          <SettingsField
+            label="Access Token"
+            value={settings.wa_support_access_token || ""}
+            onChange={(v) => updateSetting("wa_support_access_token", v)}
+            type="password"
+            configuredPreview={sensitivePreviews.wa_support_access_token}
+            settingKey="wa_support_access_token"
+            placeholder={configuredSecrets.has("wa_support_access_token") ? "Currently configured — enter new value to replace" : "Permanent access token for support line"}
+          />
+          <SettingsField
+            label="API Key"
+            value={settings.wa_support_api_key || ""}
+            onChange={(v) => updateSetting("wa_support_api_key", v)}
+            type="password"
+            configuredPreview={sensitivePreviews.wa_support_api_key}
+            settingKey="wa_support_api_key"
+            placeholder={configuredSecrets.has("wa_support_api_key") ? "Currently configured — enter new value to replace" : "API key for WhatsApp Support line"}
+          />
+          <SettingsField
+            label="App Secret"
+            value={settings.wa_support_app_secret || ""}
+            onChange={(v) => updateSetting("wa_support_app_secret", v)}
+            type="password"
+            configuredPreview={sensitivePreviews.wa_support_app_secret}
+            settingKey="wa_support_app_secret"
+            placeholder={configuredSecrets.has("wa_support_app_secret") ? "Currently configured — enter new value to replace" : "Meta App Secret for webhook signature verification"}
+          />
+          <SettingsField
+            label="Webhook Verify Token"
+            value={settings.wa_support_webhook_verify_token || ""}
+            onChange={(v) => updateSetting("wa_support_webhook_verify_token", v)}
+            configuredPreview={sensitivePreviews.wa_support_webhook_verify_token}
+            settingKey="wa_support_webhook_verify_token"
+            placeholder={
+              configuredSecrets.has("wa_support_webhook_verify_token")
+                ? "Currently configured — enter a new value to replace"
+                : "Token to verify webhook subscription"
+            }
+            help="Point your Meta webhook to: /api/whatsapp-support/webhook"
+          />
+          <SettingsField
+            label="Display Phone Number (for /wa/ redirect links)"
+            value={settings.wa_support_display_phone || ""}
+            onChange={(v) => updateSetting("wa_support_display_phone", v)}
+            placeholder="+447830607451"
+            help="The actual phone number customers will message (with country code). Used for /wa/<source> redirect links. E.g. +447830607451"
+          />
+          <div className="border-t border-gray-200 pt-4 mt-4">
+            <h4 className="text-sm font-semibold text-gray-800 mb-3">Support AI Agent</h4>
+            <p className="text-xs text-gray-500 mb-3">This AI agent is independent of the main WhatsApp AI agent. It uses its own API key and system prompt.</p>
+            <div className="flex items-center gap-3 mb-4">
+              <label className="text-sm font-medium text-gray-700">
+                Enable Auto-Reply
+              </label>
+              <button
+                onClick={() =>
+                  updateSetting(
+                    "wa_support_ai_enabled",
+                    settings.wa_support_ai_enabled === "true" ? "false" : "true"
+                  )
+                }
+                className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                  settings.wa_support_ai_enabled === "true"
+                    ? "bg-blue-600"
+                    : "bg-gray-300"
+                }`}
+              >
+                <span
+                  className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                    settings.wa_support_ai_enabled === "true"
+                      ? "translate-x-6"
+                      : "translate-x-1"
+                  }`}
+                />
+              </button>
+            </div>
+            <SettingsField
+              label="AI API Key"
+              value={settings.wa_support_ai_api_key || ""}
+              onChange={(v) => updateSetting("wa_support_ai_api_key", v)}
+              type="password"
+              configuredPreview={sensitivePreviews.wa_support_ai_api_key}
+              settingKey="wa_support_ai_api_key"
+              placeholder={configuredSecrets.has("wa_support_ai_api_key") ? "Currently configured — enter new value to replace" : "OpenAI API Key for support agent"}
+            />
+            <div className="mb-4">
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                AI Model
+              </label>
+              <select
+                value={settings.wa_support_ai_model || "gpt-4o-mini"}
+                onChange={(e) => updateSetting("wa_support_ai_model", e.target.value)}
+                className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
+              >
+                <option value="gpt-4o-mini">GPT-4o Mini</option>
+                <option value="gpt-4o">GPT-4o</option>
+                <option value="gpt-4.1-mini">GPT-4.1 Mini</option>
+                <option value="gpt-4.1">GPT-4.1</option>
+                <option value="gpt-4.1-nano">GPT-4.1 Nano</option>
+                <option value="gpt-4-turbo">GPT-4 Turbo</option>
+                <option value="gpt-3.5-turbo">GPT-3.5 Turbo</option>
+                <option value="o4-mini">o4-mini</option>
+                <option value="o3-mini">o3-mini</option>
+                <option value="claude-sonnet-4-20250514">Claude Sonnet 4</option>
+                <option value="claude-3-5-sonnet-20241022">Claude 3.5 Sonnet</option>
+                <option value="claude-3-5-haiku-20241022">Claude 3.5 Haiku</option>
+              </select>
+            </div>
+            <div className="mb-4">
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                System Prompt
+              </label>
+              <textarea
+                value={settings.wa_support_ai_system_prompt || ""}
+                onChange={(e) => updateSetting("wa_support_ai_system_prompt", e.target.value)}
+                rows={5}
+                className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                placeholder="You are a helpful customer support agent..."
+              />
+              <p className="mt-1 text-xs text-gray-500">
+                Instructions for the support AI agent. This is independent of the main AI agent.
+              </p>
+            </div>
+          </div>
+        </SettingsSection>
+      )}
+
+      {/* Support Sources */}
+      {activeTab === "wa_sources" && <SupportSourcesManager />}
 
       {/* Order Sync */}
       {activeTab === "sync" && (
@@ -798,22 +976,14 @@ export default function SettingsPage() {
 
       {activeTab === "voice" && (
         <SettingsSection
-          title="Voice Agent (Call Agent)"
-          description="Configure the AI voice agent that automatically calls customers when orders are dropped into the Call Agent column. Supports ElevenLabs Conversational AI or a custom provider."
+          title="Voice Agent — Vapi"
+          description="Integrate Vapi for automated voice calls. When a lead or order is moved to the 'Call Agent' pipeline column, the system initiates a call via Vapi with all customer variables. Configure your assistant at dashboard.vapi.ai."
           onSave={() =>
             handleSave("Voice Agent", [
               "voice_agent_enabled",
-              "voice_agent_provider",
-              "voice_agent_api_key",
-              "voice_agent_voice_id",
-              "voice_agent_model",
-              "voice_agent_system_prompt",
-              "voice_agent_caller_id",
-              "voice_agent_language",
-              "voice_agent_llm_provider",
-              "voice_agent_llm_api_key",
-              "voice_agent_llm_model",
-              "voice_agent_webhook_url",
+              "vapi_api_key",
+              "vapi_phone_number_id",
+              "vapi_assistant_id",
             ])
           }
           saving={saving}
@@ -844,112 +1014,64 @@ export default function SettingsPage() {
               />
             </button>
           </div>
-          <div className="mb-4">
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              Provider
-            </label>
-            <select
-              value={settings.voice_agent_provider || "elevenlabs"}
-              onChange={(e) => updateSetting("voice_agent_provider", e.target.value)}
-              className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm bg-white focus:outline-none focus:ring-2 focus:ring-purple-500"
-            >
-              <option value="elevenlabs">ElevenLabs Conversational AI</option>
-              <option value="bland">Bland AI</option>
-            </select>
-            <p className="mt-1 text-xs text-gray-500">
-              Select the voice AI platform that will handle phone calls.
-            </p>
-          </div>
           <SettingsField
-            label="Voice API Key"
-            value={settings.voice_agent_api_key || ""}
-            onChange={(v) => updateSetting("voice_agent_api_key", v)}
+            label="Vapi API Key (Private Key)"
+            value={settings.vapi_api_key || ""}
+            onChange={(v) => updateSetting("vapi_api_key", v)}
             type="password"
-            configuredPreview={sensitivePreviews.voice_agent_api_key}
-            settingKey="voice_agent_api_key"
+            configuredPreview={sensitivePreviews.vapi_api_key}
+            settingKey="vapi_api_key"
             placeholder={
-              configuredSecrets.has("voice_agent_api_key")
+              configuredSecrets.has("vapi_api_key")
                 ? "Currently configured — enter a new value to replace"
-                : "Your ElevenLabs or provider API key"
+                : "Your Vapi private API key from dashboard.vapi.ai"
             }
-            help="API key from your voice agent provider (e.g. xi-api-key for ElevenLabs, or Bearer token for Bland AI)."
+            help="Private API key from Vapi (dashboard.vapi.ai → Organization Settings → API Keys)."
           />
           <SettingsField
-            label="Voice ID"
-            value={settings.voice_agent_voice_id || ""}
-            onChange={(v) => updateSetting("voice_agent_voice_id", v)}
-            placeholder="21m00Tcm4TlvDq8ikWAM"
-            help="The voice to use for calls (ElevenLabs voice ID). Leave empty for the default voice."
+            label="Vapi Phone Number ID"
+            value={settings.vapi_phone_number_id || ""}
+            onChange={(v) => updateSetting("vapi_phone_number_id", v)}
+            configuredPreview={sensitivePreviews.vapi_phone_number_id}
+            settingKey="vapi_phone_number_id"
+            placeholder={
+              configuredSecrets.has("vapi_phone_number_id")
+                ? "Currently configured — enter a new value to replace"
+                : "Phone Number ID from Vapi dashboard"
+            }
+            help="The Vapi phone number ID to use for outbound calls. Find it in Vapi dashboard → Phone Numbers."
           />
           <SettingsField
-            label="Caller ID / From Number"
-            value={settings.voice_agent_caller_id || ""}
-            onChange={(v) => updateSetting("voice_agent_caller_id", v)}
-            placeholder="+1234567890"
-            help="The phone number that will appear as the caller ID. Must be a verified number with your provider."
-          />
-          <div className="mb-4">
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              Language
-            </label>
-            <select
-              value={settings.voice_agent_language || "ar"}
-              onChange={(e) => updateSetting("voice_agent_language", e.target.value)}
-              className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm bg-white focus:outline-none focus:ring-2 focus:ring-purple-500"
-            >
-              <option value="ar">Arabic</option>
-              <option value="en">English</option>
-              <option value="fr">French</option>
-              <option value="es">Spanish</option>
-              <option value="de">German</option>
-              <option value="tr">Turkish</option>
-            </select>
-          </div>
-          <div className="mb-4">
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              Call Script / System Prompt
-            </label>
-            <textarea
-              value={settings.voice_agent_system_prompt || ""}
-              onChange={(e) => updateSetting("voice_agent_system_prompt", e.target.value)}
-              rows={6}
-              placeholder={`You are a professional customer service agent for a delivery company.\nYou are calling the customer to confirm their order.\n- Greet them by name: {customer_name}\n- Confirm their order: {product}\n- Current status: {order_status}\n- Be polite and professional\n- Speak in Arabic by default`}
-              className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-purple-500"
-            />
-            <p className="mt-1 text-xs text-gray-500">
-              Instructions for the voice agent. Use {"{customer_name}"}, {"{product}"}, {"{order_status}"}, {"{tracking}"} as placeholders.
-            </p>
-          </div>
-          <SettingsField
-            label="Webhook URL (optional)"
-            value={settings.voice_agent_webhook_url || ""}
-            onChange={(v) => updateSetting("voice_agent_webhook_url", v)}
-            placeholder="https://your-app.com/api/voice-agent/webhook"
-            help="URL to receive call status updates and transcripts."
+            label="Vapi Assistant ID"
+            value={settings.vapi_assistant_id || ""}
+            onChange={(v) => updateSetting("vapi_assistant_id", v)}
+            configuredPreview={sensitivePreviews.vapi_assistant_id}
+            settingKey="vapi_assistant_id"
+            placeholder={
+              configuredSecrets.has("vapi_assistant_id")
+                ? "Currently configured — enter a new value to replace"
+                : "Assistant ID from Vapi dashboard"
+            }
+            help="The Vapi assistant to use for calls. Configure the assistant's prompt and behaviour at dashboard.vapi.ai."
           />
           <div className="border-t border-gray-200 pt-4 mt-4">
-            <h3 className="text-sm font-semibold text-gray-800 mb-3">LLM Configuration (for conversation logic)</h3>
-            <SettingsField
-              label="LLM API Key"
-              value={settings.voice_agent_llm_api_key || ""}
-              onChange={(v) => updateSetting("voice_agent_llm_api_key", v)}
-              type="password"
-              configuredPreview={sensitivePreviews.voice_agent_llm_api_key}
-              settingKey="voice_agent_llm_api_key"
-              placeholder={
-                configuredSecrets.has("voice_agent_llm_api_key")
-                  ? "Currently configured — enter a new value to replace"
-                  : "OpenAI or other LLM API key"
-              }
-              help="API key for the LLM that drives the voice agent's conversation logic. Often not needed if using ElevenLabs' built-in agent."
-            />
-            <SettingsField
-              label="LLM Model"
-              value={settings.voice_agent_llm_model || ""}
-              onChange={(v) => updateSetting("voice_agent_llm_model", v)}
-              placeholder="gpt-4o-mini"
-              help="The LLM model to use for conversation (e.g. gpt-4o-mini, gpt-4o). Only needed if provider requires a separate LLM."
-            />
+            <h3 className="text-sm font-semibold text-gray-800 mb-3">Variables passed to Vapi</h3>
+            <p className="text-xs text-gray-500 mb-2">
+              When a call is initiated, these variables are sent to Vapi as <code className="bg-gray-100 px-1 rounded">assistantOverrides.variableValues</code>.
+              Use them in your Vapi assistant prompt with {"{{variable_name}}"} syntax.
+            </p>
+            <div className="flex flex-wrap gap-1.5">
+              {[
+                "customer_name", "customer_phone", "customer_city", "customer_address",
+                "product_name", "product_price", "product_quantity", "product_description",
+                "order_id", "lead_id", "order_status", "delivery_status",
+                "tracking_number", "delivery_company", "call_attempts",
+              ].map((v) => (
+                <span key={v} className="text-[11px] px-2 py-1 bg-purple-50 text-purple-700 rounded-md font-mono border border-purple-200">
+                  {`{{${v}}}`}
+                </span>
+              ))}
+            </div>
           </div>
         </SettingsSection>
       )}
@@ -1349,6 +1471,198 @@ function WebhookUrlReadout({ name, path }: { name: string; path: string }) {
           {copied ? "Copied" : "Copy"}
         </button>
       </div>
+    </div>
+  );
+}
+
+interface SupportSourceRecord {
+  id: string;
+  slug: string;
+  name: string;
+  systemPrompt: string;
+  enabled: boolean;
+}
+
+function SupportSourcesManager() {
+  const [sources, setSources] = useState<SupportSourceRecord[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [adding, setAdding] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [form, setForm] = useState({ slug: "", name: "", systemPrompt: "", enabled: true });
+  const [notification, setNotification] = useState<{ type: "success" | "error"; message: string } | null>(null);
+
+  const fetchSources = async () => {
+    try {
+      const data = await api.get<{ sources: SupportSourceRecord[] }>("/whatsapp-support/sources");
+      setSources(data.sources);
+    } catch {
+      // ignore
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { fetchSources(); }, []);
+
+  const handleSave = async () => {
+    if (!form.slug.trim() || !form.name.trim() || !form.systemPrompt.trim()) {
+      setNotification({ type: "error", message: "Slug, name, and system prompt are required." });
+      return;
+    }
+    try {
+      if (editingId) {
+        await api.patch(`/whatsapp-support/sources/${editingId}`, form);
+        setNotification({ type: "success", message: "Source updated." });
+      } else {
+        await api.post("/whatsapp-support/sources", form);
+        setNotification({ type: "success", message: "Source created." });
+      }
+      setAdding(false);
+      setEditingId(null);
+      setForm({ slug: "", name: "", systemPrompt: "", enabled: true });
+      await fetchSources();
+    } catch (err) {
+      setNotification({ type: "error", message: err instanceof Error ? err.message : "Save failed" });
+    }
+  };
+
+  const handleDelete = async (id: string) => {
+    if (!confirm("Delete this source?")) return;
+    try {
+      await api.del(`/whatsapp-support/sources/${id}`);
+      setNotification({ type: "success", message: "Source deleted." });
+      await fetchSources();
+    } catch {
+      setNotification({ type: "error", message: "Delete failed." });
+    }
+  };
+
+  const startEdit = (s: SupportSourceRecord) => {
+    setEditingId(s.id);
+    setForm({ slug: s.slug, name: s.name, systemPrompt: s.systemPrompt, enabled: s.enabled });
+    setAdding(true);
+  };
+
+  if (loading) {
+    return <div className="flex items-center justify-center py-12"><RefreshCw className="animate-spin h-5 w-5 text-gray-400" /></div>;
+  }
+
+  return (
+    <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
+      <div className="flex items-center justify-between mb-4">
+        <div>
+          <h3 className="text-lg font-semibold text-gray-900">Support Sources</h3>
+          <p className="text-sm text-gray-500 mt-1">
+            Manage website sources for WhatsApp Support auto-reply. Each source has its own AI system prompt.
+            Use <code className="bg-gray-100 px-1 rounded text-xs">?source=slug</code> in your WhatsApp link to route customers.
+          </p>
+        </div>
+        {!adding && (
+          <button
+            onClick={() => { setAdding(true); setEditingId(null); setForm({ slug: "", name: "", systemPrompt: "", enabled: true }); }}
+            className="flex items-center gap-1.5 px-3 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700"
+          >
+            <Plus size={14} /> Add Source
+          </button>
+        )}
+      </div>
+
+      {notification && (
+        <div className={`mb-4 p-3 rounded-lg text-sm ${notification.type === "success" ? "bg-green-50 text-green-800" : "bg-red-50 text-red-800"}`}>
+          {notification.message}
+        </div>
+      )}
+
+      {adding && (
+        <div className="mb-6 p-4 bg-gray-50 rounded-lg border border-gray-200">
+          <h4 className="text-sm font-semibold text-gray-800 mb-3">{editingId ? "Edit Source" : "New Source"}</h4>
+          <div className="grid grid-cols-2 gap-4 mb-3">
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">Slug</label>
+              <input
+                value={form.slug}
+                onChange={(e) => setForm({ ...form, slug: e.target.value.toLowerCase().replace(/[^a-z0-9_-]/g, "") })}
+                className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm"
+                placeholder="e.g. site1"
+                disabled={!!editingId}
+              />
+              <p className="text-[10px] text-gray-400 mt-0.5">Used in ?source=slug</p>
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">Display Name</label>
+              <input
+                value={form.name}
+                onChange={(e) => setForm({ ...form, name: e.target.value })}
+                className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm"
+                placeholder="e.g. My Store Website"
+              />
+            </div>
+          </div>
+          <div className="mb-3">
+            <label className="block text-xs font-medium text-gray-600 mb-1">AI System Prompt</label>
+            <textarea
+              value={form.systemPrompt}
+              onChange={(e) => setForm({ ...form, systemPrompt: e.target.value })}
+              rows={5}
+              className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm"
+              placeholder="You are a customer support agent for [website name]. Help customers with their orders..."
+            />
+          </div>
+          <div className="flex items-center gap-3 mb-4">
+            <label className="text-xs font-medium text-gray-600">Enabled</label>
+            <button
+              onClick={() => setForm({ ...form, enabled: !form.enabled })}
+              className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${form.enabled ? "bg-blue-600" : "bg-gray-300"}`}
+            >
+              <span className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${form.enabled ? "translate-x-4" : "translate-x-0.5"}`} />
+            </button>
+          </div>
+          <div className="flex gap-2">
+            <button onClick={handleSave} className="px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700">
+              <Save size={14} className="inline mr-1" />{editingId ? "Update" : "Create"}
+            </button>
+            <button onClick={() => { setAdding(false); setEditingId(null); }} className="px-4 py-2 bg-gray-200 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-300">
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+
+      {sources.length === 0 && !adding && (
+        <div className="text-center py-8 text-gray-400 text-sm">
+          No sources configured. Add a source to enable per-website AI auto-reply prompts.
+        </div>
+      )}
+
+      {sources.length > 0 && (
+        <div className="space-y-3">
+          {sources.map((s) => (
+            <div key={s.id} className="flex items-start justify-between p-4 bg-gray-50 rounded-lg border border-gray-200">
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2">
+                  <span className="font-medium text-sm text-gray-900">{s.name}</span>
+                  <code className="text-[10px] bg-gray-200 px-1.5 py-0.5 rounded text-gray-600">{s.slug}</code>
+                  <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${s.enabled ? "bg-green-100 text-green-700" : "bg-gray-200 text-gray-500"}`}>
+                    {s.enabled ? "Active" : "Disabled"}
+                  </span>
+                </div>
+                <p className="text-xs text-gray-500 mt-1 line-clamp-2">{s.systemPrompt}</p>
+                <p className="text-[10px] text-gray-400 mt-1">
+                  Link: https://api.whatsapp.com/send?phone=YOUR_NUMBER&text=source:{s.slug}
+                </p>
+              </div>
+              <div className="flex gap-1 ml-3">
+                <button onClick={() => startEdit(s)} className="p-1.5 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded">
+                  <Eye size={14} />
+                </button>
+                <button onClick={() => handleDelete(s.id)} className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded">
+                  <Trash2 size={14} />
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

@@ -35,6 +35,10 @@ interface CreateAutomationBody {
   andMinPrice?: string | null;
   andMaxPrice?: string | null;
   andTrackingStatusContains?: string | null;
+  andMinCallAttempts?: number | null;
+  andMaxCallAttempts?: number | null;
+  scheduledSendHour?: number | null;
+  incrementCallAttempts?: boolean;
   thenMoveToStatus?: string | null;
   thenSendTemplateName?: string | null;
   thenSendTemplateLanguage?: string | null;
@@ -122,6 +126,10 @@ export async function POST(request: NextRequest) {
       andMinPrice: body.andMinPrice?.trim() || null,
       andMaxPrice: body.andMaxPrice?.trim() || null,
       andTrackingStatusContains: body.andTrackingStatusContains?.trim() || null,
+      andMinCallAttempts: body.andMinCallAttempts ?? null,
+      andMaxCallAttempts: body.andMaxCallAttempts ?? null,
+      scheduledSendHour: body.scheduledSendHour ?? null,
+      incrementCallAttempts: body.incrementCallAttempts ?? false,
     },
   });
 

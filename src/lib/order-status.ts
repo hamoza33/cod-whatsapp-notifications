@@ -78,14 +78,38 @@ export function deriveOrderStatus(input: {
   if (label === "expired" || label === "expire") {
     return OrderStatus.EXPIRED;
   }
+  if (label === "call later" || label === "call_later" || label === "callback") {
+    return OrderStatus.CALL_LATER;
+  }
   if (
-    label === "call later" ||
-    label === "call_later" ||
-    label === "callback" ||
     label === "call later scheduled" ||
+    label === "call_later_scheduled" ||
     label === "scheduled"
   ) {
-    return OrderStatus.CALL_LATER;
+    return OrderStatus.CALL_LATER_SCHEDULED;
+  }
+  if (label === "delayed") {
+    return OrderStatus.DELAYED;
+  }
+  if (
+    label === "black listed" ||
+    label === "black_listed" ||
+    label === "blacklisted"
+  ) {
+    return OrderStatus.BLACK_LISTED;
+  }
+  // 1c. Order-specific statuses.
+  if (label === "assigned") {
+    return OrderStatus.ASSIGNED;
+  }
+  if (label === "out of stock" || label === "out_of_stock") {
+    return OrderStatus.OUT_OF_STOCK;
+  }
+  if (
+    label === "return on process" ||
+    label === "return_on_process"
+  ) {
+    return OrderStatus.RETURN_ON_PROCESS;
   }
 
   // 2. Explicit out-for-delivery signal.
