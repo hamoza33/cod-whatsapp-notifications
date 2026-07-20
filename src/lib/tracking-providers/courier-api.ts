@@ -191,10 +191,18 @@ export interface CourierApiBulkOptions {
   maxPerRequest?: number;
   /**
    * Per-request timeout. Defaults to 120s. J&T chunks need more headroom
-   * because each waybill requires a Tencent captcha solve; the server runs
-   * them with bounded concurrency (JT_BULK_CONCURRENCY, up to 10 at a time).
+   * because each waybill requires a captcha solve; the server runs them with
+   * bounded concurrency (JT_BULK_CONCURRENCY groups at a time).
    */
   timeoutMs?: number;
+  /**
+   * J&T provider hint forwarded to the courier-tracking-api:
+   *   - "auto" (default): TrackingMore first, Tencent captcha fallback.
+   *   - "trackingmore": force the TrackingMore page (Turnstile via 2Captcha).
+   *   - "tencent": force the legacy Tencent-captcha solver.
+   * Ignored for non-J&T carriers.
+   */
+  jtProvider?: "auto" | "trackingmore" | "tencent";
 }
 
 interface CourierApiBulkRequestItem {
@@ -249,7 +257,11 @@ export async function fetchCourierApiBulk(
           "Content-Type": "application/json",
           Accept: "application/json",
         },
-        body: JSON.stringify({ waybills: items }),
+        body: JSON.stringify(
+          opts.jtProvider
+            ? { waybills: items, jtProvider: opts.jtProvider }
+            : { waybills: items }
+        ),
         // Allow generous time for chunks containing J&T (captcha solved
         // server-side with bounded concurrency). Configurable per carrier.
         signal: AbortSignal.timeout(timeoutMs),

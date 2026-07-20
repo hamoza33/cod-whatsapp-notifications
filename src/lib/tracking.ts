@@ -785,13 +785,14 @@ export async function reclassifyStoredStatuses() {
 //            courier API's POST /track/bulk endpoint, so a single 50-item
 //            HTTP request returns in seconds rather than a single-shot per
 //            waybill (~50× speed-up for iMile's ~2 750 orders).
-//   - jte:   1 worker, chunk-size 10, calling fetchCourierApiBulk().
-//            The courier API now solves the Tencent captcha via 2Captcha and
-//            processes J&T waybills with bounded concurrency
-//            (JT_BULK_CONCURRENCY, up to 10), so one /track/bulk request of 10
-//            waybills solves a full captcha wave concurrently. Keeping our own
-//            concurrency at 1 (one batch in flight) avoids stacking multiple
-//            waves on the upstream and blowing the client timeout.
+//   - jte:   1 worker, chunk-size 20, calling fetchCourierApiBulk() with
+//            jtProvider=auto. The courier API tracks J&T TrackingMore-first
+//            (2Captcha-solved Turnstile) with a Tencent-captcha fallback and
+//            groups J&T internally (20 for TrackingMore, 10 for Tencent) under
+//            bounded concurrency (JT_BULK_CONCURRENCY), so one /track/bulk
+//            request of 20 waybills maps to one TrackingMore group. Keeping our
+//            own concurrency at 1 (one batch in flight) avoids stacking waves
+//            on the upstream and blowing the client timeout.
 //   - naqel: 5 workers, chunk-size 1, calling fetchCourierApiTracking().
 //            Routed through the courier API (which scrapes the public
 //            Naqel tracking page server-side); the local scraper used
@@ -820,15 +821,20 @@ const DEFAULT_WALL_CLOCK_MS = 120_000;
 // Number of waybills sent in a single POST /track/bulk request. 50 keeps the
 // request body small while still giving ~50× speed-up over per-waybill calls.
 const BULK_CHUNK_SIZE = 50;
-// J&T Express: the courier-tracking-api now solves the Tencent captcha via
-// 2Captcha and processes J&T waybills with bounded concurrency
-// (JT_BULK_CONCURRENCY, up to 10). We send JTE in batches of 10 so the
-// service solves a full wave of captchas concurrently per request.
-const JTE_BULK_CHUNK_SIZE = 10;
-// Each JT captcha solve can take 60-90s server-side; a batch of 10 solved
-// concurrently needs generous headroom before the client aborts. Kept just
-// under the wall-clock budget so a JTE request can't outlive the refresh call.
+// J&T Express: the courier-tracking-api now tracks J&T "TrackingMore-first"
+// (auto = TrackingMore page via a 2Captcha-solved Turnstile, falling back to
+// the legacy Tencent captcha solver). The server groups J&T internally —
+// TrackingMore/auto in groups of 20, Tencent in groups of 10 — and runs the
+// groups with bounded concurrency (JT_BULK_CONCURRENCY). We send JTE in
+// batches of 20 to line up with the TrackingMore group size (one request →
+// one server-side group) and let it re-chunk on Tencent fallback.
+const JTE_BULK_CHUNK_SIZE = 20;
+// A TrackingMore group returns quickly, but a Tencent fallback wave can take
+// 60-90s; keep generous headroom, just under the wall-clock budget so a JTE
+// request can't outlive the refresh call.
 const JTE_BULK_TIMEOUT_MS = 110_000;
+// Let the service pick the provider: TrackingMore first, Tencent on failure.
+const JTE_PROVIDER = "auto" as const;
 
 interface ActiveOrderRow {
   id: string;
@@ -1107,7 +1113,11 @@ export async function refreshAllTracking(
     carrier: TrackingCarrier,
     concurrency: number,
     chunkSize: number = BULK_CHUNK_SIZE,
-    bulkOpts?: { maxPerRequest?: number; timeoutMs?: number }
+    bulkOpts?: {
+      maxPerRequest?: number;
+      timeoutMs?: number;
+      jtProvider?: "auto" | "trackingmore" | "tencent";
+    }
   ): Promise<void> => {
     const chunks = chunkBy(orders, chunkSize);
     totalChunks += chunks.length;
@@ -1165,21 +1175,25 @@ export async function refreshAllTracking(
     JDW_CONCURRENCY
   );
 
-  // ---------- JTE pool: /track/bulk in batches of 10 ----------
-  // The courier-tracking-api now solves the J&T Tencent captcha via 2Captcha
-  // and processes J&T waybills with bounded concurrency (JT_BULK_CONCURRENCY,
-  // up to 10). We send JTE through POST /track/bulk in batches of 10 so the
-  // service solves a full wave of captchas concurrently per request — a large
-  // speed-up over the old one-waybill-at-a-time path. Concurrency stays at 1
-  // (one batch in flight) so we don't stack multiple captcha waves on the
-  // upstream and blow the client timeout.
+  // ---------- JTE pool: /track/bulk, TrackingMore-first, batches of 20 ------
+  // The courier-tracking-api now tracks J&T TrackingMore-first (auto), with a
+  // Tencent-captcha fallback, and groups J&T internally (20 for TrackingMore,
+  // 10 for Tencent) under bounded concurrency (JT_BULK_CONCURRENCY). We send
+  // JTE through POST /track/bulk in batches of 20 with jtProvider=auto so each
+  // request maps to one TrackingMore group. Concurrency stays at 1 (one batch
+  // in flight) so we don't stack multiple captcha waves on the upstream and
+  // blow the client timeout.
   const JTE_CONCURRENCY = 1;
   const jtePool = buildBulkPool(
     buckets.jte,
     TrackingCarrier.JTE,
     JTE_CONCURRENCY,
     JTE_BULK_CHUNK_SIZE,
-    { maxPerRequest: JTE_BULK_CHUNK_SIZE, timeoutMs: JTE_BULK_TIMEOUT_MS }
+    {
+      maxPerRequest: JTE_BULK_CHUNK_SIZE,
+      timeoutMs: JTE_BULK_TIMEOUT_MS,
+      jtProvider: JTE_PROVIDER,
+    }
   );
 
   // ---------- Naqel pool: 5 workers, one at a time ----------
