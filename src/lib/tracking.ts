@@ -930,12 +930,31 @@ export async function refreshAllTracking(
       ? { reclassified: 0, totalScanned: 0 }
       : await reclassifyOtherOrders(deadline);
 
-  // Read the courier API URL override once so every pool shares it.
+  // Read the courier API URL override + JTE knobs once so every pool shares them.
   const trackingSettings = await getSettings([
     SETTING_KEYS.COURIER_TRACKING_API_URL,
+    SETTING_KEYS.COURIER_JTE_PROVIDER,
+    SETTING_KEYS.COURIER_JTE_BATCH_SIZE,
   ]);
   const courierApiUrl =
     trackingSettings[SETTING_KEYS.COURIER_TRACKING_API_URL] || undefined;
+  // JTE provider hint (auto|trackingmore|tencent); anything else falls back to
+  // the "auto" default. Editable from Settings → Tracking.
+  const jteProviderSetting = trackingSettings[SETTING_KEYS.COURIER_JTE_PROVIDER];
+  const jteProvider: "auto" | "trackingmore" | "tencent" =
+    jteProviderSetting === "trackingmore" || jteProviderSetting === "tencent"
+      ? jteProviderSetting
+      : JTE_PROVIDER;
+  // JTE per-request batch size; clamp to 1..20 (server caps TrackingMore
+  // groups at 20). Editable from Settings → Tracking.
+  const jteBatchRaw = Number.parseInt(
+    trackingSettings[SETTING_KEYS.COURIER_JTE_BATCH_SIZE] ?? "",
+    10
+  );
+  const jteBatchSize =
+    Number.isFinite(jteBatchRaw) && jteBatchRaw >= 1
+      ? Math.min(20, jteBatchRaw)
+      : JTE_BULK_CHUNK_SIZE;
 
   // Build the carrier predicate. carrierFilter (set by the "Refresh Section"
   // button when a carrier is selected) narrows to a single carrier. When not
@@ -1188,11 +1207,11 @@ export async function refreshAllTracking(
     buckets.jte,
     TrackingCarrier.JTE,
     JTE_CONCURRENCY,
-    JTE_BULK_CHUNK_SIZE,
+    jteBatchSize,
     {
-      maxPerRequest: JTE_BULK_CHUNK_SIZE,
+      maxPerRequest: jteBatchSize,
       timeoutMs: JTE_BULK_TIMEOUT_MS,
-      jtProvider: JTE_PROVIDER,
+      jtProvider: jteProvider,
     }
   );
 

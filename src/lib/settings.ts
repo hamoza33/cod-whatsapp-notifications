@@ -99,6 +99,12 @@ export const SETTING_KEYS = {
   // 4tracking.net and provides direct carrier API access for iMile, Injaz,
   // JT Express (with captcha solving), and JDW Logistics.
   COURIER_TRACKING_API_URL: "courier_tracking_api_url",
+  // J&T (JTE) tracking knobs the dashboard controls per /track/bulk request:
+  //   - provider hint: auto (TrackingMore→Tencent), trackingmore, or tencent
+  //   - batch size: how many JTE waybills we send per request (server groups
+  //     internally: TrackingMore/auto ≤20, Tencent ≤10)
+  COURIER_JTE_PROVIDER: "courier_jte_provider",
+  COURIER_JTE_BATCH_SIZE: "courier_jte_batch_size",
   // WhatsApp Support — separate credentials for the support inbox
   WA_SUPPORT_BUSINESS_ACCOUNT_ID: "wa_support_business_account_id",
   WA_SUPPORT_PHONE_NUMBER_ID: "wa_support_phone_number_id",

@@ -741,6 +741,8 @@ export default function SettingsPage() {
               "captcha_provider",
               "captcha_api_key",
               "tracking_refresh_interval_minutes",
+              "courier_jte_provider",
+              "courier_jte_batch_size",
             ])
           }
           saving={saving}
@@ -806,6 +808,44 @@ export default function SettingsPage() {
                 : "Your 2Captcha API key"
             }
             help="Only used when JD Logistics (JDW) tracking responses challenge with a captcha. Optional — without a key, JDW rows are marked captcha_required when challenged."
+          />
+
+          <div className="mt-6 mb-4 border-t border-gray-200 pt-4">
+            <h4 className="text-sm font-semibold text-gray-800 mb-1">
+              J&amp;T Express (JTE)
+            </h4>
+            <p className="text-xs text-gray-500 mb-3">
+              J&amp;T tracking is handled by the courier tracking service. The
+              captcha keys (2Captcha / Capsolver) and worker concurrency live on
+              that service. Here you control which provider the dashboard
+              requests and how many waybills it sends per request.
+            </p>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              J&amp;T Provider
+            </label>
+            <select
+              value={settings.courier_jte_provider || "auto"}
+              onChange={(e) =>
+                updateSetting("courier_jte_provider", e.target.value)
+              }
+              className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+            >
+              <option value="auto">Auto (TrackingMore → Tencent fallback)</option>
+              <option value="trackingmore">TrackingMore only</option>
+              <option value="tencent">Tencent captcha only</option>
+            </select>
+            <p className="mt-1 text-xs text-gray-500">
+              &quot;Auto&quot; tries TrackingMore first (fast) and falls back to
+              the Tencent captcha solver on failure.
+            </p>
+          </div>
+          <SettingsField
+            label="J&T Batch Size"
+            value={settings.courier_jte_batch_size || "20"}
+            onChange={(v) => updateSetting("courier_jte_batch_size", v)}
+            type="number"
+            placeholder="20"
+            help="Waybills sent per tracking request (1–20). The service groups internally: TrackingMore/auto up to 20, Tencent up to 10."
           />
         </SettingsSection>
       )}
