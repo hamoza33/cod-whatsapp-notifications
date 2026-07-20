@@ -36,6 +36,33 @@ export interface AutomationRunSummary {
 }
 
 /**
+ * Hour-of-day (0-23) for `date` in the given IANA timezone. Falls back to the
+ * UTC hour if the timezone string is invalid / unsupported by the runtime.
+ */
+export function hourInTimezone(date: Date, timeZone: string): number {
+  try {
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone,
+      hour: "2-digit",
+      hour12: false,
+    }).formatToParts(date);
+    const hourPart = parts.find((p) => p.type === "hour");
+    if (!hourPart) return date.getUTCHours();
+    let h = parseInt(hourPart.value, 10);
+    // Intl can emit "24" for midnight in the h24 cycle on some runtimes.
+    if (h === 24) h = 0;
+    return Number.isFinite(h) ? h : date.getUTCHours();
+  } catch {
+    return date.getUTCHours();
+  }
+}
+
+async function currentHourInConfiguredTimezone(): Promise<number> {
+  const tz = (await getSetting(SETTING_KEYS.AUTOMATION_TIMEZONE)) || "UTC";
+  return hourInTimezone(new Date(), tz);
+}
+
+/**
  * Test whether the given Order matches the rule's `whenStatusEquals` +
  * product filters. Pure function — does not touch the database.
  */
@@ -340,16 +367,26 @@ export async function runAutomationsForOrder(
     let errorMessage: string | undefined;
 
     try {
-      // Time-based scheduling: if scheduledSendHour is set, only fire during that hour
+      // Time-based scheduling: when `scheduledSendHour` is set, the action is
+      // gated to fire only once the clock has reached that hour (or later) on
+      // the current day — i.e. "at or after 6 AM", not "exactly during the
+      // 06:00 hour". The hour is evaluated in the operator's configured
+      // timezone (Settings → Automation → Timezone), defaulting to UTC.
+      //
+      // Combined with `thenSendOnce` de-dupe this fires exactly once per day
+      // per order. The deferred case (status changed at 03:00, rule says
+      // "after 06:00") is handled by `runScheduledAutomations()`, which
+      // re-sweeps matching orders on the sync cadence so the action isn't
+      // lost just because no fresh status-change event arrives at 06:00.
       if (automation.scheduledSendHour !== null && automation.scheduledSendHour !== undefined) {
-        const currentHour = new Date().getUTCHours();
-        if (currentHour !== automation.scheduledSendHour) {
+        const currentHour = await currentHourInConfiguredTimezone();
+        if (currentHour < automation.scheduledSendHour) {
           summaries.push({
             automationId: automation.id,
             automationName: automation.name,
             orderId: order.id,
             status: "skipped",
-            reason: `scheduled for hour ${automation.scheduledSendHour} UTC, current is ${currentHour}`,
+            reason: `scheduled for hour >= ${automation.scheduledSendHour}, current is ${currentHour}`,
           });
           continue;
         }
@@ -479,6 +516,89 @@ export async function runAutomationsForOrder(
         movedToStatus,
         sentMessage,
       });
+    }
+  }
+
+  return summaries;
+}
+
+/**
+ * Deferred sweep for time-gated automations. For each enabled auto-run
+ * automation with a `scheduledSendHour` whose window is now open (current
+ * hour >= scheduledSendHour, in the configured timezone), re-evaluate every
+ * order that still matches its `whenStatusEquals` filter and hasn't already
+ * had a successful run for it.
+ *
+ * This is what makes "status changed at 03:00 → act after 06:00" work: the
+ * status-change event at 03:00 is correctly skipped (window closed) and
+ * records nothing, so without this sweep the action would be lost. The sweep
+ * runs on the sync cadence and fires the action the first time it runs at or
+ * after the scheduled hour. `runAutomationsForOrder`'s `thenSendOnce` de-dupe
+ * guarantees it fires at most once per (automation, order).
+ */
+export async function runScheduledAutomations(): Promise<AutomationRunSummary[]> {
+  const currentHour = await currentHourInConfiguredTimezone();
+
+  const automations = await prisma.automation.findMany({
+    where: {
+      isEnabled: true,
+      autoRun: true,
+      scheduledSendHour: { not: null },
+    },
+    select: {
+      id: true,
+      scheduledSendHour: true,
+      whenStatusEquals: true,
+      thenSendOnce: true,
+    },
+  });
+
+  const summaries: AutomationRunSummary[] = [];
+
+  for (const automation of automations) {
+    if (
+      automation.scheduledSendHour === null ||
+      automation.scheduledSendHour === undefined
+    ) {
+      continue;
+    }
+    // Window not open yet today — leave it for a later tick.
+    if (currentHour < automation.scheduledSendHour) continue;
+
+    const candidates = await prisma.order.findMany({
+      where: {
+        customerPhone: { not: null },
+        ...(automation.whenStatusEquals
+          ? { status: automation.whenStatusEquals }
+          : {}),
+        // Skip orders that already ran successfully for this automation (only
+        // relevant when thenSendOnce is on — otherwise re-fire is intended).
+        ...(automation.thenSendOnce
+          ? {
+              automationRuns: {
+                none: { automationId: automation.id, status: "success" },
+              },
+            }
+          : {}),
+      },
+      orderBy: { updatedAt: "desc" },
+      select: { id: true },
+      take: 1000,
+    });
+
+    for (const candidate of candidates) {
+      try {
+        const res = await runAutomationsForOrder(candidate.id, {
+          autoTriggered: true,
+          automationIds: [automation.id],
+        });
+        summaries.push(...res);
+      } catch (err) {
+        console.error(
+          `[automations] scheduled sweep failed for order ${candidate.id}`,
+          err instanceof Error ? err.message : err
+        );
+      }
     }
   }
 

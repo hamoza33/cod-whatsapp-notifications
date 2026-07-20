@@ -9,6 +9,11 @@ import {
   safeFireFlows,
 } from "@/lib/automation-flows/triggers";
 import { routeInboundReplyToWaits } from "@/lib/automation-flows/waits";
+import {
+  parseInboundMessage,
+  type MetaMessage,
+} from "@/lib/whatsapp-message";
+import { downloadWhatsAppMedia, transcribeAudio } from "@/lib/whatsapp-media";
 
 export const dynamic = "force-dynamic";
 
@@ -41,29 +46,6 @@ export async function GET(request: NextRequest) {
 interface MetaContact {
   profile?: { name?: string };
   wa_id?: string;
-}
-
-interface MetaTextMessage {
-  body?: string;
-}
-
-interface MetaMediaMessage {
-  id?: string;
-  mime_type?: string;
-  caption?: string;
-}
-
-interface MetaMessage {
-  from?: string;
-  id?: string;
-  timestamp?: string;
-  type?: string;
-  text?: MetaTextMessage;
-  image?: MetaMediaMessage;
-  video?: MetaMediaMessage;
-  audio?: MetaMediaMessage;
-  document?: MetaMediaMessage;
-  sticker?: MetaMediaMessage;
 }
 
 interface MetaStatus {
@@ -118,18 +100,38 @@ function normalizePhone(raw: string): string {
   return stripped ? `+${stripped}` : raw;
 }
 
-function extractText(msg: MetaMessage): string | null {
-  if (msg.text?.body) return msg.text.body;
-  if (msg.image?.caption) return msg.image.caption;
-  if (msg.video?.caption) return msg.video.caption;
-  if (msg.document?.caption) return msg.document.caption;
-  return null;
-}
+/**
+ * Download a voice note via the main WhatsApp access token, transcribe it via
+ * OpenAI, persist the transcript on the InboundMessage row, and return it so
+ * the AI auto-reply can treat it like a typed message. Best-effort — any
+ * failure returns null and the caller falls back to the "[voice message]"
+ * placeholder without crashing the webhook.
+ */
+async function transcribeInboundVoice(
+  providerMessageId: string,
+  mediaId: string
+): Promise<string | null> {
+  try {
+    const accessToken = await getSetting(SETTING_KEYS.WHATSAPP_ACCESS_TOKEN);
+    const openaiKey = await getSetting(SETTING_KEYS.OPENAI_API_KEY);
+    if (!accessToken || !openaiKey) return null;
 
-function extractMedia(msg: MetaMessage): { id?: string; mimeType?: string } {
-  const m =
-    msg.image || msg.video || msg.audio || msg.document || msg.sticker || {};
-  return { id: m.id, mimeType: m.mime_type };
+    const media = await downloadWhatsAppMedia(mediaId, accessToken);
+    const transcript = await transcribeAudio(media, { apiKey: openaiKey });
+    if (!transcript) return null;
+
+    await prisma.inboundMessage.updateMany({
+      where: { providerMessageId },
+      data: { transcription: transcript },
+    });
+    return transcript;
+  } catch (err) {
+    console.error(
+      "[webhook] voice transcription failed",
+      err instanceof Error ? err.message : err
+    );
+    return null;
+  }
 }
 
 async function findOrderByPhone(phone: string): Promise<string | null> {
@@ -200,19 +202,31 @@ export async function POST(request: NextRequest) {
         if (!msg.id || !msg.from) continue;
         const fromPhone = normalizePhone(msg.from);
         const orderId = await findOrderByPhone(msg.from);
-        const text = extractText(msg);
-        const { id: mediaId, mimeType } = extractMedia(msg);
-        console.log("[webhook] persisting message from", fromPhone, "type:", msg.type, "text:", text?.slice(0, 50));
+        const parsed = parseInboundMessage(msg as MetaMessage);
+        console.log(
+          "[webhook] persisting message from",
+          fromPhone,
+          "type:",
+          parsed.type,
+          "text:",
+          parsed.text?.slice(0, 50)
+        );
         try {
           await prisma.inboundMessage.create({
             data: {
               providerMessageId: msg.id,
               fromPhoneNumber: fromPhone,
               contactName: contactNameByWaid.get(msg.from) ?? null,
-              type: msg.type ?? "text",
-              text,
-              mediaId: mediaId ?? null,
-              mediaMimeType: mimeType ?? null,
+              type: parsed.type,
+              text: parsed.text,
+              mediaId: parsed.mediaId,
+              mediaMimeType: parsed.mediaMimeType,
+              latitude: parsed.latitude,
+              longitude: parsed.longitude,
+              locationName: parsed.locationName,
+              locationAddress: parsed.locationAddress,
+              reactionEmoji: parsed.reactionEmoji,
+              reactionToId: parsed.reactionToId,
               phoneNumberId: receivedOnPhoneNumberId,
               rawPayload: msg as unknown as Prisma.InputJsonValue,
               orderId,
@@ -232,11 +246,22 @@ export async function POST(request: NextRequest) {
         }
       }
 
-      // Trigger AI auto-reply for each inbound text message (fire-and-forget)
+      // Trigger AI auto-reply for each inbound message (fire-and-forget).
+      // Voice notes are downloaded + transcribed first so the AI can answer
+      // them with a normal text reply, exactly like a typed message.
       for (const msg of msgs) {
-        if (!msg.from) continue;
+        if (!msg.from || !msg.id) continue;
         const fromPhone = normalizePhone(msg.from);
-        const text = extractText(msg);
+        const parsed = parseInboundMessage(msg as MetaMessage);
+
+        let text = parsed.text;
+        if (parsed.isAudio && parsed.mediaId) {
+          const transcript = await transcribeInboundVoice(
+            msg.id,
+            parsed.mediaId
+          );
+          if (transcript) text = transcript;
+        }
         if (!text) continue;
         const orderId = await findOrderByPhone(msg.from);
         const rawOrder = orderId

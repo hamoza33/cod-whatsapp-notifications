@@ -12,6 +12,7 @@ import { normalizePhoneNumber } from "./phone";
 import { OrderStatus } from "@prisma/client";
 import { deriveOrderStatus } from "./order-status";
 import { runAutomationsForOrder } from "./automations";
+import { applyWebhookEvent } from "./cod-webhook-apply";
 import {
   fireOrderCreatedFlows,
   fireOrderTrackingAssignedFlows,
@@ -48,6 +49,92 @@ let syncInProgress = false;
 
 export function isSyncInProgress(): boolean {
   return syncInProgress;
+}
+
+interface LeadSyncResult {
+  leadsFound: number;
+  leadsCreated: number;
+  leadsUpdated: number;
+  errors: string[];
+}
+
+let leadSyncInProgress = false;
+
+/**
+ * Poll the COD Network *seller leads* endpoint and upsert each lead into the
+ * Order table (leads and orders share the table). Keeps the Lead pipeline
+ * fresh the same way `syncOrders` keeps the Order pipeline fresh — even when
+ * the lead-status webhook misses a delivery.
+ *
+ * Each lead is applied through `applyWebhookEvent(..., "lead")` so the lead
+ * status enum (code 1-12) is mapped correctly (a confirmed lead → CONFIRMED,
+ * not the order enum's ASSIGNED), and status-change automations fire exactly
+ * as they do for webhook-delivered leads.
+ */
+export async function syncLeads(): Promise<LeadSyncResult> {
+  const startTime = Date.now();
+  const result: LeadSyncResult = {
+    leadsFound: 0,
+    leadsCreated: 0,
+    leadsUpdated: 0,
+    errors: [],
+  };
+
+  if (leadSyncInProgress) {
+    result.errors.push("Lead sync already in progress");
+    return result;
+  }
+  leadSyncInProgress = true;
+
+  try {
+    const client = await CodNetworkClient.fromSettings();
+
+    const daysBackSetting = await getSetting(SETTING_KEYS.SYNC_DAYS_BACK);
+    const daysBack = daysBackSetting ? parseInt(daysBackSetting, 10) : 30;
+    const sinceDate =
+      Number.isFinite(daysBack) && daysBack > 0
+        ? new Date(Date.now() - daysBack * 24 * 60 * 60 * 1000)
+        : undefined;
+
+    const leads = await client.getAllLeads({}, { sinceDate });
+    result.leadsFound = leads.length;
+
+    for (const lead of leads) {
+      try {
+        const applied = await applyWebhookEvent(lead, "lead");
+        if (applied.created) result.leadsCreated++;
+        else if (applied.updated) result.leadsUpdated++;
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : "Unknown error upserting lead";
+        result.errors.push(`Lead ${lead.id}: ${msg}`);
+      }
+    }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "Unknown lead sync error";
+    result.errors.push(msg);
+  } finally {
+    leadSyncInProgress = false;
+  }
+
+  const duration = Date.now() - startTime;
+  try {
+    await prisma.syncLog.create({
+      data: {
+        syncType: "leads",
+        status: result.errors.length > 0 ? "partial_error" : "success",
+        ordersFound: result.leadsFound,
+        ordersCreated: result.leadsCreated,
+        ordersUpdated: result.leadsUpdated,
+        messagesSent: 0,
+        errorMessage: result.errors.length > 0 ? result.errors.join("; ") : null,
+        duration,
+      },
+    });
+  } catch {
+    // sync-log write failure is non-fatal
+  }
+
+  return result;
 }
 
 export async function syncOrders(
@@ -220,7 +307,8 @@ async function upsertOrder(
   // the previously-computed `mapCodStatus` result.
   const mappedFromCode = mapCodStatus(
     codOrder.status,
-    trackingStatus
+    trackingStatus,
+    "order"
   ) as OrderStatus;
   const status = deriveOrderStatus({
     rawStatusLabel,

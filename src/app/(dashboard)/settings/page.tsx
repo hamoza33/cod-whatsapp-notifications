@@ -636,6 +636,7 @@ export default function SettingsPage() {
               "automation_trigger_status",
               "automation_delay_seconds",
               "automation_send_once",
+              "automation_timezone",
               "default_country_code",
             ])
           }
@@ -708,6 +709,19 @@ export default function SettingsPage() {
               />
             </button>
           </div>
+          <SettingsField
+            label="Automation Timezone (IANA)"
+            value={settings.automation_timezone || "UTC"}
+            onChange={(v) => updateSetting("automation_timezone", v)}
+            placeholder="UTC"
+          />
+          <p className="text-xs text-gray-500 -mt-2 mb-4">
+            Timezone used to evaluate scheduled-hour automations (e.g. &quot;send
+            after 6 AM&quot;). Use an IANA name like{" "}
+            <code>Africa/Casablanca</code>, <code>Europe/London</code>, or{" "}
+            <code>UTC</code>. A rule scheduled for hour H fires for matching
+            orders once the local time reaches H:00.
+          </p>
           <SettingsField
             label="Default Country Code"
             value={settings.default_country_code || "212"}

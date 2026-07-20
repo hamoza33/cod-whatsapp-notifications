@@ -60,6 +60,12 @@ type ThreadEntry =
       mediaId: string | null;
       mediaMimeType: string | null;
       contactName: string | null;
+      latitude: number | null;
+      longitude: number | null;
+      locationName: string | null;
+      locationAddress: string | null;
+      reactionEmoji: string | null;
+      transcription: string | null;
     }
   | {
       kind: "outbound";
@@ -1145,7 +1151,23 @@ function InboundBubble({
             Download {mime || msg.type}
           </a>
         )}
-        {msg.type !== "text" && !mediaUrl && (
+        {msg.type === "location" &&
+          msg.latitude != null &&
+          msg.longitude != null && (
+            <a
+              href={`https://www.google.com/maps/search/?api=1&query=${msg.latitude},${msg.longitude}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="mb-1.5 block bg-[#F0F2F5] hover:bg-[#E9EDEF] rounded px-2 py-1.5 text-xs text-[#111B21]"
+            >
+              📍 {msg.locationName || "Shared location"}
+              {msg.locationAddress ? (
+                <span className="block text-[#667781]">{msg.locationAddress}</span>
+              ) : null}
+              <span className="block text-[#1FA855] underline">Open in Maps</span>
+            </a>
+          )}
+        {msg.type !== "text" && msg.type !== "location" && !mediaUrl && (
           <div className="text-[11px] text-[#667781] flex items-center gap-1 mb-1">
             <ImageIcon size={11} />
             {msg.type}
@@ -1157,11 +1179,19 @@ function InboundBubble({
             className="text-sm text-[#111B21] whitespace-pre-wrap break-words leading-[19px]"
             dir={hasArabic(msg.text) ? "rtl" : "ltr"}
           >{msg.text}</p>
-        ) : !mediaUrl ? (
+        ) : !mediaUrl && msg.type !== "location" ? (
           <p className="text-sm text-[#8696A0] italic">
             ({msg.type} attachment)
           </p>
         ) : null}
+        {msg.transcription && (
+          <p
+            className="mt-1 text-[13px] text-[#111B21] italic border-l-2 border-[#1FA855] pl-2 whitespace-pre-wrap break-words"
+            dir={hasArabic(msg.transcription) ? "rtl" : "ltr"}
+          >
+            🎙️ {msg.transcription}
+          </p>
+        )}
         <p className="text-[11px] text-[#667781] mt-1 text-right">
           {formatMessageTime(msg.at)}
         </p>

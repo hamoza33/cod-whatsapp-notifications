@@ -46,6 +46,9 @@ export const SETTING_KEYS = {
   AUTOMATION_TRIGGER_STATUS: "automation_trigger_status",
   AUTOMATION_DELAY_SECONDS: "automation_delay_seconds",
   AUTOMATION_SEND_ONCE: "automation_send_once",
+  // IANA timezone (e.g. "Africa/Casablanca", "Asia/Riyadh") used to evaluate
+  // an automation's `scheduledSendHour`. Defaults to UTC when unset.
+  AUTOMATION_TIMEZONE: "automation_timezone",
   DEFAULT_COUNTRY_CODE: "default_country_code",
   AUTO_SYNC_ENABLED: "auto_sync_enabled",
   AUTO_SYNC_INTERVAL_MINUTES: "auto_sync_interval_minutes",

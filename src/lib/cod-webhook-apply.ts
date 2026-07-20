@@ -94,7 +94,15 @@ export async function applyWebhookEvent(
   // The "id" field can be the order id or the lead id depending on which
   // webhook delivered the event. We collect both, then look up an existing
   // order via either path.
-  const declaredOrderId = extractStr(payload.order_id) || extractStr(payload.id);
+  // For a lead webhook the ambiguous `id` field is the LEAD id, so it must
+  // not be treated as an order id — otherwise a lead with no explicit
+  // `order_id` would be keyed on `codNetworkOrderId = <leadId>` up front and
+  // could never be matched/upgraded when the real order webhook (carrying a
+  // distinct `order_id` + the same `lead_id`) arrives. Order/any webhooks keep
+  // treating `id` as the order id.
+  const declaredOrderId =
+    extractStr(payload.order_id) ||
+    (kind === "lead" ? null : extractStr(payload.id));
   const declaredLeadId =
     extractStr(payload.lead_id) ||
     (kind === "lead" ? extractStr(payload.id) : null);
@@ -137,7 +145,8 @@ export async function applyWebhookEvent(
 
   const mappedFromCode = mapCodStatus(
     payload.status as Parameters<typeof mapCodStatus>[0],
-    trackingStatus
+    trackingStatus,
+    kind
   ) as OrderStatus;
 
   const derived = deriveOrderStatus({

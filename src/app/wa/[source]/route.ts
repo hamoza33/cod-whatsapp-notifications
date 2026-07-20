@@ -67,6 +67,13 @@ export async function GET(
         userAgent,
       },
     });
+    // Opportunistic cleanup: visits are only ever matched within a 3-minute
+    // window, so anything older than a day is dead weight. Best-effort — a
+    // failure here must never block the redirect.
+    const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    await prisma.sourceVisit
+      .deleteMany({ where: { createdAt: { lt: oneDayAgo } } })
+      .catch(() => {});
   } catch (err) {
     console.error("[wa-redirect] failed to log source visit:", err);
   }

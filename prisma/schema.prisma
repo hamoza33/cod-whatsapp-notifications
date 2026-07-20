@@ -175,6 +175,18 @@ model InboundMessage {
   // Support source tag (e.g. "site1", "site2") detected from the WhatsApp link
   // ?source= parameter. Null for non-support or unknown-source messages.
   source            String?
+  // --- Structured payloads for non-text message types ---
+  // Location messages (type = "location").
+  latitude          Float?   @map("latitude")
+  longitude         Float?   @map("longitude")
+  locationName      String?  @map("location_name")
+  locationAddress   String?  @map("location_address")
+  // Reaction messages (type = "reaction").
+  reactionEmoji     String?  @map("reaction_emoji")
+  reactionToId      String?  @map("reaction_to_id")
+  // Speech-to-text of a voice/audio note (type = "audio"), produced by the
+  // OpenAI transcription API. Fed into the AI auto-reply context.
+  transcription     String?  @map("transcription")
 
   @@index([fromPhoneNumber])
   @@index([receivedAt])
@@ -470,6 +482,10 @@ model Product {
   isDropProduct       Boolean  @default(false) @map("is_drop_product")
   // Whether the AI agent is enabled for this product specifically.
   aiAgentEnabled      Boolean  @default(false) @map("ai_agent_enabled")
+  // Optional dedicated AI system prompt for this product. When set, the AI
+  // auto-reply uses this instead of the global system prompt for any
+  // conversation involving this product. Null → fall back to the global prompt.
+  aiSystemPrompt      String?  @map("ai_system_prompt") @db.Text
   // Direct link to the seller's landing page for the product (from COD).
   storeUrl            String?  @map("store_url")
   rawProductJson      Json?    @map("raw_product_json")

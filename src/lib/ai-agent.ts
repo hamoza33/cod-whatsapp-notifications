@@ -39,7 +39,7 @@ export async function handleAiAutoReply(
   }
   const product = await prisma.product.findFirst({
     where: { name: order.productName },
-    select: { aiAgentEnabled: true },
+    select: { aiAgentEnabled: true, aiSystemPrompt: true },
   });
   if (!product || !product.aiAgentEnabled) {
     return { replied: false, error: "AI agent not enabled for this product" };
@@ -50,7 +50,11 @@ export async function handleAiAutoReply(
     (await getSetting(SETTING_KEYS.AI_AGENT_MAX_TOKENS)) || "300",
     10
   );
+  // Prompt precedence: a product-specific prompt (set in the Products page)
+  // wins for conversations about that product; otherwise fall back to the
+  // global AI system prompt.
   let systemPrompt =
+    (product.aiSystemPrompt && product.aiSystemPrompt.trim()) ||
     (await getSetting(SETTING_KEYS.AI_AGENT_SYSTEM_PROMPT)) ||
     "You are a helpful customer service agent for a delivery company. Keep responses short for WhatsApp.";
 
