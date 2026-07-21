@@ -182,41 +182,35 @@ export async function POST(request: NextRequest) {
           const match = text.match(/source[=:]\s*(\S+)/i);
           if (match) source = match[1];
         }
-        // 5. Time-window matching: check if this phone number has never
-        //    messaged before AND a recent /wa/<source> page visit exists
-        //    within the last 3 minutes (landing-page redirect approach).
+        // 5. Time-window matching: if a recent /wa/<source> page visit exists
+        //    within the last 3 minutes, claim it (landing-page redirect
+        //    approach). This runs for BOTH new and returning customers so a
+        //    customer can switch source mid-conversation just by clicking a
+        //    new /wa/<source> link and then sending any message — the most
+        //    recent click wins.
         if (!source) {
-          const hasHistory = await prisma.inboundMessage.findFirst({
+          const threeMinAgo = new Date(Date.now() - 3 * 60 * 1000);
+          // Pull the most recent unmatched visits and claim the first one we
+          // can win atomically. The guarded updateMany (id + matched:false)
+          // ensures that under concurrent traffic two messages can never be
+          // assigned the same visit — only one request flips `matched`.
+          const recentVisits = await prisma.sourceVisit.findMany({
             where: {
-              fromPhoneNumber: fromPhone,
-              phoneNumberId: receivedOnPhoneNumberId,
+              matched: false,
+              createdAt: { gte: threeMinAgo },
             },
-            select: { id: true },
+            orderBy: { createdAt: "desc" },
+            take: 10,
+            select: { id: true, source: true },
           });
-          if (!hasHistory) {
-            const threeMinAgo = new Date(Date.now() - 3 * 60 * 1000);
-            // Pull the most recent unmatched visits and claim the first one we
-            // can win atomically. The guarded updateMany (id + matched:false)
-            // ensures that under concurrent traffic two messages can never be
-            // assigned the same visit — only one request flips `matched`.
-            const recentVisits = await prisma.sourceVisit.findMany({
-              where: {
-                matched: false,
-                createdAt: { gte: threeMinAgo },
-              },
-              orderBy: { createdAt: "desc" },
-              take: 10,
-              select: { id: true, source: true },
+          for (const visit of recentVisits) {
+            const claim = await prisma.sourceVisit.updateMany({
+              where: { id: visit.id, matched: false },
+              data: { matched: true },
             });
-            for (const visit of recentVisits) {
-              const claim = await prisma.sourceVisit.updateMany({
-                where: { id: visit.id, matched: false },
-                data: { matched: true },
-              });
-              if (claim.count === 1) {
-                source = visit.source;
-                break;
-              }
+            if (claim.count === 1) {
+              source = visit.source;
+              break;
             }
           }
         }
