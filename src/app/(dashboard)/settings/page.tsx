@@ -408,6 +408,7 @@ export default function SettingsPage() {
               "wa_support_ai_system_prompt",
               "wa_support_ai_model",
               "wa_support_display_phone",
+              "wa_support_source_match_window_minutes",
             ])
           }
           saving={saving}
@@ -482,6 +483,14 @@ export default function SettingsPage() {
             onChange={(v) => updateSetting("wa_support_display_phone", v)}
             placeholder="+447830607451"
             help="The actual phone number customers will message (with country code). Used for /wa/<source> redirect links. E.g. +447830607451"
+          />
+          <SettingsField
+            label="Source Match Window (minutes)"
+            value={settings.wa_support_source_match_window_minutes || "3"}
+            onChange={(v) => updateSetting("wa_support_source_match_window_minutes", v)}
+            type="number"
+            placeholder="3"
+            help="After a customer clicks a /wa/<source> link, their next message within this many minutes is attributed to that source (1–1440). Default 3."
           />
           <div className="border-t border-gray-200 pt-4 mt-4">
             <h4 className="text-sm font-semibold text-gray-800 mb-3">Support AI Agent</h4>

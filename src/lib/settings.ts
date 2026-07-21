@@ -117,6 +117,9 @@ export const SETTING_KEYS = {
   WA_SUPPORT_AI_SYSTEM_PROMPT: "wa_support_ai_system_prompt",
   WA_SUPPORT_AI_MODEL: "wa_support_ai_model",
   WA_SUPPORT_DISPLAY_PHONE: "wa_support_display_phone",
+  // Minutes a /wa/<source> landing-page visit stays eligible to be matched to
+  // the next inbound support message. Default 3.
+  WA_SUPPORT_SOURCE_MATCH_WINDOW_MINUTES: "wa_support_source_match_window_minutes",
 } as const;
 
 export const SENSITIVE_SETTING_KEYS: readonly string[] = [

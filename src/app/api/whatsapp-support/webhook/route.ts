@@ -138,6 +138,19 @@ export async function POST(request: NextRequest) {
 
   const supportPni = await getSetting("wa_support_phone_number_id");
 
+  // How long a /wa/<source> visit stays eligible for matching (minutes).
+  // Configurable in Settings → WA Support; defaults to 3, clamped to 1..1440.
+  const windowRaw = Number.parseInt(
+    (await getSetting("wa_support_source_match_window_minutes")) ?? "",
+    10
+  );
+  const sourceMatchWindowMs =
+    (Number.isFinite(windowRaw) && windowRaw >= 1
+      ? Math.min(1440, windowRaw)
+      : 3) *
+    60 *
+    1000;
+
   const entries = payload.entry ?? [];
   for (const entry of entries) {
     for (const change of entry.changes ?? []) {
@@ -183,13 +196,13 @@ export async function POST(request: NextRequest) {
           if (match) source = match[1];
         }
         // 5. Time-window matching: if a recent /wa/<source> page visit exists
-        //    within the last 3 minutes, claim it (landing-page redirect
+        //    within the configured window, claim it (landing-page redirect
         //    approach). This runs for BOTH new and returning customers so a
         //    customer can switch source mid-conversation just by clicking a
         //    new /wa/<source> link and then sending any message — the most
         //    recent click wins.
         if (!source) {
-          const threeMinAgo = new Date(Date.now() - 3 * 60 * 1000);
+          const windowStart = new Date(Date.now() - sourceMatchWindowMs);
           // Pull the most recent unmatched visits and claim the first one we
           // can win atomically. The guarded updateMany (id + matched:false)
           // ensures that under concurrent traffic two messages can never be
@@ -197,7 +210,7 @@ export async function POST(request: NextRequest) {
           const recentVisits = await prisma.sourceVisit.findMany({
             where: {
               matched: false,
-              createdAt: { gte: threeMinAgo },
+              createdAt: { gte: windowStart },
             },
             orderBy: { createdAt: "desc" },
             take: 10,
