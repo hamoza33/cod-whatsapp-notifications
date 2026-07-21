@@ -226,6 +226,12 @@ export const DATA_POINTS: ReadonlyArray<DataPoint> = [
     type: "number",
   },
   {
+    path: "time.minute",
+    label: "Minute of hour (0–59)",
+    group: "Time",
+    type: "number",
+  },
+  {
     path: "time.dayOfWeek",
     label: "Day of week (0=Sun..6=Sat)",
     group: "Time",

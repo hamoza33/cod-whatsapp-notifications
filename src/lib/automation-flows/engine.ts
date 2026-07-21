@@ -35,6 +35,59 @@ import {
 } from "./types";
 import { evaluateCondition } from "./conditions";
 import { executeAction } from "./actions";
+import { getSetting, SETTING_KEYS } from "../settings";
+
+/**
+ * Current time broken down in the configured automation timezone
+ * (Settings → Automation → Timezone, default UTC). Used so `time.hour` /
+ * `time.minute` conditions match the operator's local wall clock rather than
+ * the server's UTC clock.
+ */
+async function timeSnapshot(): Promise<{
+  now: Date;
+  hour: number;
+  minute: number;
+  dayOfWeek: number;
+}> {
+  const now = new Date();
+  const tz = (await getSetting(SETTING_KEYS.AUTOMATION_TIMEZONE)) || "UTC";
+  try {
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone: tz,
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+      weekday: "short",
+    }).formatToParts(now);
+    const get = (t: string) => parts.find((p) => p.type === t)?.value;
+    let hour = parseInt(get("hour") ?? "", 10);
+    if (hour === 24) hour = 0;
+    const minute = parseInt(get("minute") ?? "", 10);
+    const weekdayMap: Record<string, number> = {
+      Sun: 0,
+      Mon: 1,
+      Tue: 2,
+      Wed: 3,
+      Thu: 4,
+      Fri: 5,
+      Sat: 6,
+    };
+    const wd = get("weekday");
+    return {
+      now,
+      hour: Number.isFinite(hour) ? hour : now.getUTCHours(),
+      minute: Number.isFinite(minute) ? minute : now.getUTCMinutes(),
+      dayOfWeek: wd && wd in weekdayMap ? weekdayMap[wd] : now.getUTCDay(),
+    };
+  } catch {
+    return {
+      now,
+      hour: now.getUTCHours(),
+      minute: now.getUTCMinutes(),
+      dayOfWeek: now.getUTCDay(),
+    };
+  }
+}
 
 function parseGraph(raw: unknown): FlowGraph {
   if (!raw || typeof raw !== "object") return { nodes: [], edges: [] };
@@ -105,7 +158,6 @@ export async function buildContextForOrder(
     };
   }
 
-  const now = new Date();
   return {
     trigger,
     order: {
@@ -141,11 +193,7 @@ export async function buildContextForOrder(
       : null,
     customer,
     message: null,
-    time: {
-      now,
-      hour: now.getHours(),
-      dayOfWeek: now.getDay(),
-    },
+    time: await timeSnapshot(),
     vars: {},
   };
 }
@@ -168,10 +216,10 @@ export async function buildContextForInboundMessage(
     if (ctx) {
       context = ctx;
     } else {
-      context = bareContext(trigger);
+      context = await bareContext(trigger);
     }
   } else {
-    context = bareContext(trigger);
+    context = await bareContext(trigger);
   }
   context.message = {
     text,
@@ -190,19 +238,16 @@ export async function buildContextForInboundMessage(
   return context;
 }
 
-function bareContext(trigger: FlowExecutionContext["trigger"]): FlowExecutionContext {
-  const now = new Date();
+async function bareContext(
+  trigger: FlowExecutionContext["trigger"]
+): Promise<FlowExecutionContext> {
   return {
     trigger,
     order: null,
     tracking: null,
     customer: null,
     message: null,
-    time: {
-      now,
-      hour: now.getHours(),
-      dayOfWeek: now.getDay(),
-    },
+    time: await timeSnapshot(),
     vars: {},
   };
 }

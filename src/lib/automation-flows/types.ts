@@ -221,6 +221,7 @@ export interface FlowExecutionContext {
   time: {
     now: Date;
     hour: number;
+    minute: number; // 0-59
     dayOfWeek: number; // 0=Sun, 6=Sat
   };
   /** Bag of variables set/read by action nodes via `set variable` (future). */
