@@ -780,3 +780,94 @@ export async function runFlowsForTrigger(
     }
   }
 }
+
+/** Local calendar-day key (YYYY-MM-DD) for `date` in the given timezone. */
+function localDayKey(date: Date, timeZone: string): string {
+  try {
+    return new Intl.DateTimeFormat("en-CA", {
+      timeZone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).format(date);
+  } catch {
+    return date.toISOString().slice(0, 10);
+  }
+}
+
+/**
+ * Scheduled sweep for `SCHEDULED`-trigger flows. Runs on the auto-sync cadence.
+ * For each enabled scheduled flow whose daily time (in the configured
+ * timezone) has arrived and which hasn't already fired today, evaluate the
+ * flow against every order — optionally bounded to a chosen status — so all
+ * matching orders are acted on at the scheduled time.
+ *
+ * Fires at-or-after the target time (not exactly on the minute) so a 5-minute
+ * cron never misses it, and de-dupes to once per local day via `lastFiredAt`.
+ */
+export async function runScheduledFlows(): Promise<void> {
+  const flows = await prisma.automationFlow.findMany({
+    where: { isEnabled: true, triggerType: "SCHEDULED" },
+  });
+  if (flows.length === 0) return;
+
+  const tz = (await getSetting(SETTING_KEYS.AUTOMATION_TIMEZONE)) || "UTC";
+  const snap = await timeSnapshot();
+  const nowMinutes = snap.hour * 60 + snap.minute;
+  const todayKey = localDayKey(snap.now, tz);
+
+  for (const flow of flows) {
+    try {
+      const graph = parseGraph(flow.graphJson);
+      const triggerNode = graph.nodes.find((n) => n.type === "trigger");
+      const data = triggerNode?.data as TriggerNodeData | undefined;
+      if (!data) continue;
+
+      const schedHour = Math.min(23, Math.max(0, data.scheduleHour ?? 0));
+      const schedMinute = Math.min(59, Math.max(0, data.scheduleMinute ?? 0));
+      const schedMinutes = schedHour * 60 + schedMinute;
+
+      // Window not open yet today.
+      if (nowMinutes < schedMinutes) continue;
+      // Already fired today (same local calendar day).
+      if (flow.lastFiredAt && localDayKey(flow.lastFiredAt, tz) === todayKey) {
+        continue;
+      }
+
+      const where: Prisma.OrderWhereInput = data.scheduleStatus
+        ? { status: data.scheduleStatus }
+        : {};
+      const orders = await prisma.order.findMany({
+        where,
+        select: { id: true },
+      });
+
+      for (const order of orders) {
+        const ctx = await buildContextForOrder(order.id, {
+          type: "SCHEDULED",
+          firedAt: snap.now,
+          payload: { scheduled: true },
+        });
+        if (!ctx) continue;
+        try {
+          await executeFlow(flow, ctx);
+        } catch (err) {
+          console.error(
+            `[automation-flow] scheduled flow "${flow.name}" order ${order.id} errored:`,
+            err instanceof Error ? err.message : err
+          );
+        }
+      }
+
+      await prisma.automationFlow.update({
+        where: { id: flow.id },
+        data: { lastFiredAt: new Date(), runCount: { increment: 1 } },
+      });
+    } catch (err) {
+      console.error(
+        `[automation-flow] scheduled flow "${flow.name}" (${flow.id}) errored:`,
+        err instanceof Error ? err.message : err
+      );
+    }
+  }
+}

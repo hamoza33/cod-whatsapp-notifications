@@ -19,6 +19,7 @@ export type FlowTriggerType =
   | "ORDER_STATUS_CHANGED"
   | "TRACKING_STATUS_CHANGED"
   | "MESSAGE_RECEIVED"
+  | "SCHEDULED"
   | "MANUAL";
 
 export const FLOW_TRIGGER_TYPES: ReadonlyArray<FlowTriggerType> = [
@@ -27,6 +28,7 @@ export const FLOW_TRIGGER_TYPES: ReadonlyArray<FlowTriggerType> = [
   "ORDER_STATUS_CHANGED",
   "TRACKING_STATUS_CHANGED",
   "MESSAGE_RECEIVED",
+  "SCHEDULED",
   "MANUAL",
 ] as const;
 
@@ -57,6 +59,15 @@ export interface TriggerNodeData {
   toStatus?: OrderStatus | null;
   trackingFromStatus?: TrackingStatus | null;
   trackingToStatus?: TrackingStatus | null;
+  /**
+   * For the `SCHEDULED` trigger: the daily wall-clock time (in the configured
+   * automation timezone) at or after which the flow sweeps every matching
+   * order once per day. `scheduleStatus` optionally bounds the sweep to orders
+   * currently in that status.
+   */
+  scheduleHour?: number | null;
+  scheduleMinute?: number | null;
+  scheduleStatus?: OrderStatus | null;
 }
 
 /**

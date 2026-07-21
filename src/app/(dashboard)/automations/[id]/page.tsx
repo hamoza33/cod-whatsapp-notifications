@@ -93,6 +93,7 @@ type FlowTriggerType =
   | "ORDER_STATUS_CHANGED"
   | "TRACKING_STATUS_CHANGED"
   | "MESSAGE_RECEIVED"
+  | "SCHEDULED"
   | "MANUAL";
 
 type ConditionOperator =
@@ -134,6 +135,9 @@ interface TriggerData {
   toStatus?: string | null;
   trackingFromStatus?: string | null;
   trackingToStatus?: string | null;
+  scheduleHour?: number | null;
+  scheduleMinute?: number | null;
+  scheduleStatus?: string | null;
 }
 interface ConditionData {
   kind: "condition";
@@ -255,6 +259,7 @@ const TRIGGER_LABELS: Record<FlowTriggerType, string> = {
   ORDER_CREATED: "Order created",
   ORDER_TRACKING_ASSIGNED: "Tracking number assigned",
   ORDER_STATUS_CHANGED: "Order status changed",
+  SCHEDULED: "Scheduled (daily at time)",
   TRACKING_STATUS_CHANGED: "Tracking status changed",
   MESSAGE_RECEIVED: "Customer reply received",
   MANUAL: "Manual trigger",
@@ -1423,6 +1428,51 @@ function TriggerInspector({
             options={["", ...ORDER_STATUSES]}
             onChange={(v) => onChange({ toStatus: v || null } as Partial<FlowNodeData>)}
           />
+        </>
+      )}
+      {data.triggerType === "SCHEDULED" && (
+        <>
+          <div className="grid grid-cols-2 gap-2">
+            <LabeledInput
+              label="Hour (0–23)"
+              type="number"
+              value={String(data.scheduleHour ?? 0)}
+              onChange={(v) => {
+                const n = parseInt(v, 10);
+                onChange({
+                  scheduleHour: Number.isFinite(n)
+                    ? Math.min(23, Math.max(0, n))
+                    : 0,
+                } as Partial<FlowNodeData>);
+              }}
+            />
+            <LabeledInput
+              label="Minute (0–59)"
+              type="number"
+              value={String(data.scheduleMinute ?? 0)}
+              onChange={(v) => {
+                const n = parseInt(v, 10);
+                onChange({
+                  scheduleMinute: Number.isFinite(n)
+                    ? Math.min(59, Math.max(0, n))
+                    : 0,
+                } as Partial<FlowNodeData>);
+              }}
+            />
+          </div>
+          <LabeledSelect
+            label="Only orders currently in status"
+            value={data.scheduleStatus ?? ""}
+            options={["", ...ORDER_STATUSES]}
+            onChange={(v) =>
+              onChange({ scheduleStatus: v || null } as Partial<FlowNodeData>)
+            }
+          />
+          <div className="text-[11px] text-gray-500 leading-relaxed">
+            Runs once per day at or after this time (in your Settings →
+            Automation timezone) and sweeps every matching order. Leave status
+            empty to consider all orders.
+          </div>
         </>
       )}
       {data.triggerType === "TRACKING_STATUS_CHANGED" && (

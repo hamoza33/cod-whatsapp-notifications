@@ -4,6 +4,7 @@ import { importTemplatesFromMeta } from "./template-import";
 import { syncProductsFromCodNetwork } from "./product-sync";
 import { refreshAllTracking, syncTrackingFromOrders } from "./tracking";
 import { runScheduledAutomations } from "./automations";
+import { runScheduledFlows } from "./automation-flows/engine";
 
 /**
  * Lightweight in-process scheduler that runs `syncOrders()` on a recurring
@@ -93,6 +94,18 @@ async function tick(): Promise<void> {
   } catch (err) {
     console.warn(
       "[auto-sync] scheduled automation sweep failed",
+      err instanceof Error ? err.message : err
+    );
+  }
+
+  // Fire flow-builder SCHEDULED automations whose daily time has arrived
+  // (e.g. "at 05:00, move all orders in status X to PROCESSING + send").
+  // Best-effort — failures never break the sync loop.
+  try {
+    await runScheduledFlows();
+  } catch (err) {
+    console.warn(
+      "[auto-sync] scheduled flow sweep failed",
       err instanceof Error ? err.message : err
     );
   }

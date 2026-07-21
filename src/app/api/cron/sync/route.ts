@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { syncOrders } from "@/lib/sync";
-import { autoExpireOrders } from "@/lib/automations";
+import { autoExpireOrders, runScheduledAutomations } from "@/lib/automations";
+import { runScheduledFlows } from "@/lib/automation-flows/engine";
 
 export async function POST(request: NextRequest) {
   const authHeader = request.headers.get("authorization");
@@ -17,6 +18,8 @@ export async function POST(request: NextRequest) {
   try {
     const result = await syncOrders();
     const expiredCount = await autoExpireOrders();
+    await runScheduledAutomations();
+    await runScheduledFlows();
     return NextResponse.json({ success: true, result, expiredCount });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Sync failed";
