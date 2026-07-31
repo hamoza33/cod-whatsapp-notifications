@@ -40,6 +40,8 @@ interface Conversation {
     customerName: string | null;
     productName: string | null;
     status: string;
+    /** Latest package-tracking status (from the tracking section), if any. */
+    trackingStatus?: string | null;
   } | null;
 }
 
@@ -652,8 +654,18 @@ export default function InboxPage() {
                     )}
                   </div>
                   {c.order && (
-                    <div className="text-[11px] text-[#008069] mt-0.5 truncate font-medium">
-                      Order #{c.order.codNetworkOrderId} · {c.order.status}
+                    <div className="mt-0.5 flex flex-wrap items-center gap-1">
+                      <span className="text-[11px] text-[#008069] truncate font-medium">
+                        Order #{c.order.codNetworkOrderId} · {c.order.status}
+                      </span>
+                      {c.order.trackingStatus && (
+                        <span
+                          className="text-[10px] font-medium text-[#5B21B6] bg-[#EDE9FE] rounded px-1.5 py-0.5"
+                          title="Package tracking status"
+                        >
+                          📦 {c.order.trackingStatus}
+                        </span>
+                      )}
                     </div>
                   )}
                   {c.isOutboundOnly && !c.order && (
@@ -712,6 +724,21 @@ export default function InboxPage() {
                 <div className="text-white/70 text-xs font-mono">
                   {selectedPhone}
                 </div>
+                {selectedConvo?.order && (
+                  <div className="flex flex-wrap items-center gap-1 mt-1">
+                    <span className="text-[10px] font-medium text-white bg-white/20 rounded px-1.5 py-0.5">
+                      Order · {selectedConvo.order.status}
+                    </span>
+                    {selectedConvo.order.trackingStatus && (
+                      <span
+                        className="text-[10px] font-medium text-white bg-[#5B21B6] rounded px-1.5 py-0.5"
+                        title="Package tracking status"
+                      >
+                        📦 {selectedConvo.order.trackingStatus}
+                      </span>
+                    )}
+                  </div>
+                )}
               </div>
               {whatsappNumbers.length > 1 && (
                 <select

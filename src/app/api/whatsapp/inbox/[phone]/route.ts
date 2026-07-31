@@ -352,6 +352,29 @@ export async function POST(
       providerMessageId: result.messages?.[0]?.id ?? null,
     });
   } catch (err) {
+    const errorMsg =
+      err instanceof Error ? err.message : "Failed to send WhatsApp message";
+    // Persist the failed outbound text so it stays visible in the thread with
+    // its exact content and the provider failure reason (e.g. number not on
+    // WhatsApp / 24h window closed) — mirroring the template send path.
+    try {
+      await prisma.whatsappMessage.create({
+        data: {
+          orderId: lastInbound?.orderId ?? undefined,
+          phoneNumber: decodedPhone,
+          phoneNumberId: client.getPhoneNumberId(),
+          templateName: "<text>",
+          templateLanguage: "",
+          templateVariablesJson: { text: body.text },
+          status: "FAILED",
+          errorMessage: errorMsg,
+          sentBy: user.email,
+        },
+      });
+    } catch {
+      // ignore logging failure
+    }
+
     if (err instanceof WhatsAppApiError) {
       // 131047 / 131051 = re-engagement / 24h window expired. Surface a
       // friendly message so the UI can suggest sending a template instead.
