@@ -82,32 +82,71 @@ export async function GET(request: NextRequest) {
     prisma.order.count({ where }),
   ]);
 
-  // Enrich orders with product image URLs from the products catalog
-  const productNames = [
-    ...new Set(
-      orders
-        .map((o) => o.productName)
-        .filter((n): n is string => !!n)
-    ),
-  ];
-  const productImageMap = new Map<string, string>();
-  if (productNames.length > 0) {
+  // Enrich orders with product image URLs from the products catalog. Orders
+  // synced from /orders carry item images inline (extractProductImages), but
+  // leads (and some multi-product / Arabic-named orders) don't — so we also
+  // resolve against the catalog by SKU and normalized name. Leads carry the
+  // SKU in `products` ("Name/SKU") and `original_payload.sku_1…`, which is the
+  // most reliable key since names often don't match the catalog exactly.
+  const allNames = new Set<string>();
+  const allSkus = new Set<string>();
+  for (const o of orders) {
+    const { names, skus } = collectProductKeys(o.productName, o.rawOrderJson);
+    for (const n of names) allNames.add(n);
+    for (const s of skus) allSkus.add(s);
+  }
+
+  const imageByNameLower = new Map<string, string>();
+  const imageBySkuLower = new Map<string, string>();
+  if (allNames.size > 0 || allSkus.size > 0) {
     const products = await prisma.product.findMany({
-      where: { name: { in: productNames } },
-      select: { name: true, imageUrl: true },
+      where: {
+        OR: [
+          { name: { in: [...allNames] } },
+          { nameArabic: { in: [...allNames] } },
+          { sku: { in: [...allSkus] } },
+        ],
+      },
+      select: { name: true, nameArabic: true, sku: true, imageUrl: true },
     });
     for (const p of products) {
-      if (p.imageUrl) productImageMap.set(p.name, p.imageUrl);
+      if (!p.imageUrl) continue;
+      imageByNameLower.set(p.name.trim().toLowerCase(), p.imageUrl);
+      if (p.nameArabic) {
+        imageByNameLower.set(p.nameArabic.trim().toLowerCase(), p.imageUrl);
+      }
+      if (p.sku) imageBySkuLower.set(p.sku.trim().toLowerCase(), p.imageUrl);
     }
   }
 
-  const enrichedOrders = orders.map((o) => ({
-    ...o,
-    productImages: extractProductImages(o.rawOrderJson),
-    productImageUrl: o.productName
-      ? productImageMap.get(o.productName) ?? null
-      : null,
-  }));
+  const enrichedOrders = orders.map((o) => {
+    const inlineImages = extractProductImages(o.rawOrderJson);
+    let catalogImage: string | null = null;
+    if (inlineImages.length === 0) {
+      const { names, skus } = collectProductKeys(o.productName, o.rawOrderJson);
+      for (const s of skus) {
+        const hit = imageBySkuLower.get(s.trim().toLowerCase());
+        if (hit) {
+          catalogImage = hit;
+          break;
+        }
+      }
+      if (!catalogImage) {
+        for (const n of names) {
+          const hit = imageByNameLower.get(n.trim().toLowerCase());
+          if (hit) {
+            catalogImage = hit;
+            break;
+          }
+        }
+      }
+    }
+    return {
+      ...o,
+      productImages: inlineImages,
+      productImageUrl: catalogImage,
+    };
+  });
 
   return NextResponse.json({
     orders: enrichedOrders,
@@ -255,6 +294,100 @@ function extractProductImages(rawOrderJson: unknown): string[] {
     if (topImage) images.push(topImage);
   }
   return images;
+}
+
+/**
+ * Collect every candidate product name and SKU referenced by an order/lead so
+ * the catalog image lookup can succeed even when `product_name` doesn't match
+ * a catalog entry exactly. Handles:
+ *  - multi-product names comma-joined ("Hearing aid D, Fast car charger")
+ *  - lead "Name/SKU" strings ("Energy Coffee Drink for Men/MP-X1TGXPHPN3QZ")
+ *  - lead `original_payload.sku_1…` / `product_name_1…`
+ *  - order item SKUs (items.data[].product.data.sku)
+ */
+function collectProductKeys(
+  productName: string | null,
+  rawOrderJson: unknown
+): { names: string[]; skus: string[] } {
+  const names = new Set<string>();
+  const skus = new Set<string>();
+
+  const addSegment = (segment: string) => {
+    const trimmed = segment.trim();
+    if (!trimmed) return;
+    // "Name/SKU" → the last "/"-part is the SKU, the rest is the name.
+    const slash = trimmed.lastIndexOf("/");
+    if (slash > 0 && slash < trimmed.length - 1) {
+      const namePart = trimmed.slice(0, slash).trim();
+      const skuPart = trimmed.slice(slash + 1).trim();
+      if (namePart) names.add(namePart);
+      if (skuPart) skus.add(skuPart);
+    } else {
+      names.add(trimmed);
+    }
+  };
+
+  if (productName) {
+    for (const part of productName.split(",")) addSegment(part);
+  }
+
+  if (rawOrderJson && typeof rawOrderJson === "object") {
+    const raw = rawOrderJson as Record<string, unknown>;
+    if (typeof raw.products === "string") {
+      for (const part of raw.products.split(",")) addSegment(part);
+    }
+
+    // Lead payload: original_payload is a JSON string with sku_N / product_name_N.
+    const original =
+      typeof raw.original_payload === "string"
+        ? safeParseObject(raw.original_payload)
+        : raw.original_payload && typeof raw.original_payload === "object"
+          ? (raw.original_payload as Record<string, unknown>)
+          : null;
+    if (original) {
+      for (let i = 1; i <= 10; i++) {
+        const sku = original[`sku_${i}`];
+        const name = original[`product_name_${i}`];
+        if (typeof sku === "string" && sku.trim()) skus.add(sku.trim());
+        if (typeof name === "string" && name.trim()) names.add(name.trim());
+      }
+    }
+
+    // Order payload: items.data[].product.data.sku
+    const items = raw.items;
+    const itemList = Array.isArray(items)
+      ? items
+      : items && typeof items === "object" && "data" in items
+        ? (items as { data?: unknown[] }).data ?? []
+        : [];
+    for (const item of itemList) {
+      if (item && typeof item === "object") {
+        const product = (item as Record<string, unknown>).product;
+        const data =
+          product && typeof product === "object"
+            ? (product as Record<string, unknown>).data
+            : null;
+        const sku =
+          data && typeof data === "object"
+            ? (data as Record<string, unknown>).sku
+            : null;
+        if (typeof sku === "string" && sku.trim()) skus.add(sku.trim());
+      }
+    }
+  }
+
+  return { names: [...names], skus: [...skus] };
+}
+
+function safeParseObject(value: string): Record<string, unknown> | null {
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === "object"
+      ? (parsed as Record<string, unknown>)
+      : null;
+  } catch {
+    return null;
+  }
 }
 
 function optionalString(v: string | undefined | null): string | null {

@@ -726,6 +726,7 @@ function FlowEditorInner() {
   const [templates, setTemplates] = useState<TemplateRow[]>([]);
   const [testRunning, setTestRunning] = useState(false);
   const [testResult, setTestResult] = useState<string | null>(null);
+  const [automationTimezone, setAutomationTimezone] = useState<string>("");
   const dirtyRef = useRef(false);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const persistRef = useRef<() => Promise<void>>(() => Promise.resolve());
@@ -744,13 +745,17 @@ function FlowEditorInner() {
     let cancelled = false;
     (async () => {
       try {
-        const [flowRes, dpRes, tplRes] = await Promise.all([
+        const [flowRes, dpRes, tplRes, settingsRes] = await Promise.all([
           api.get<{ flow: FlowDto }>(`/automation-flows/${flowId}`),
           api.get<DataPointsResponse>("/automation-flows/data-points"),
           api.get<{ templates: TemplateRow[] }>("/whatsapp/templates/cached"),
+          api
+            .get<{ settings: Record<string, string | null> }>("/settings")
+            .catch(() => ({ settings: {} as Record<string, string | null> })),
         ]);
         if (cancelled) return;
         setFlow(flowRes.flow);
+        setAutomationTimezone(settingsRes.settings?.automation_timezone ?? "");
         setName(flowRes.flow.name);
         setDescription(flowRes.flow.description ?? "");
         setIsEnabled(flowRes.flow.isEnabled);
@@ -1289,6 +1294,7 @@ function FlowEditorInner() {
               node={selectedNode}
               dataPoints={dataPoints}
               templates={templates}
+              automationTimezone={automationTimezone}
               onChange={(patch) => updateNodeData(selectedNode.id, patch)}
               onDelete={() => deleteNode(selectedNode.id)}
             />
@@ -1348,12 +1354,14 @@ function NodeInspector({
   node,
   dataPoints,
   templates,
+  automationTimezone,
   onChange,
   onDelete,
 }: {
   node: Node;
   dataPoints: DataPoint[];
   templates: TemplateRow[];
+  automationTimezone: string;
   onChange: (patch: Partial<FlowNodeData>) => void;
   onDelete: () => void;
 }) {
@@ -1381,7 +1389,13 @@ function NodeInspector({
         )}
       </div>
 
-      {data.kind === "trigger" && <TriggerInspector data={data} onChange={onChange} />}
+      {data.kind === "trigger" && (
+        <TriggerInspector
+          data={data}
+          automationTimezone={automationTimezone}
+          onChange={onChange}
+        />
+      )}
       {data.kind === "condition" && (
         <ConditionInspector data={data} dataPoints={dataPoints} onChange={onChange} />
       )}
@@ -1404,9 +1418,11 @@ function NodeInspector({
 
 function TriggerInspector({
   data,
+  automationTimezone,
   onChange,
 }: {
   data: TriggerData;
+  automationTimezone: string;
   onChange: (patch: Partial<FlowNodeData>) => void;
 }) {
   return (
@@ -1469,10 +1485,22 @@ function TriggerInspector({
             }
           />
           <div className="text-[11px] text-gray-500 leading-relaxed">
-            Runs once per day at or after this time (in your Settings →
-            Automation timezone) and sweeps every matching order. Leave status
-            empty to consider all orders.
+            Runs once per day at or after this time and sweeps every matching
+            order. Leave status empty to consider all orders.
           </div>
+          {automationTimezone ? (
+            <div className="text-[11px] text-gray-600 bg-gray-50 border border-gray-200 rounded px-2 py-1.5">
+              Timezone: <span className="font-medium">{automationTimezone}</span>{" "}
+              — this time is interpreted in that zone.
+            </div>
+          ) : (
+            <div className="text-[11px] text-amber-800 bg-amber-50 border border-amber-200 rounded px-2 py-1.5">
+              ⚠ No automation timezone set — this time is interpreted as{" "}
+              <span className="font-medium">UTC</span>. Set your timezone in{" "}
+              <span className="font-medium">Settings → Automation</span> so it
+              fires at your local time.
+            </div>
+          )}
         </>
       )}
       {data.triggerType === "TRACKING_STATUS_CHANGED" && (
