@@ -298,9 +298,19 @@ async function upsertOrder(
     }
   }
 
-  const existing = await prisma.order.findUnique({
-    where: { codNetworkOrderId: codOrderId },
-  });
+  // Look up by the real order id first; if absent, fall back to the lead id
+  // so a row the leads sync created (keyed on the lead id as a placeholder
+  // order id) is UPGRADED into this order instead of a second, duplicate row
+  // being created for the same customer.
+  const existing =
+    (await prisma.order.findUnique({
+      where: { codNetworkOrderId: codOrderId },
+    })) ||
+    (codLeadId
+      ? await prisma.order.findFirst({
+          where: { codNetworkLeadId: codLeadId },
+        })
+      : null);
 
   // Apply the auto-status logic: tracking number → OUT_FOR_DELIVERY,
   // explicit delivered/returned signals → final state, etc. Falls back to
@@ -331,8 +341,11 @@ async function upsertOrder(
       (!existing.trackingNumber || existing.trackingNumber.trim() === "") &&
       !!(trackingNumber && trackingNumber.trim() !== "");
     await prisma.order.update({
-      where: { codNetworkOrderId: codOrderId },
+      where: { id: existing.id },
       data: {
+        // Upgrade a lead placeholder id to the real order id (no-op when the
+        // row was already keyed on the order id).
+        codNetworkOrderId: codOrderId,
         codNetworkLeadId: codLeadId ?? existing.codNetworkLeadId,
         customerName: codOrder.customer_name ?? existing.customerName,
         customerPhone: normalizedPhone ?? existing.customerPhone,

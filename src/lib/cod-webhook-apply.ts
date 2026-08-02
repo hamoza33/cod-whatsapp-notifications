@@ -198,6 +198,27 @@ export async function applyWebhookEvent(
         })
       : null);
 
+  // Once a lead has been confirmed into a real order (its order id differs
+  // from its lead id), the /orders sync is the single source of truth for the
+  // row. Ignore later /leads events so the confirmed order's Latin
+  // customer/product details aren't overwritten with the lead's raw (often
+  // Arabic) values — which would also break automation product-name matches
+  // and make the card look like it "reverted".
+  if (
+    kind === "lead" &&
+    existing &&
+    existing.codNetworkLeadId &&
+    existing.codNetworkOrderId !== existing.codNetworkLeadId
+  ) {
+    return {
+      orderId: existing.id,
+      created: false,
+      updated: false,
+      statusChanged: false,
+      newStatus: existing.status,
+    };
+  }
+
   // Normalize fields. Cast through CodNetworkOrder for product extraction —
   // it's a superset of the webhook payload shape.
   const codOrderLike = payload as unknown as CodNetworkOrder;
