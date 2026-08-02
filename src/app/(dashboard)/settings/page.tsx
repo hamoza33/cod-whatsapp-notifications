@@ -39,6 +39,18 @@ interface WhatsappNumberRecord {
   isDefault: boolean;
 }
 
+interface MaskedField {
+  configured: boolean;
+  source: "override" | "env" | "none";
+  hint: string | null;
+}
+
+interface TrackingCaptchaConfig {
+  capsolverApiKey: MaskedField;
+  twoCaptchaApiKey: MaskedField;
+  jtBulkConcurrency: { value: number; source: "override" | "env" | "default" };
+}
+
 type TabId = (typeof TABS)[number]["id"];
 
 export default function SettingsPage() {
@@ -53,6 +65,78 @@ export default function SettingsPage() {
     type: "success" | "error";
     message: string;
   } | null>(null);
+
+  // Tracking-service CAPTCHA config (Capsolver / 2Captcha / concurrency).
+  // These live on the courier tracking service and are edited via a
+  // server-side proxy so the browser never handles the shared admin token.
+  const [captchaCfg, setCaptchaCfg] = useState<TrackingCaptchaConfig | null>(null);
+  const [captchaAvailable, setCaptchaAvailable] = useState<boolean | null>(null);
+  const [capsolverInput, setCapsolverInput] = useState("");
+  const [twoCaptchaInput, setTwoCaptchaInput] = useState("");
+  const [concurrencyInput, setConcurrencyInput] = useState("");
+  const [captchaSaving, setCaptchaSaving] = useState(false);
+
+  useEffect(() => {
+    if (activeTab !== "tracking") return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const data = await api.get<{
+          available: boolean;
+          config?: TrackingCaptchaConfig;
+        }>("/tracking/config");
+        if (cancelled) return;
+        setCaptchaAvailable(data.available);
+        if (data.config) {
+          setCaptchaCfg(data.config);
+          setConcurrencyInput(String(data.config.jtBulkConcurrency.value));
+        }
+      } catch {
+        if (!cancelled) setCaptchaAvailable(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTab]);
+
+  async function saveCaptchaConfig() {
+    const patch: Record<string, string> = {};
+    if (capsolverInput.trim()) patch.capsolverApiKey = capsolverInput.trim();
+    if (twoCaptchaInput.trim()) patch.twoCaptchaApiKey = twoCaptchaInput.trim();
+    if (
+      concurrencyInput.trim() &&
+      String(captchaCfg?.jtBulkConcurrency.value ?? "") !== concurrencyInput.trim()
+    ) {
+      patch.jtBulkConcurrency = concurrencyInput.trim();
+    }
+    if (Object.keys(patch).length === 0) {
+      setNotification({ type: "error", message: "Nothing to update" });
+      return;
+    }
+    setCaptchaSaving(true);
+    try {
+      const res = await api.patch<{ config: TrackingCaptchaConfig }>(
+        "/tracking/config",
+        patch
+      );
+      setCaptchaCfg(res.config);
+      setConcurrencyInput(String(res.config.jtBulkConcurrency.value));
+      setCapsolverInput("");
+      setTwoCaptchaInput("");
+      setNotification({
+        type: "success",
+        message: "Tracking CAPTCHA settings saved",
+      });
+    } catch (e) {
+      setNotification({
+        type: "error",
+        message: e instanceof Error ? e.message : "Failed to save",
+      });
+    } finally {
+      setCaptchaSaving(false);
+    }
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -824,10 +908,10 @@ export default function SettingsPage() {
               J&amp;T Express (JTE)
             </h4>
             <p className="text-xs text-gray-500 mb-3">
-              J&amp;T tracking is handled by the courier tracking service. The
-              captcha keys (2Captcha / Capsolver) and worker concurrency live on
-              that service. Here you control which provider the dashboard
-              requests and how many waybills it sends per request.
+              J&amp;T tracking is handled by the courier tracking service. Here
+              you control which provider the dashboard requests, how many
+              waybills it sends per request, and (below) the CAPTCHA solver keys
+              and worker concurrency used by that service.
             </p>
             <label className="block text-sm font-medium text-gray-700 mb-1">
               J&amp;T Provider
@@ -856,6 +940,108 @@ export default function SettingsPage() {
             placeholder="20"
             help="Waybills sent per tracking request (1–20). The service groups internally: TrackingMore/auto up to 20, Tencent up to 10."
           />
+
+          <div className="mt-6 mb-2 border-t border-gray-200 pt-4">
+            <h4 className="text-sm font-semibold text-gray-800 mb-1">
+              CAPTCHA Solver Keys (tracking service)
+            </h4>
+            <p className="text-xs text-gray-500 mb-3">
+              These keys are stored on the courier tracking service.{" "}
+              <strong>Capsolver is primary</strong>, 2Captcha is the fallback.
+              For security the full keys are never shown here — only the last few
+              characters. Leave a field blank to keep the current value; type a
+              new key to replace it.
+            </p>
+
+            {captchaAvailable === false && (
+              <div className="rounded-md bg-amber-50 border border-amber-200 px-3 py-2 text-xs text-amber-800">
+                The tracking service admin API is not reachable or the dashboard
+                admin token is not configured, so CAPTCHA keys can&apos;t be
+                edited here right now.
+              </div>
+            )}
+
+            {captchaAvailable && (
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Capsolver API Key (primary)
+                  </label>
+                  <input
+                    type="password"
+                    value={capsolverInput}
+                    onChange={(e) => setCapsolverInput(e.target.value)}
+                    placeholder={
+                      captchaCfg?.capsolverApiKey.configured
+                        ? `Configured (…${captchaCfg.capsolverApiKey.hint ?? ""}) — leave blank to keep`
+                        : "Not set — paste a key to configure"
+                    }
+                    autoComplete="off"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                  <p className="mt-1 text-xs text-gray-500">
+                    {captchaCfg?.capsolverApiKey.configured
+                      ? `Currently: ${captchaCfg.capsolverApiKey.source === "override" ? "dashboard override" : "service env var"} (…${captchaCfg.capsolverApiKey.hint ?? ""})`
+                      : "Not configured."}
+                  </p>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    2Captcha API Key (fallback)
+                  </label>
+                  <input
+                    type="password"
+                    value={twoCaptchaInput}
+                    onChange={(e) => setTwoCaptchaInput(e.target.value)}
+                    placeholder={
+                      captchaCfg?.twoCaptchaApiKey.configured
+                        ? `Configured (…${captchaCfg.twoCaptchaApiKey.hint ?? ""}) — leave blank to keep`
+                        : "Not set — paste a key to configure"
+                    }
+                    autoComplete="off"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                  <p className="mt-1 text-xs text-gray-500">
+                    {captchaCfg?.twoCaptchaApiKey.configured
+                      ? `Currently: ${captchaCfg.twoCaptchaApiKey.source === "override" ? "dashboard override" : "service env var"} (…${captchaCfg.twoCaptchaApiKey.hint ?? ""})`
+                      : "Not configured."}
+                  </p>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    J&amp;T Bulk Concurrency (1–10)
+                  </label>
+                  <input
+                    type="number"
+                    min={1}
+                    max={10}
+                    value={concurrencyInput}
+                    onChange={(e) => setConcurrencyInput(e.target.value)}
+                    placeholder="5"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                  <p className="mt-1 text-xs text-gray-500">
+                    Number of J&amp;T groups solved concurrently (clamped 1–10).
+                    {captchaCfg
+                      ? ` Currently ${captchaCfg.jtBulkConcurrency.value} (${captchaCfg.jtBulkConcurrency.source}).`
+                      : ""}
+                  </p>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={saveCaptchaConfig}
+                  disabled={captchaSaving}
+                  className="inline-flex items-center gap-2 px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-md hover:bg-blue-700 disabled:opacity-50"
+                >
+                  <Save className="w-4 h-4" />
+                  {captchaSaving ? "Saving…" : "Save CAPTCHA settings"}
+                </button>
+              </div>
+            )}
+          </div>
         </SettingsSection>
       )}
 
