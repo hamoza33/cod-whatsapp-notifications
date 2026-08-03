@@ -54,10 +54,17 @@ export async function POST(
 
   const model =
     (await getSetting(SETTING_KEYS.AI_AGENT_MODEL)) || "gpt-4o-mini";
-  const maxTokens = parseInt(
-    (await getSetting(SETTING_KEYS.AI_AGENT_MAX_TOKENS)) || "300",
-    10
-  );
+  // Dedicated token budget for suggestions so operators can allow longer
+  // replies without changing the auto-reply agent's budget. Falls back to the
+  // agent's setting, then to 500.
+  const rawMaxTokens =
+    (await getSetting(SETTING_KEYS.AI_SUGGESTIONS_MAX_TOKENS)) ||
+    (await getSetting(SETTING_KEYS.AI_AGENT_MAX_TOKENS)) ||
+    "500";
+  const parsedMaxTokens = parseInt(rawMaxTokens, 10);
+  const maxTokens = Number.isFinite(parsedMaxTokens)
+    ? Math.max(50, Math.min(4000, parsedMaxTokens))
+    : 500;
   const suggestionsCount = parseInt(
     (await getSetting(SETTING_KEYS.AI_SUGGESTIONS_COUNT)) || "3",
     10

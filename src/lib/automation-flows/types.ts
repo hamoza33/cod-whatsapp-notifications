@@ -258,6 +258,12 @@ export interface FlowOrderSnapshot {
   isManual: boolean;
   createdAt: Date;
   codCreatedAt: Date | null;
+  /**
+   * Whole days elapsed since the order was created (COD Network creation
+   * date if available, otherwise the local row's createdAt). Computed at
+   * context-build time so conditions like "order age <= 2 days" work.
+   */
+  ageDays: number | null;
   pipelineNote: string | null;
   callAgentQueued: boolean;
 }

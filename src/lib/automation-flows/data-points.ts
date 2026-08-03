@@ -129,6 +129,14 @@ export const DATA_POINTS: ReadonlyArray<DataPoint> = [
     type: "boolean",
   },
   {
+    path: "order.ageDays",
+    label: "Order age (days)",
+    group: "Order",
+    type: "number",
+    description:
+      "Whole days since the order was created. Use with lte/lt, e.g. \"order age ≤ 2\" targets orders made within the last 2 days.",
+  },
+  {
     path: "order.whatsappSentAt",
     label: "WhatsApp message sent",
     group: "Order",

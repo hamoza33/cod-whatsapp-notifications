@@ -179,6 +179,12 @@ export async function buildContextForOrder(
       isManual: order.isManual,
       createdAt: order.createdAt,
       codCreatedAt: order.codCreatedAt,
+      ageDays: (() => {
+        const ref = order.codCreatedAt ?? order.createdAt;
+        return ref
+          ? Math.floor((Date.now() - ref.getTime()) / 86_400_000)
+          : null;
+      })(),
       pipelineNote: order.pipelineNote,
       callAgentQueued: order.callAgentQueued,
     },

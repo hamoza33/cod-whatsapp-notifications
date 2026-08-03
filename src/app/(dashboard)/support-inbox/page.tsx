@@ -117,6 +117,33 @@ function formatMessageTime(dateStr: string) {
   });
 }
 
+/** Prefer the order-linked name over the customer-set WhatsApp profile name. */
+function conversationDisplayName(c: {
+  contactName: string | null;
+  order?: { customerName: string | null } | null;
+  phoneNumber: string;
+}): string {
+  return c.order?.customerName?.trim() || c.contactName?.trim() || c.phoneNumber;
+}
+
+function nameInitials(name: string): string | null {
+  const trimmed = name.trim();
+  if (!trimmed || /^[+\d\s()-]+$/.test(trimmed)) return null;
+  const parts = trimmed.split(/\s+/).filter(Boolean);
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+}
+
+function avatarColor(seed: string): string {
+  const palette = [
+    "#0EA5E9", "#8B5CF6", "#EC4899", "#F59E0B", "#10B981",
+    "#EF4444", "#6366F1", "#14B8A6", "#F97316", "#84CC16",
+  ];
+  let hash = 0;
+  for (let i = 0; i < seed.length; i++) hash = (hash * 31 + seed.charCodeAt(i)) >>> 0;
+  return palette[hash % palette.length];
+}
+
 /**
  * WhatsApp-style date label for a message-group divider: "Today" for messages
  * from the current day, "Yesterday" for the day before, and the full date
@@ -633,8 +660,21 @@ export default function SupportInboxPage() {
                 }}
               >
                 {/* Avatar */}
-                <div className="w-12 h-12 rounded-full bg-[#DFE5E7] flex items-center justify-center shrink-0 relative">
-                  <Phone size={20} className="text-[#54656F]" />
+                <div
+                  className="w-12 h-12 rounded-full flex items-center justify-center shrink-0 relative"
+                  style={{
+                    backgroundColor: nameInitials(conversationDisplayName(c))
+                      ? avatarColor(c.phoneNumber)
+                      : "#DFE5E7",
+                  }}
+                >
+                  {nameInitials(conversationDisplayName(c)) ? (
+                    <span className="text-white font-semibold text-[15px]">
+                      {nameInitials(conversationDisplayName(c))}
+                    </span>
+                  ) : (
+                    <Phone size={20} className="text-[#54656F]" />
+                  )}
                   {c.isPinned && (
                     <div className="absolute -top-0.5 -right-0.5 w-4 h-4 bg-[#008069] rounded-full flex items-center justify-center">
                       <Pin size={9} className="text-white" />
@@ -646,9 +686,9 @@ export default function SupportInboxPage() {
                   <div className="flex items-center justify-between gap-2">
                     <div className="flex items-center gap-2 min-w-0">
                       <span className={`text-[15px] truncate ${c.unreadCount > 0 ? "font-bold text-[#111B21]" : "font-medium text-[#111B21]"}`}>
-                        {c.contactName || c.order?.customerName || c.phoneNumber}
+                        {conversationDisplayName(c)}
                       </span>
-                      {(c.contactName || c.order?.customerName) && (
+                      {(c.order?.customerName || c.contactName) && (
                         <span className="text-[12px] text-[#667781] font-mono shrink-0">
                           {c.phoneNumber}
                         </span>
@@ -754,12 +794,33 @@ export default function SupportInboxPage() {
           <>
             {/* Chat header */}
             <div className="px-4 py-2.5 bg-[#008069] flex items-center gap-3">
-              <div className="w-10 h-10 rounded-full bg-[#DFE5E7] flex items-center justify-center shrink-0">
-                <Phone size={18} className="text-[#54656F]" />
-              </div>
+              {(() => {
+                const headerName = selectedConvo
+                  ? conversationDisplayName(selectedConvo)
+                  : selectedPhone;
+                const initials = nameInitials(headerName);
+                return (
+                  <div
+                    className="w-10 h-10 rounded-full flex items-center justify-center shrink-0"
+                    style={{
+                      backgroundColor: initials
+                        ? avatarColor(selectedPhone)
+                        : "#DFE5E7",
+                    }}
+                  >
+                    {initials ? (
+                      <span className="text-white font-semibold text-[14px]">
+                        {initials}
+                      </span>
+                    ) : (
+                      <Phone size={18} className="text-[#54656F]" />
+                    )}
+                  </div>
+                );
+              })()}
               <div className="flex-1 min-w-0">
                 <div className="text-white font-medium text-[15px]">
-                  {selectedConvo?.contactName || selectedConvo?.order?.customerName || selectedPhone}
+                  {selectedConvo ? conversationDisplayName(selectedConvo) : selectedPhone}
                 </div>
                 <div className="text-white/70 text-xs font-mono">
                   {selectedPhone}

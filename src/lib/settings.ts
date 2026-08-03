@@ -92,6 +92,7 @@ export const SETTING_KEYS = {
   AI_SUGGESTIONS_ENABLED: "ai_suggestions_enabled",
   AI_SUGGESTIONS_COUNT: "ai_suggestions_count",
   AI_SUGGESTIONS_SYSTEM_PROMPT: "ai_suggestions_system_prompt",
+  AI_SUGGESTIONS_MAX_TOKENS: "ai_suggestions_max_tokens",
   // Automation auto-run — when enabled, automations trigger automatically
   // without needing to click "Run now"
   AUTOMATION_AUTO_RUN: "automation_auto_run",
