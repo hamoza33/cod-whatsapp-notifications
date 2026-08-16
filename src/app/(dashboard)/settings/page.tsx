@@ -836,6 +836,8 @@ export default function SettingsPage() {
               "tracking_refresh_interval_minutes",
               "courier_jte_provider",
               "courier_jte_batch_size",
+              "imile_schedule_api_url",
+              "imile_schedule_api_key",
             ])
           }
           saving={saving}
@@ -939,6 +941,39 @@ export default function SettingsPage() {
             type="number"
             placeholder="20"
             help="Waybills sent per tracking request (1–20). The service groups internally: TrackingMore/auto up to 20, Tencent up to 10."
+          />
+
+          <div className="mt-6 mb-4 border-t border-gray-200 pt-4">
+            <h4 className="text-sm font-semibold text-gray-800 mb-1">
+              iMile Delivery Scheduling
+            </h4>
+            <p className="text-xs text-gray-500 mb-3">
+              Used by the{" "}
+              <span className="font-medium">Reschedule iMile delivery</span>{" "}
+              automation action to book a new delivery date for undelivered
+              iMile parcels. Leave the URL blank to use the default service.
+            </p>
+          </div>
+          <SettingsField
+            label="iMile Service URL"
+            value={settings.imile_schedule_api_url || ""}
+            onChange={(v) => updateSetting("imile_schedule_api_url", v)}
+            placeholder="https://imile.shopinzo.bond"
+            help="Base URL of the iMile scheduling service (hamoza33/imile_schedule)."
+          />
+          <SettingsField
+            label="iMile Service API Key"
+            value={settings.imile_schedule_api_key || ""}
+            onChange={(v) => updateSetting("imile_schedule_api_key", v)}
+            type="password"
+            configuredPreview={sensitivePreviews.imile_schedule_api_key}
+            settingKey="imile_schedule_api_key"
+            placeholder={
+              configuredSecrets.has("imile_schedule_api_key")
+                ? "Currently configured — enter a new value to replace"
+                : "Only needed if the service sets IMILE_MCP_API_KEY"
+            }
+            help="Sent as the x-api-key header. Only required when the iMile service is started with IMILE_MCP_API_KEY set."
           />
 
           <div className="mt-6 mb-2 border-t border-gray-200 pt-4">

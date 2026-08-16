@@ -187,6 +187,8 @@ export async function buildContextForOrder(
       })(),
       pipelineNote: order.pipelineNote,
       callAgentQueued: order.callAgentQueued,
+      imileScheduledDate: order.imileScheduledDate,
+      imileScheduledAt: order.imileScheduledAt,
     },
     tracking: trackingRow
       ? {

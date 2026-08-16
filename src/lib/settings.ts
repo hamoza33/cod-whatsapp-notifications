@@ -106,6 +106,12 @@ export const SETTING_KEYS = {
   //     internally: TrackingMore/auto ≤20, Tencent ≤10)
   COURIER_JTE_PROVIDER: "courier_jte_provider",
   COURIER_JTE_BATCH_SIZE: "courier_jte_batch_size",
+  // iMile scheduling service (hamoza33/imile_schedule) — used by the
+  // `reschedule_imile` automation action to push an undelivered iMile parcel
+  // to a later delivery date. The API key is only required when the service
+  // has IMILE_MCP_API_KEY set.
+  IMILE_SCHEDULE_API_URL: "imile_schedule_api_url",
+  IMILE_SCHEDULE_API_KEY: "imile_schedule_api_key",
   // WhatsApp Support — separate credentials for the support inbox
   WA_SUPPORT_BUSINESS_ACCOUNT_ID: "wa_support_business_account_id",
   WA_SUPPORT_PHONE_NUMBER_ID: "wa_support_phone_number_id",
@@ -135,6 +141,7 @@ export const SENSITIVE_SETTING_KEYS: readonly string[] = [
   SETTING_KEYS.VOICE_AGENT_LLM_API_KEY,
   SETTING_KEYS.VAPI_API_KEY,
   SETTING_KEYS.CAPTCHA_API_KEY,
+  SETTING_KEYS.IMILE_SCHEDULE_API_KEY,
   SETTING_KEYS.WA_SUPPORT_ACCESS_TOKEN,
   SETTING_KEYS.WA_SUPPORT_API_KEY,
   SETTING_KEYS.WA_SUPPORT_APP_SECRET,

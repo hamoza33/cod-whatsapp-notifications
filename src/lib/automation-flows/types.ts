@@ -138,6 +138,7 @@ export type ActionKind =
   | "add_pipeline_note"
   | "pin_conversation"
   | "queue_call_agent"
+  | "reschedule_imile"
   | "wait"
   | "wait_for_reply"
   | "webhook"
@@ -150,6 +151,7 @@ export const ACTION_KINDS: ReadonlyArray<ActionKind> = [
   "add_pipeline_note",
   "pin_conversation",
   "queue_call_agent",
+  "reschedule_imile",
   "wait",
   "wait_for_reply",
   "webhook",
@@ -171,6 +173,11 @@ export interface ActionNodeData {
   targetStatus?: OrderStatus | null;
   // add_pipeline_note
   note?: string | null;
+  // reschedule_imile — push an undelivered iMile parcel to a later delivery
+  // date via the iMile scheduling service. Only acts on iMile shipments;
+  // anything else is skipped so the action is safe to drop into a mixed-
+  // carrier flow.
+  rescheduleDaysAhead?: number | null;
   // wait
   waitSeconds?: number | null;
   // wait_for_reply — pause the flow until the customer replies. The
@@ -235,6 +242,16 @@ export interface FlowExecutionContext {
     minute: number; // 0-59
     dayOfWeek: number; // 0=Sun, 6=Sat
   };
+  /**
+   * Set by the `reschedule_imile` action so downstream nodes (typically the
+   * follow-up template) can reference the date that was actually booked.
+   */
+  imile?: {
+    scheduledDate: string;
+    requestedDate: string;
+    usedSuggestedDate: boolean;
+    trackingNumber: string;
+  } | null;
   /** Bag of variables set/read by action nodes via `set variable` (future). */
   vars: Record<string, string>;
 }
@@ -266,6 +283,9 @@ export interface FlowOrderSnapshot {
   ageDays: number | null;
   pipelineNote: string | null;
   callAgentQueued: boolean;
+  /** Last delivery date booked with iMile (YYYY-MM-DD), and when. */
+  imileScheduledDate: string | null;
+  imileScheduledAt: Date | null;
 }
 
 export interface FlowTrackingSnapshot {

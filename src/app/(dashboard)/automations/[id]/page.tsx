@@ -68,6 +68,7 @@ import {
   Plus,
   Trash2,
   Clock,
+  CalendarClock,
   Webhook,
   StopCircle,
   Phone,
@@ -122,6 +123,7 @@ type ActionKind =
   | "add_pipeline_note"
   | "pin_conversation"
   | "queue_call_agent"
+  | "reschedule_imile"
   | "wait"
   | "wait_for_reply"
   | "webhook"
@@ -158,6 +160,7 @@ interface ActionData {
   text?: string | null;
   targetStatus?: string | null;
   note?: string | null;
+  rescheduleDaysAhead?: number | null;
   waitSeconds?: number | null;
   waitForReplyYesKeywords?: string[] | null;
   waitForReplyNoKeywords?: string[] | null;
@@ -272,6 +275,7 @@ const ACTION_LABELS: Record<ActionKind, string> = {
   add_pipeline_note: "Add pipeline note",
   pin_conversation: "Pin conversation",
   queue_call_agent: "Queue call agent",
+  reschedule_imile: "Reschedule iMile delivery",
   wait: "Wait",
   wait_for_reply: "Wait for customer reply (yes / no)",
   webhook: "Call webhook",
@@ -285,6 +289,7 @@ const ACTION_ICONS: Record<ActionKind, typeof Mail> = {
   add_pipeline_note: StickyNote,
   pin_conversation: Pin,
   queue_call_agent: PhoneCall,
+  reschedule_imile: CalendarClock,
   wait: Clock,
   wait_for_reply: MessageCircleQuestion,
   webhook: Webhook,
@@ -504,6 +509,12 @@ function ActionNode({ data, selected }: NodeProps) {
       )}
       {d.action === "wait" && d.waitSeconds !== null && d.waitSeconds !== undefined && (
         <div className="text-[11px] text-gray-500 mt-0.5">{d.waitSeconds}s</div>
+      )}
+      {d.action === "reschedule_imile" && (
+        <div className="text-[11px] text-gray-500 mt-0.5">
+          +{Math.max(1, Math.floor(d.rescheduleDaysAhead ?? 1))} day
+          {Math.max(1, Math.floor(d.rescheduleDaysAhead ?? 1)) === 1 ? "" : "s"} · iMile only
+        </div>
       )}
       <Handle type="source" position={Position.Bottom} className="!bg-blue-500" style={HANDLE_SIZE} />
 
@@ -1753,6 +1764,36 @@ function ActionInspector({
           dataPoints={dataPoints}
           onChange={(v) => onChange({ note: v } as Partial<FlowNodeData>)}
         />
+      )}
+
+      {data.action === "reschedule_imile" && (
+        <>
+          <div className="text-[11px] text-gray-500 leading-relaxed -mt-1">
+            Books a new delivery date with iMile for the order&apos;s tracking
+            number. Only iMile shipments are touched — other carriers, orders
+            with no tracking number, and parcels already delivered or returned
+            are skipped. An order is rescheduled at most once per day, so a
+            daily sweep is safe to leave running.
+          </div>
+          <LabeledInput
+            label="Days ahead"
+            type="number"
+            value={String(data.rescheduleDaysAhead ?? 1)}
+            onChange={(v) => {
+              const n = parseInt(v, 10);
+              onChange({
+                rescheduleDaysAhead: Number.isFinite(n) ? Math.max(1, n) : 1,
+              } as Partial<FlowNodeData>);
+            }}
+          />
+          <div className="text-[11px] text-gray-500 leading-relaxed -mt-1">
+            1 = tomorrow. The date is resolved in your automation timezone. If
+            iMile rejects it, its own suggested date is used instead. Add a
+            “Send WhatsApp template” action after this one and reference{" "}
+            <span className="font-mono">{"{{imile.scheduledDate}}"}</span> to
+            tell the customer the new date.
+          </div>
+        </>
       )}
 
       {data.action === "wait" && (

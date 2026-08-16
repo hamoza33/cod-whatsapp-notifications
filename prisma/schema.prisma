@@ -98,6 +98,12 @@ model Order {
   // Free-form notes the operator can attach to an order from the Pipeline
   // (e.g. "called customer, no answer"). Not synced from COD Network.
   pipelineNote      String?     @map("pipeline_note")
+  // Last delivery date (YYYY-MM-DD) booked with iMile by the
+  // `reschedule_imile` automation action, and when it was booked. The
+  // timestamp is what makes a daily sweep idempotent: an order already
+  // rescheduled today is skipped instead of being re-booked on every tick.
+  imileScheduledDate String?    @map("imile_scheduled_date")
+  imileScheduledAt   DateTime?  @map("imile_scheduled_at")
   createdAt         DateTime    @default(now()) @map("created_at")
   updatedAt         DateTime    @updatedAt @map("updated_at")
 

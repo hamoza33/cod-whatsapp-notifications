@@ -13,8 +13,14 @@ import { WhatsAppClient } from "../whatsapp";
 import { normalizePhoneNumber } from "../phone";
 import { getSetting, SETTING_KEYS } from "../settings";
 import { renderTemplate } from "./data-points";
+import { detectCarrier } from "../tracking";
+import {
+  dateDaysAhead,
+  formatDateInTimezone,
+  scheduleImileDelivery,
+} from "../imile-schedule";
 import type { ActionNodeData, FlowExecutionContext } from "./types";
-import { OrderStatus } from "@prisma/client";
+import { OrderStatus, TrackingCarrier, TrackingStatus } from "@prisma/client";
 
 export interface ActionResult {
   output: string;
@@ -44,6 +50,8 @@ export async function executeAction(
       return executePin(context);
     case "queue_call_agent":
       return executeQueueCall(context);
+    case "reschedule_imile":
+      return executeRescheduleImile(action, context);
     case "wait":
       return executeWait(action);
     case "wait_for_reply":
@@ -253,6 +261,101 @@ async function executeQueueCall(context: FlowExecutionContext): Promise<ActionRe
   });
   context.order.callAgentQueued = true;
   return { output: `Queued call agent for order ${context.order.codNetworkOrderId}` };
+}
+
+/**
+ * Push an undelivered iMile parcel to a later delivery date.
+ *
+ * Guards, in order — all of them skip (rather than fail) so the action is
+ * safe to drop into a flow that also sees non-iMile orders:
+ *   1. order must have a tracking number
+ *   2. carrier must resolve to iMile
+ *   3. tracking status must not be DELIVERED/RETURNED (nothing to reschedule)
+ *   4. the parcel must not already have been rescheduled earlier today
+ *      — this is what keeps a daily sweep from re-booking on every tick
+ */
+async function executeRescheduleImile(
+  action: ActionNodeData,
+  context: FlowExecutionContext
+): Promise<ActionResult> {
+  const order = context.order;
+  if (!order) {
+    throw new Error("reschedule_imile: no order in context");
+  }
+
+  const trackingNumber =
+    context.tracking?.trackingNumber?.trim() || order.trackingNumber?.trim() || null;
+  if (!trackingNumber) {
+    return { output: `Skipped: order ${order.codNetworkOrderId} has no tracking number` };
+  }
+
+  const carrier =
+    context.tracking?.carrier ??
+    detectCarrier(trackingNumber, order.deliveryCompany) ??
+    null;
+  if (carrier !== TrackingCarrier.IMILE) {
+    return {
+      output: `Skipped: ${trackingNumber} is not an iMile shipment (carrier: ${carrier ?? "unknown"})`,
+    };
+  }
+
+  const trackingStatus = context.tracking?.status ?? null;
+  if (
+    trackingStatus === TrackingStatus.DELIVERED ||
+    trackingStatus === TrackingStatus.RETURNED
+  ) {
+    return { output: `Skipped: ${trackingNumber} is already ${trackingStatus}` };
+  }
+
+  const timeZone = (await getSetting(SETTING_KEYS.AUTOMATION_TIMEZONE))?.trim() || null;
+  const today = formatDateInTimezone(new Date(), timeZone);
+
+  const alreadyToday =
+    order.imileScheduledAt !== null &&
+    order.imileScheduledAt !== undefined &&
+    formatDateInTimezone(new Date(order.imileScheduledAt), timeZone) === today;
+  if (alreadyToday) {
+    return {
+      output: `Skipped: ${trackingNumber} was already rescheduled today (for ${order.imileScheduledDate})`,
+    };
+  }
+
+  const daysAhead = Math.max(1, Math.floor(action.rescheduleDaysAhead ?? 1));
+  const targetDate = dateDaysAhead(daysAhead, timeZone);
+
+  const result = await scheduleImileDelivery(trackingNumber, targetDate);
+  if (!result.success) {
+    const suggestion = result.suggestedDate
+      ? ` (iMile suggested ${result.suggestedDate})`
+      : "";
+    throw new Error(
+      `reschedule_imile: could not reschedule ${trackingNumber} to ${targetDate}: ${result.error}${suggestion}`
+    );
+  }
+
+  const scheduledAt = new Date();
+  await prisma.order.update({
+    where: { id: order.id },
+    data: { imileScheduledDate: result.scheduledDate, imileScheduledAt: scheduledAt },
+  });
+  order.imileScheduledDate = result.scheduledDate;
+  order.imileScheduledAt = scheduledAt;
+
+  // Expose the booked date to downstream nodes so the follow-up template can
+  // interpolate it, e.g. "your parcel will be delivered on {{imile.scheduledDate}}".
+  context.imile = {
+    scheduledDate: result.scheduledDate,
+    requestedDate: result.requestedDate,
+    usedSuggestedDate: result.usedSuggestedDate,
+    trackingNumber,
+  };
+
+  const note = result.usedSuggestedDate
+    ? ` (requested ${result.requestedDate}, iMile gave ${result.scheduledDate})`
+    : "";
+  return {
+    output: `Rescheduled iMile ${trackingNumber} to ${result.scheduledDate}${note}`,
+  };
 }
 
 async function executeWait(action: ActionNodeData): Promise<ActionResult> {

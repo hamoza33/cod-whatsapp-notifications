@@ -183,6 +183,14 @@ export const DATA_POINTS: ReadonlyArray<DataPoint> = [
     group: "Tracking",
     type: "string",
   },
+  {
+    path: "order.imileScheduledDate",
+    label: "iMile scheduled delivery date",
+    group: "Tracking",
+    type: "string",
+    description:
+      "Last delivery date (YYYY-MM-DD) booked with iMile by the \"Reschedule iMile delivery\" action. Use {{imile.scheduledDate}} in a template that runs right after the reschedule.",
+  },
   // -------------------- Customer --------------------
   {
     path: "customer.orderCount",
