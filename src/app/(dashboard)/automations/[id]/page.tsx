@@ -83,6 +83,10 @@ import {
   X,
 } from "lucide-react";
 import { api } from "@/lib/api-client";
+import {
+  countTemplateVariables,
+  inferTemplateVariableDefaults,
+} from "@/lib/template-variables";
 
 // ----------------------------------------------------------------------------
 // Types — kept in sync with src/lib/automation-flows/types.ts on the server
@@ -1686,11 +1690,20 @@ function ActionInspector({
               value={data.templateName ?? ""}
               onChange={(e) => {
                 const t = templates.find((tt) => tt.name === e.target.value);
-                const varCount = countTemplateVariables(t?.bodyText ?? "");
+                const bodyText = t?.bodyText ?? "";
+                const varCount = countTemplateVariables(bodyText);
                 const existing = data.templateVariables ?? [];
+                // Pre-fill blank slots with the data point the template body
+                // asks for ({{1}} after "السلام عليكم" → customer name,
+                // {{2}} after "رقم التتبع" → tracking number). Meta rejects a
+                // send whose body parameters are blank.
+                const inferred = inferTemplateVariableDefaults(bodyText, varCount);
                 const vars =
                   varCount > 0
-                    ? Array.from({ length: varCount }, (_, i) => existing[i] ?? "")
+                    ? Array.from(
+                        { length: varCount },
+                        (_, i) => existing[i]?.trim() || inferred[i] || ""
+                      )
                     : existing;
                 onChange({
                   templateName: e.target.value || null,
@@ -1988,6 +2001,13 @@ function TemplateVariablesEditor({
           Template expects {expectedCount} variable{expectedCount !== 1 ? "s" : ""}, but {variables.length} provided.
         </div>
       )}
+      {variables.some((v) => !v.trim()) && (
+        <div className="text-[10px] text-red-700 bg-red-50 border border-red-200 rounded px-2 py-1 mb-1">
+          Empty slots are rejected by WhatsApp (error #131008) and the send will
+          fail. Fill each slot with a data point, e.g.{" "}
+          <code>{"{{order.customerName}}"}</code>.
+        </div>
+      )}
       {variables.length === 0 && expectedCount === 0 && (
         <div className="text-[10px] text-gray-500">
           No variables — template will be sent with no body params.
@@ -2024,7 +2044,9 @@ function TemplateVariablesEditor({
               onKeyUp={(e) => captureCursor(e.currentTarget)}
               onBlur={(e) => captureCursor(e.currentTarget)}
               placeholder="{{order.customerName}} or literal text"
-              className="flex-1 border border-gray-200 rounded-md px-2 py-1 text-[11px] font-mono"
+              className={`flex-1 border rounded-md px-2 py-1 text-[11px] font-mono ${
+                slot.trim() ? "border-gray-200" : "border-red-300 bg-red-50"
+              }`}
             />
             <button
               type="button"
@@ -2392,14 +2414,6 @@ function HeaderImagePicker({
 // ----------------------------------------------------------------------------
 // Small helpers
 // ----------------------------------------------------------------------------
-
-function countTemplateVariables(bodyText: string): number {
-  if (!bodyText) return 0;
-  const matches = bodyText.match(/{{\s*\d+\s*}}/g);
-  if (!matches) return 0;
-  const nums = matches.map((m) => parseInt(m.replace(/[{}]/g, "").trim(), 10));
-  return Math.max(...nums);
-}
 
 /**
  * Comma-separated keyword editor used by the wait_for_reply inspector.

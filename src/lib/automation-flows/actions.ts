@@ -13,6 +13,10 @@ import { WhatsAppClient } from "../whatsapp";
 import { normalizePhoneNumber } from "../phone";
 import { getSetting, SETTING_KEYS } from "../settings";
 import { renderTemplate } from "./data-points";
+import {
+  countTemplateVariables,
+  resolveTemplateVariableSlots,
+} from "../template-variables";
 import { detectCarrier } from "../tracking";
 import {
   dateDaysAhead,
@@ -100,9 +104,34 @@ async function executeSendTemplate(
   }
 
   // Resolve variable slots with `{{token}}` substitution against the context.
-  const variables = (action.templateVariables ?? []).map((slot) =>
-    renderTemplate(slot ?? "", context)
+  // Slots left blank in the builder fall back to the data point the template
+  // body asks for, because Meta rejects the whole send when a body parameter
+  // is present but empty (#131008).
+  const template = await prisma.whatsappTemplate.findFirst({
+    where: { name: action.templateName, language: templateLanguage },
+    select: { bodyText: true },
+  });
+  const bodyText = template?.bodyText ?? "";
+  const slots = resolveTemplateVariableSlots(
+    action.templateVariables ?? [],
+    bodyText
   );
+  const variables = slots.map((slot) => renderTemplate(slot, context));
+  const blankIndex = variables.findIndex((v) => !v.trim());
+  if (blankIndex !== -1) {
+    throw new Error(
+      `send_template: variable {{${blankIndex + 1}}} of template "${action.templateName}" is empty ` +
+        `(configured as "${slots[blankIndex] || "<blank>"}"). WhatsApp rejects empty parameters — ` +
+        `set it in the action, e.g. {{order.customerName}} or {{order.trackingNumber}}.`
+    );
+  }
+  const expectedCount = countTemplateVariables(bodyText);
+  if (expectedCount > 0 && variables.length !== expectedCount) {
+    throw new Error(
+      `send_template: template "${action.templateName}" expects ${expectedCount} ` +
+        `variable(s) but ${variables.length} were provided`
+    );
+  }
 
   const headerImage =
     action.templateHeaderImageUrl ||

@@ -276,6 +276,7 @@ export async function POST(request: NextRequest) {
                 customerCity: true,
                 codNetworkOrderId: true,
                 deliveryCompany: true,
+                rawOrderJson: true,
               },
             })
           : null;
@@ -297,9 +298,15 @@ export async function POST(request: NextRequest) {
               latestTrackingEvent,
             }
           : null;
-        handleAiAutoReply(fromPhone, text, order).catch((err) =>
-          console.error("[webhook] AI auto-reply error:", err)
-        );
+        handleAiAutoReply(fromPhone, text, order)
+          .then((result) => {
+            if (!result.replied && result.error) {
+              console.warn(
+                `[webhook] AI auto-reply skipped for ${fromPhone}: ${result.error}`
+              );
+            }
+          })
+          .catch((err) => console.error("[webhook] AI auto-reply error:", err));
         // Route the reply to any parked flow runs waiting on this
         // customer's phone (yes/no branching). Runs before
         // MESSAGE_RECEIVED so the flow continuation takes priority over

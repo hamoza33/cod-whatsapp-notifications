@@ -3,6 +3,7 @@ import { getAuthUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { OrderStatus } from "@prisma/client";
 import { randomBytes } from "crypto";
+import { collectProductKeys } from "@/lib/product-matching";
 import {
   fireOrderCreatedFlows,
   fireOrderTrackingAssignedFlows,
@@ -296,99 +297,6 @@ function extractProductImages(rawOrderJson: unknown): string[] {
   return images;
 }
 
-/**
- * Collect every candidate product name and SKU referenced by an order/lead so
- * the catalog image lookup can succeed even when `product_name` doesn't match
- * a catalog entry exactly. Handles:
- *  - multi-product names comma-joined ("Hearing aid D, Fast car charger")
- *  - lead "Name/SKU" strings ("Energy Coffee Drink for Men/MP-X1TGXPHPN3QZ")
- *  - lead `original_payload.sku_1…` / `product_name_1…`
- *  - order item SKUs (items.data[].product.data.sku)
- */
-function collectProductKeys(
-  productName: string | null,
-  rawOrderJson: unknown
-): { names: string[]; skus: string[] } {
-  const names = new Set<string>();
-  const skus = new Set<string>();
-
-  const addSegment = (segment: string) => {
-    const trimmed = segment.trim();
-    if (!trimmed) return;
-    // "Name/SKU" → the last "/"-part is the SKU, the rest is the name.
-    const slash = trimmed.lastIndexOf("/");
-    if (slash > 0 && slash < trimmed.length - 1) {
-      const namePart = trimmed.slice(0, slash).trim();
-      const skuPart = trimmed.slice(slash + 1).trim();
-      if (namePart) names.add(namePart);
-      if (skuPart) skus.add(skuPart);
-    } else {
-      names.add(trimmed);
-    }
-  };
-
-  if (productName) {
-    for (const part of productName.split(",")) addSegment(part);
-  }
-
-  if (rawOrderJson && typeof rawOrderJson === "object") {
-    const raw = rawOrderJson as Record<string, unknown>;
-    if (typeof raw.products === "string") {
-      for (const part of raw.products.split(",")) addSegment(part);
-    }
-
-    // Lead payload: original_payload is a JSON string with sku_N / product_name_N.
-    const original =
-      typeof raw.original_payload === "string"
-        ? safeParseObject(raw.original_payload)
-        : raw.original_payload && typeof raw.original_payload === "object"
-          ? (raw.original_payload as Record<string, unknown>)
-          : null;
-    if (original) {
-      for (let i = 1; i <= 10; i++) {
-        const sku = original[`sku_${i}`];
-        const name = original[`product_name_${i}`];
-        if (typeof sku === "string" && sku.trim()) skus.add(sku.trim());
-        if (typeof name === "string" && name.trim()) names.add(name.trim());
-      }
-    }
-
-    // Order payload: items.data[].product.data.sku
-    const items = raw.items;
-    const itemList = Array.isArray(items)
-      ? items
-      : items && typeof items === "object" && "data" in items
-        ? (items as { data?: unknown[] }).data ?? []
-        : [];
-    for (const item of itemList) {
-      if (item && typeof item === "object") {
-        const product = (item as Record<string, unknown>).product;
-        const data =
-          product && typeof product === "object"
-            ? (product as Record<string, unknown>).data
-            : null;
-        const sku =
-          data && typeof data === "object"
-            ? (data as Record<string, unknown>).sku
-            : null;
-        if (typeof sku === "string" && sku.trim()) skus.add(sku.trim());
-      }
-    }
-  }
-
-  return { names: [...names], skus: [...skus] };
-}
-
-function safeParseObject(value: string): Record<string, unknown> | null {
-  try {
-    const parsed = JSON.parse(value);
-    return parsed && typeof parsed === "object"
-      ? (parsed as Record<string, unknown>)
-      : null;
-  } catch {
-    return null;
-  }
-}
 
 function optionalString(v: string | undefined | null): string | null {
   if (!v) return null;
