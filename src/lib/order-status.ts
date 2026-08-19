@@ -20,6 +20,39 @@ import { OrderStatus } from "@prisma/client";
  *   4. Mapped status from the per-status integer code map
  *   5. Previous status (no-op)
  */
+/**
+ * Forward progression of the pipeline. A generic COD Network status code may
+ * move an order up this ladder but never down (see rule 4). Lead-stage
+ * statuses all share rank 0 so leads can still move freely between them
+ * before they're promoted into the order pipeline. Statuses absent from the
+ * map (terminal ones) are always applied.
+ */
+const PIPELINE_RANK: Partial<Record<OrderStatus, number>> = {
+  [OrderStatus.UNKNOWN]: 0,
+  [OrderStatus.NEW]: 0,
+  [OrderStatus.NO_REPLY]: 0,
+  [OrderStatus.WRONG]: 0,
+  [OrderStatus.EXPIRED]: 0,
+  [OrderStatus.CALL_LATER]: 0,
+  [OrderStatus.CALL_LATER_SCHEDULED]: 0,
+  [OrderStatus.BLACK_LISTED]: 0,
+  [OrderStatus.DELAYED]: 0,
+  [OrderStatus.OUT_OF_STOCK]: 0,
+  [OrderStatus.PENDING]: 1,
+  [OrderStatus.CONFIRMED]: 2,
+  [OrderStatus.PROCESSING]: 3,
+  [OrderStatus.ASSIGNED]: 4,
+  [OrderStatus.SHIPPED]: 5,
+  [OrderStatus.OUT_FOR_DELIVERY]: 6,
+};
+
+const TERMINAL_STATUSES = new Set<OrderStatus>([
+  OrderStatus.DELIVERED,
+  OrderStatus.RETURNED,
+  OrderStatus.CANCELLED,
+  OrderStatus.CANCELLED_PRICE,
+]);
+
 export function deriveOrderStatus(input: {
   rawStatusLabel?: string | null;
   trackingStatus?: string | null;
@@ -141,9 +174,30 @@ export function deriveOrderStatus(input: {
   }
 
   // 4. Generic status mapping from the integer code map (already done
-  //    upstream in `mapCodStatus`).
+  //    upstream in `mapCodStatus`), but never walking the pipeline
+  //    backwards. COD Network keeps reporting the pre-shipping label
+  //    ("Pending") long after a courier picked the parcel up, so applying
+  //    it verbatim made the row oscillate on every sync tick: rule 3 lifts
+  //    it to OUT_FOR_DELIVERY, the next tick maps it back to PENDING, and
+  //    every flip re-fires ORDER_STATUS_CHANGED automations. A generic code
+  //    may only advance the order (or move it to a terminal state).
   if (input.mappedFromCode) {
-    return input.mappedFromCode;
+    const mapped = input.mappedFromCode;
+    if (previous && mapped !== previous) {
+      if (TERMINAL_STATUSES.has(previous) && !TERMINAL_STATUSES.has(mapped)) {
+        return previous;
+      }
+      const previousRank = PIPELINE_RANK[previous];
+      const mappedRank = PIPELINE_RANK[mapped];
+      if (
+        previousRank !== undefined &&
+        mappedRank !== undefined &&
+        mappedRank < previousRank
+      ) {
+        return previous;
+      }
+    }
+    return mapped;
   }
 
   // 5. Don't churn — keep the previous status.
