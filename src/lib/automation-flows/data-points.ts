@@ -78,6 +78,14 @@ export const DATA_POINTS: ReadonlyArray<DataPoint> = [
     type: "string",
   },
   {
+    path: "order.productSku",
+    group: "Order",
+    label: "Product SKU",
+    type: "string",
+    description:
+      "All SKUs on the order (payload SKUs + matched catalog SKUs), comma-separated. Use with \"contains\" to target one product of a multi-product order.",
+  },
+  {
     path: "order.productPrice",
     label: "Product price",
     group: "Order",

@@ -68,6 +68,15 @@ export interface TriggerNodeData {
   scheduleHour?: number | null;
   scheduleMinute?: number | null;
   scheduleStatus?: OrderStatus | null;
+  /**
+   * Suppress repeat runs for an order this flow already acted on. Defaults
+   * to `true` for the one-shot lifecycle triggers (ORDER_CREATED,
+   * ORDER_STATUS_CHANGED, ORDER_TRACKING_ASSIGNED, TRACKING_STATUS_CHANGED)
+   * and `false` for SCHEDULED / MESSAGE_RECEIVED / MANUAL. For the status
+   * triggers the guard is keyed on the resulting status, so a genuine move
+   * to a different status still fires.
+   */
+  runOncePerOrder?: boolean | null;
 }
 
 /**
@@ -167,6 +176,12 @@ export interface ActionNodeData {
   templateLanguage?: string | null;
   templateVariables?: string[] | null;
   templateHeaderImageUrl?: string | null;
+  /**
+   * Send the template even when the same template already went out for this
+   * order in the last 24h. Off by default — the guard is the last line of
+   * defense against a misconfigured flow spamming a customer.
+   */
+  allowDuplicateSend?: boolean | null;
   // send_text_message
   text?: string | null;
   // change_order_status
@@ -266,6 +281,13 @@ export interface FlowOrderSnapshot {
   customerCity: string | null;
   customerAddress: string | null;
   productName: string | null;
+  /**
+   * Comma-joined SKUs for the order: those present in the COD Network
+   * payload plus the SKUs of catalog products matched from the product
+   * name. Lets conditions target a specific SKU instead of a name that
+   * varies by language / bundle.
+   */
+  productSku: string | null;
   productPrice: string | null;
   productQuantity: string | null;
   trackingNumber: string | null;

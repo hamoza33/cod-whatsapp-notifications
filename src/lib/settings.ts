@@ -49,6 +49,9 @@ export const SETTING_KEYS = {
   // IANA timezone (e.g. "Africa/Casablanca", "Asia/Riyadh") used to evaluate
   // an automation's `scheduledSendHour`. Defaults to UTC when unset.
   AUTOMATION_TIMEZONE: "automation_timezone",
+  // Days of automation-flow run history to keep. Older runs are pruned on the
+  // sync tick so the run table can't grow unbounded (default 7).
+  AUTOMATION_RUN_RETENTION_DAYS: "automation_run_retention_days",
   DEFAULT_COUNTRY_CODE: "default_country_code",
   AUTO_SYNC_ENABLED: "auto_sync_enabled",
   AUTO_SYNC_INTERVAL_MINUTES: "auto_sync_interval_minutes",

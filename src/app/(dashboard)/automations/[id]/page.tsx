@@ -144,6 +144,7 @@ interface TriggerData {
   scheduleHour?: number | null;
   scheduleMinute?: number | null;
   scheduleStatus?: string | null;
+  runOncePerOrder?: boolean | null;
 }
 interface ConditionData {
   kind: "condition";
@@ -161,6 +162,7 @@ interface ActionData {
   templateLanguage?: string | null;
   templateVariables?: string[] | null;
   templateHeaderImageUrl?: string | null;
+  allowDuplicateSend?: boolean | null;
   text?: string | null;
   targetStatus?: string | null;
   note?: string | null;
@@ -285,6 +287,20 @@ const ACTION_LABELS: Record<ActionKind, string> = {
   webhook: "Call webhook",
   stop: "Stop flow",
 };
+
+/**
+ * Mirrors `dedupeDefaultForTrigger` in the engine: one-shot lifecycle
+ * triggers suppress repeat runs for the same order unless the operator
+ * explicitly opts back in.
+ */
+function defaultRunOncePerOrder(triggerType: FlowTriggerType): boolean {
+  return (
+    triggerType === "ORDER_CREATED" ||
+    triggerType === "ORDER_STATUS_CHANGED" ||
+    triggerType === "ORDER_TRACKING_ASSIGNED" ||
+    triggerType === "TRACKING_STATUS_CHANGED"
+  );
+}
 
 const ACTION_ICONS: Record<ActionKind, typeof Mail> = {
   send_template: Mail,
@@ -1530,6 +1546,26 @@ function TriggerInspector({
           />
         </>
       )}
+      <div className="pt-2 border-t border-gray-100 space-y-1">
+        <label className="text-[12px] text-gray-700 flex items-center gap-2">
+          <input
+            type="checkbox"
+            checked={data.runOncePerOrder ?? defaultRunOncePerOrder(data.triggerType)}
+            onChange={(e) =>
+              onChange({
+                runOncePerOrder: e.target.checked,
+              } as Partial<FlowNodeData>)
+            }
+          />
+          Run only once per order
+        </label>
+        <div className="text-[11px] text-gray-500 leading-relaxed">
+          {data.triggerType === "ORDER_STATUS_CHANGED" ||
+          data.triggerType === "TRACKING_STATUS_CHANGED"
+            ? "Counted per resulting status: the flow still runs when the order reaches a different status, but a flap back to a status it already handled is ignored. Turn off only if the customer should be messaged again on every change."
+            : "Skips orders this flow already acted on, so a re-synced order is never messaged twice."}
+        </div>
+      </div>
       <div className="text-[11px] text-gray-500 leading-relaxed pt-2 border-t border-gray-100">
         This trigger fires automatically. Wire it to a Condition or Action
         block to make something happen.
@@ -1737,6 +1773,23 @@ function ActionInspector({
               onChange({ templateHeaderImageUrl: v || null } as Partial<FlowNodeData>)
             }
           />
+          <label className="text-[12px] text-gray-700 flex items-center gap-2">
+            <input
+              type="checkbox"
+              checked={!!data.allowDuplicateSend}
+              onChange={(e) =>
+                onChange({
+                  allowDuplicateSend: e.target.checked,
+                } as Partial<FlowNodeData>)
+              }
+            />
+            Allow resending the same template
+          </label>
+          <div className="text-[11px] text-gray-500 leading-relaxed">
+            Off by default: if this template already went out for the order in
+            the last 24h the send is skipped instead of messaging the customer
+            twice.
+          </div>
         </>
       )}
 

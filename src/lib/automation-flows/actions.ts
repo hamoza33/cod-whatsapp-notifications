@@ -35,6 +35,12 @@ export interface ActionResult {
   delayMs?: number;
   /** Returned by `stop`: the engine should stop walking the graph. */
   stop?: boolean;
+  /**
+   * The action deliberately did nothing (e.g. a duplicate template send, a
+   * non-iMile parcel). Recorded as a `skipped` step so the once-per-order
+   * guard doesn't treat it as having acted on the order.
+   */
+  skipped?: boolean;
 }
 
 export async function executeAction(
@@ -85,6 +91,34 @@ async function executeSendTemplate(
   const phone = context.order?.customerPhone ?? context.message?.fromPhone ?? null;
   if (!phone) {
     throw new Error("send_template: no recipient phone available in context");
+  }
+
+  // Anti-spam net: never send the same template to the same recipient twice
+  // within a day unless the action explicitly opts in. A misconfigured or
+  // flapping flow would otherwise message a customer on every sync tick.
+  if (!action.allowDuplicateSend) {
+    const since = new Date(Date.now() - 24 * 3600 * 1000);
+    const duplicate = await prisma.whatsappMessage.findFirst({
+      where: {
+        templateName: action.templateName,
+        status: { in: ["SENT", "DELIVERED", "READ"] },
+        createdAt: { gte: since },
+        ...(context.order?.id
+          ? { orderId: context.order.id }
+          : { phoneNumber: phone }),
+      },
+      orderBy: { createdAt: "desc" },
+      select: { createdAt: true },
+    });
+    if (duplicate) {
+      return {
+        skipped: true,
+        output:
+          `Skipped: template "${action.templateName}" already sent for this order ` +
+          `at ${duplicate.createdAt.toISOString()} (within 24h). Enable "Allow ` +
+          `resending the same template" on this action to send anyway.`,
+      };
+    }
   }
 
   const templateLanguage =
@@ -315,7 +349,10 @@ async function executeRescheduleImile(
   const trackingNumber =
     context.tracking?.trackingNumber?.trim() || order.trackingNumber?.trim() || null;
   if (!trackingNumber) {
-    return { output: `Skipped: order ${order.codNetworkOrderId} has no tracking number` };
+    return {
+      skipped: true,
+      output: `Skipped: order ${order.codNetworkOrderId} has no tracking number`,
+    };
   }
 
   const carrier =
@@ -324,6 +361,7 @@ async function executeRescheduleImile(
     null;
   if (carrier !== TrackingCarrier.IMILE) {
     return {
+      skipped: true,
       output: `Skipped: ${trackingNumber} is not an iMile shipment (carrier: ${carrier ?? "unknown"})`,
     };
   }
@@ -333,7 +371,10 @@ async function executeRescheduleImile(
     trackingStatus === TrackingStatus.DELIVERED ||
     trackingStatus === TrackingStatus.RETURNED
   ) {
-    return { output: `Skipped: ${trackingNumber} is already ${trackingStatus}` };
+    return {
+      skipped: true,
+      output: `Skipped: ${trackingNumber} is already ${trackingStatus}`,
+    };
   }
 
   const timeZone = (await getSetting(SETTING_KEYS.AUTOMATION_TIMEZONE))?.trim() || null;
@@ -345,6 +386,7 @@ async function executeRescheduleImile(
     formatDateInTimezone(new Date(order.imileScheduledAt), timeZone) === today;
   if (alreadyToday) {
     return {
+      skipped: true,
       output: `Skipped: ${trackingNumber} was already rescheduled today (for ${order.imileScheduledDate})`,
     };
   }

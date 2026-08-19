@@ -4,7 +4,10 @@ import { importTemplatesFromMeta } from "./template-import";
 import { syncProductsFromCodNetwork } from "./product-sync";
 import { refreshAllTracking, syncTrackingFromOrders } from "./tracking";
 import { runScheduledAutomations } from "./automations";
-import { runScheduledFlows } from "./automation-flows/engine";
+import {
+  pruneFlowRunHistory,
+  runScheduledFlows,
+} from "./automation-flows/engine";
 
 /**
  * Lightweight in-process scheduler that runs `syncOrders()` on a recurring
@@ -106,6 +109,19 @@ async function tick(): Promise<void> {
   } catch (err) {
     console.warn(
       "[auto-sync] scheduled flow sweep failed",
+      err instanceof Error ? err.message : err
+    );
+  }
+
+  // Trim run history so the biggest table in the database stays bounded.
+  try {
+    const pruned = await pruneFlowRunHistory();
+    if (pruned > 0) {
+      console.log(`[auto-sync] pruned ${pruned} old automation flow runs`);
+    }
+  } catch (err) {
+    console.warn(
+      "[auto-sync] flow run history prune failed",
       err instanceof Error ? err.message : err
     );
   }

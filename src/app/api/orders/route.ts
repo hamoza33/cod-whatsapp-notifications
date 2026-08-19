@@ -120,11 +120,15 @@ export async function GET(request: NextRequest) {
     }
   }
 
-  const enrichedOrders = orders.map((o) => {
-    const inlineImages = extractProductImages(o.rawOrderJson);
+  // `rawOrderJson` is the full COD Network payload (~8 KB per order) and is
+  // only used server-side, for image/SKU extraction. Dropping it from the
+  // response keeps the Pipeline's 1000-order fetch from shipping ~8 MB of
+  // JSON to the browser on every navigation.
+  const enrichedOrders = orders.map(({ rawOrderJson, ...o }) => {
+    const inlineImages = extractProductImages(rawOrderJson);
     let catalogImage: string | null = null;
     if (inlineImages.length === 0) {
-      const { names, skus } = collectProductKeys(o.productName, o.rawOrderJson);
+      const { names, skus } = collectProductKeys(o.productName, rawOrderJson);
       for (const s of skus) {
         const hit = imageBySkuLower.get(s.trim().toLowerCase());
         if (hit) {

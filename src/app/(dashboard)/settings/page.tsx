@@ -730,6 +730,7 @@ export default function SettingsPage() {
               "automation_delay_seconds",
               "automation_send_once",
               "automation_timezone",
+              "automation_run_retention_days",
               "default_country_code",
             ])
           }
@@ -814,6 +815,19 @@ export default function SettingsPage() {
             <code>Africa/Casablanca</code>, <code>Europe/London</code>, or{" "}
             <code>UTC</code>. A rule scheduled for hour H fires for matching
             orders once the local time reaches H:00.
+          </p>
+          <SettingsField
+            label="Automation Run History Retention (days)"
+            value={settings.automation_run_retention_days || "7"}
+            onChange={(v) => updateSetting("automation_run_retention_days", v)}
+            placeholder="7"
+            type="number"
+          />
+          <p className="text-xs text-gray-500 -mt-2 mb-4">
+            Every automation trigger records a run (including runs whose
+            conditions didn&apos;t match). Runs older than this are deleted on
+            each sync so the history can&apos;t grow large enough to slow the
+            dashboard down.
           </p>
           <SettingsField
             label="Default Country Code"

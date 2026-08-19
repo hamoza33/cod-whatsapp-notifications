@@ -417,6 +417,10 @@ model AutomationFlowRun {
 
   @@index([flowId, startedAt])
   @@index([orderId])
+  /// Supports the once-per-order guard lookup.
+  @@index([flowId, orderId, startedAt])
+  /// Supports retention pruning by age.
+  @@index([startedAt])
   @@map("automation_flow_runs")
 }
 
