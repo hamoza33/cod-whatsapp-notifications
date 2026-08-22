@@ -402,10 +402,10 @@ async function executeRescheduleImile(
       ? ` (iMile suggested ${result.suggestedDate})`
       : "";
     const message = `could not reschedule ${trackingNumber} to ${targetDate}: ${result.error}${suggestion}`;
-    // iMile closes a waybill once the parcel is delivered or handed back to
-    // the merchant and then refuses any new date. That's the parcel's final
-    // state, not a fault in the flow, so it skips instead of failing the run.
-    if (isImileClosedOrderError(result.error)) {
+    // A parcel iMile won't re-book (finished waybill, or already out with the
+    // courier) is the parcel's own state rather than a fault in the flow, so it
+    // skips instead of failing the run — and no customer message goes out.
+    if (isImileNotSchedulableError(result.error)) {
       return { skipped: true, output: `Skipped: ${message}` };
     }
     throw new Error(`reschedule_imile: ${message}`);
@@ -436,11 +436,17 @@ async function executeRescheduleImile(
   };
 }
 
-/** iMile's "this waybill is finished" rejections, in both its languages. */
-function isImileClosedOrderError(error: string | null | undefined): boolean {
+/**
+ * iMile's "this parcel can't take a new date" rejections, in both languages.
+ * Covers finished waybills (delivered / returned to merchant) and parcels the
+ * courier is already carrying today, which iMile refuses with a booking error.
+ */
+function isImileNotSchedulableError(error: string | null | undefined): boolean {
   const text = (error ?? "").toLowerCase();
   return (
     text.includes("scheduling not allowed") ||
+    text.includes("预约派件失败") ||
+    text.includes("已在派送中") ||
     text.includes("已完结") ||
     text.includes("已退返商家") ||
     text.includes("已签收")
