@@ -1110,7 +1110,7 @@ export default function SettingsPage() {
               "ai_suggestions_enabled",
               "ai_suggestions_count",
               "ai_suggestions_system_prompt",
-              "ai_suggestions_max_tokens",
+              "ai_suggestions_min_tokens",
             ])
           }
           saving={saving}
@@ -1255,12 +1255,16 @@ export default function SettingsPage() {
               help="How many reply suggestions to generate (1-5)."
             />
             <SettingsField
-              label="Suggestion Max Tokens"
-              value={settings.ai_suggestions_max_tokens || "500"}
-              onChange={(v) => updateSetting("ai_suggestions_max_tokens", v)}
+              label="Suggestion Minimum Length (tokens)"
+              value={
+                settings.ai_suggestions_min_tokens ||
+                settings.ai_suggestions_max_tokens ||
+                "500"
+              }
+              onChange={(v) => updateSetting("ai_suggestions_min_tokens", v)}
               type="number"
               placeholder="500"
-              help="Maximum length of the generated suggestions (50–4000). Raise this if replies get cut off / come back too short. This budget is shared across all suggestions in one generation, so higher counts need more tokens."
+              help="Shortest answer you want back (50–4000). Each suggestion is asked to reach roughly this length, and the hard cap is set well above it so replies are never cut off. Raise it for longer, more detailed suggestions."
             />
             <div className="mb-4">
               <label className="block text-sm font-medium text-gray-700 mb-1">

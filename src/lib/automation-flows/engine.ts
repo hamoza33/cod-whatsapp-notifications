@@ -569,6 +569,47 @@ async function alreadyActedOnOrder(
 }
 
 /**
+ * Move an order into the `SCHEDULED` pipeline stage once a run both re-booked
+ * its iMile delivery and told the customer about the new date. Operators need
+ * a column holding exactly the parcels a new delivery day was promised for, so
+ * this is applied by the engine rather than requiring a manual
+ * `change_order_status` node after every reschedule.
+ */
+async function moveRescheduledOrderToScheduled(
+  context: FlowExecutionContext,
+  steps: FlowRunStep[]
+): Promise<void> {
+  const order = context.order;
+  if (!order || order.status === OrderStatus.SCHEDULED) return;
+  const rescheduled = steps.some(
+    (s) => s.nodeKind === "reschedule_imile" && s.status === "success"
+  );
+  if (!rescheduled) return;
+  const notified = steps.some(
+    (s) =>
+      (s.nodeKind === "send_template" || s.nodeKind === "send_text_message") &&
+      s.status === "success"
+  );
+  if (!notified) return;
+
+  await prisma.order.update({
+    where: { id: order.id },
+    data: { status: OrderStatus.SCHEDULED },
+  });
+  order.status = OrderStatus.SCHEDULED;
+  steps.push({
+    nodeId: "auto-scheduled",
+    nodeType: "action",
+    nodeKind: "change_order_status",
+    status: "success",
+    output: `Moved order to the Scheduled pipeline (delivery re-booked for ${
+      context.imile?.scheduledDate ?? order.imileScheduledDate ?? "a later day"
+    })`,
+    ranAt: new Date().toISOString(),
+  });
+}
+
+/**
  * Run a single flow against the given context, recording a step-by-step
  * timeline on `AutomationFlowRun.stepsJson`. If the flow hits a
  * `wait_for_reply` action, returns with status `WAITING` and the run row
@@ -655,6 +696,8 @@ export async function executeFlow(
     context,
     steps
   );
+
+  await moveRescheduledOrderToScheduled(context, steps);
 
   if (result.status === "WAITING") {
     await parkRunForReply(run.id, flow.id, context, steps, result.wait);

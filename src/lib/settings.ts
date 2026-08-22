@@ -96,6 +96,9 @@ export const SETTING_KEYS = {
   AI_SUGGESTIONS_COUNT: "ai_suggestions_count",
   AI_SUGGESTIONS_SYSTEM_PROMPT: "ai_suggestions_system_prompt",
   AI_SUGGESTIONS_MAX_TOKENS: "ai_suggestions_max_tokens",
+  // Minimum length the operator wants each suggestion to reach. Falls back to
+  // the older max-tokens key so existing configurations keep their number.
+  AI_SUGGESTIONS_MIN_TOKENS: "ai_suggestions_min_tokens",
   // Automation auto-run — when enabled, automations trigger automatically
   // without needing to click "Run now"
   AUTOMATION_AUTO_RUN: "automation_auto_run",

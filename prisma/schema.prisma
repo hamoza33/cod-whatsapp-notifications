@@ -51,6 +51,9 @@ enum OrderStatus {
   ASSIGNED
   OUT_OF_STOCK
   RETURN_ON_PROCESS
+  // Set by the `reschedule_imile` automation action once the parcel has been
+  // re-booked and the customer notified.
+  SCHEDULED
 }
 
 model Order {

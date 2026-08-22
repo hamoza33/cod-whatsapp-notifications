@@ -245,6 +245,7 @@ const ORDER_STATUSES = [
   "DELIVERED",
   "RETURNED",
   "CANCELLED",
+  "SCHEDULED",
   "UNKNOWN",
   "NEW",
   "NO_REPLY",

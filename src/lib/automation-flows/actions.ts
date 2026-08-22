@@ -333,7 +333,8 @@ async function executeQueueCall(context: FlowExecutionContext): Promise<ActionRe
  * safe to drop into a flow that also sees non-iMile orders:
  *   1. order must have a tracking number
  *   2. carrier must resolve to iMile
- *   3. tracking status must not be DELIVERED/RETURNED (nothing to reschedule)
+ *   3. tracking status must not be DELIVERED/RETURNED/EXPIRED (nothing to
+ *      reschedule — an expired parcel has already gone back to the merchant)
  *   4. the parcel must not already have been rescheduled earlier today
  *      — this is what keeps a daily sweep from re-booking on every tick
  */
@@ -369,7 +370,8 @@ async function executeRescheduleImile(
   const trackingStatus = context.tracking?.status ?? null;
   if (
     trackingStatus === TrackingStatus.DELIVERED ||
-    trackingStatus === TrackingStatus.RETURNED
+    trackingStatus === TrackingStatus.RETURNED ||
+    trackingStatus === TrackingStatus.EXPIRED
   ) {
     return {
       skipped: true,
@@ -399,9 +401,14 @@ async function executeRescheduleImile(
     const suggestion = result.suggestedDate
       ? ` (iMile suggested ${result.suggestedDate})`
       : "";
-    throw new Error(
-      `reschedule_imile: could not reschedule ${trackingNumber} to ${targetDate}: ${result.error}${suggestion}`
-    );
+    const message = `could not reschedule ${trackingNumber} to ${targetDate}: ${result.error}${suggestion}`;
+    // iMile closes a waybill once the parcel is delivered or handed back to
+    // the merchant and then refuses any new date. That's the parcel's final
+    // state, not a fault in the flow, so it skips instead of failing the run.
+    if (isImileClosedOrderError(result.error)) {
+      return { skipped: true, output: `Skipped: ${message}` };
+    }
+    throw new Error(`reschedule_imile: ${message}`);
   }
 
   const scheduledAt = new Date();
@@ -427,6 +434,17 @@ async function executeRescheduleImile(
   return {
     output: `Rescheduled iMile ${trackingNumber} to ${result.scheduledDate}${note}`,
   };
+}
+
+/** iMile's "this waybill is finished" rejections, in both its languages. */
+function isImileClosedOrderError(error: string | null | undefined): boolean {
+  const text = (error ?? "").toLowerCase();
+  return (
+    text.includes("scheduling not allowed") ||
+    text.includes("已完结") ||
+    text.includes("已退返商家") ||
+    text.includes("已签收")
+  );
 }
 
 async function executeWait(action: ActionNodeData): Promise<ActionResult> {

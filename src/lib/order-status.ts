@@ -44,6 +44,7 @@ const PIPELINE_RANK: Partial<Record<OrderStatus, number>> = {
   [OrderStatus.ASSIGNED]: 4,
   [OrderStatus.SHIPPED]: 5,
   [OrderStatus.OUT_FOR_DELIVERY]: 6,
+  [OrderStatus.SCHEDULED]: 7,
 };
 
 const TERMINAL_STATUSES = new Set<OrderStatus>([
@@ -91,6 +92,14 @@ export function deriveOrderStatus(input: {
     label === "canceled price"
   ) {
     return OrderStatus.CANCELLED_PRICE;
+  }
+
+  // 1a. A parcel deliberately re-booked for a later day stays in SCHEDULED
+  //     until it reaches a terminal state (handled above). Courier churn
+  //     ("in transit" / "out for delivery" again) must not pull it back out of
+  //     the Scheduled column the operator is working from.
+  if (previous === OrderStatus.SCHEDULED) {
+    return OrderStatus.SCHEDULED;
   }
 
   // 1b. Lead-specific statuses from COD Network dashboard.

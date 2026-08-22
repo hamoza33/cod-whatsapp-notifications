@@ -17,6 +17,7 @@ const ALLOWED_STATUSES: OrderStatus[] = [
   "DELIVERED",
   "RETURNED",
   "CANCELLED",
+  "SCHEDULED",
   "UNKNOWN",
 ];
 

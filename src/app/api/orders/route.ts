@@ -173,6 +173,7 @@ const VALID_STATUSES = new Set<OrderStatus>([
   "DELIVERED",
   "RETURNED",
   "CANCELLED",
+  "SCHEDULED",
   "UNKNOWN",
 ]);
 
