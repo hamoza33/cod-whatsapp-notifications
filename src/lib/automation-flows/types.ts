@@ -19,6 +19,7 @@ export type FlowTriggerType =
   | "ORDER_STATUS_CHANGED"
   | "TRACKING_STATUS_CHANGED"
   | "MESSAGE_RECEIVED"
+  | "SCHEDULED"
   | "MANUAL";
 
 export const FLOW_TRIGGER_TYPES: ReadonlyArray<FlowTriggerType> = [
@@ -27,6 +28,7 @@ export const FLOW_TRIGGER_TYPES: ReadonlyArray<FlowTriggerType> = [
   "ORDER_STATUS_CHANGED",
   "TRACKING_STATUS_CHANGED",
   "MESSAGE_RECEIVED",
+  "SCHEDULED",
   "MANUAL",
 ] as const;
 
@@ -57,6 +59,24 @@ export interface TriggerNodeData {
   toStatus?: OrderStatus | null;
   trackingFromStatus?: TrackingStatus | null;
   trackingToStatus?: TrackingStatus | null;
+  /**
+   * For the `SCHEDULED` trigger: the daily wall-clock time (in the configured
+   * automation timezone) at or after which the flow sweeps every matching
+   * order once per day. `scheduleStatus` optionally bounds the sweep to orders
+   * currently in that status.
+   */
+  scheduleHour?: number | null;
+  scheduleMinute?: number | null;
+  scheduleStatus?: OrderStatus | null;
+  /**
+   * Suppress repeat runs for an order this flow already acted on. Defaults
+   * to `true` for the one-shot lifecycle triggers (ORDER_CREATED,
+   * ORDER_STATUS_CHANGED, ORDER_TRACKING_ASSIGNED, TRACKING_STATUS_CHANGED)
+   * and `false` for SCHEDULED / MESSAGE_RECEIVED / MANUAL. For the status
+   * triggers the guard is keyed on the resulting status, so a genuine move
+   * to a different status still fires.
+   */
+  runOncePerOrder?: boolean | null;
 }
 
 /**
@@ -127,6 +147,7 @@ export type ActionKind =
   | "add_pipeline_note"
   | "pin_conversation"
   | "queue_call_agent"
+  | "reschedule_imile"
   | "wait"
   | "wait_for_reply"
   | "webhook"
@@ -139,6 +160,7 @@ export const ACTION_KINDS: ReadonlyArray<ActionKind> = [
   "add_pipeline_note",
   "pin_conversation",
   "queue_call_agent",
+  "reschedule_imile",
   "wait",
   "wait_for_reply",
   "webhook",
@@ -154,12 +176,23 @@ export interface ActionNodeData {
   templateLanguage?: string | null;
   templateVariables?: string[] | null;
   templateHeaderImageUrl?: string | null;
+  /**
+   * Send the template even when the same template already went out for this
+   * order in the last 24h. Off by default — the guard is the last line of
+   * defense against a misconfigured flow spamming a customer.
+   */
+  allowDuplicateSend?: boolean | null;
   // send_text_message
   text?: string | null;
   // change_order_status
   targetStatus?: OrderStatus | null;
   // add_pipeline_note
   note?: string | null;
+  // reschedule_imile — push an undelivered iMile parcel to a later delivery
+  // date via the iMile scheduling service. Only acts on iMile shipments;
+  // anything else is skipped so the action is safe to drop into a mixed-
+  // carrier flow.
+  rescheduleDaysAhead?: number | null;
   // wait
   waitSeconds?: number | null;
   // wait_for_reply — pause the flow until the customer replies. The
@@ -221,8 +254,19 @@ export interface FlowExecutionContext {
   time: {
     now: Date;
     hour: number;
+    minute: number; // 0-59
     dayOfWeek: number; // 0=Sun, 6=Sat
   };
+  /**
+   * Set by the `reschedule_imile` action so downstream nodes (typically the
+   * follow-up template) can reference the date that was actually booked.
+   */
+  imile?: {
+    scheduledDate: string;
+    requestedDate: string;
+    usedSuggestedDate: boolean;
+    trackingNumber: string;
+  } | null;
   /** Bag of variables set/read by action nodes via `set variable` (future). */
   vars: Record<string, string>;
 }
@@ -237,6 +281,13 @@ export interface FlowOrderSnapshot {
   customerCity: string | null;
   customerAddress: string | null;
   productName: string | null;
+  /**
+   * Comma-joined SKUs for the order: those present in the COD Network
+   * payload plus the SKUs of catalog products matched from the product
+   * name. Lets conditions target a specific SKU instead of a name that
+   * varies by language / bundle.
+   */
+  productSku: string | null;
   productPrice: string | null;
   productQuantity: string | null;
   trackingNumber: string | null;
@@ -246,8 +297,17 @@ export interface FlowOrderSnapshot {
   isManual: boolean;
   createdAt: Date;
   codCreatedAt: Date | null;
+  /**
+   * Whole days elapsed since the order was created (COD Network creation
+   * date if available, otherwise the local row's createdAt). Computed at
+   * context-build time so conditions like "order age <= 2 days" work.
+   */
+  ageDays: number | null;
   pipelineNote: string | null;
   callAgentQueued: boolean;
+  /** Last delivery date booked with iMile (YYYY-MM-DD), and when. */
+  imileScheduledDate: string | null;
+  imileScheduledAt: Date | null;
 }
 
 export interface FlowTrackingSnapshot {

@@ -46,7 +46,8 @@ type OrderStatus =
   | "BLACK_LISTED"
   | "ASSIGNED"
   | "OUT_OF_STOCK"
-  | "RETURN_ON_PROCESS";
+  | "RETURN_ON_PROCESS"
+  | "SCHEDULED";
 
 type PipelineView = "leads" | "orders";
 
@@ -78,6 +79,7 @@ const ORDER_STATUSES: OrderStatus[] = [
   "PENDING",
   "RETURN_ON_PROCESS",
   "PROCESSING",
+  "SCHEDULED",
 ];
 
 const ALL_STATUSES: OrderStatus[] = [
@@ -124,6 +126,7 @@ const STATUS_LABELS: Record<string, string> = {
   ASSIGNED: "Assigned",
   OUT_OF_STOCK: "Out of Stock",
   RETURN_ON_PROCESS: "Return on Process",
+  SCHEDULED: "Scheduled",
   UNKNOWN: "Unknown",
   __SENT__: "WhatsApp Sent",
   __CALL_AGENT__: "Call Agent",
@@ -150,6 +153,7 @@ const STATUS_COLORS: Record<string, string> = {
   ASSIGNED: "bg-sky-100 text-sky-700 border-sky-300",
   OUT_OF_STOCK: "bg-orange-200 text-orange-800 border-orange-400",
   RETURN_ON_PROCESS: "bg-violet-100 text-violet-700 border-violet-300",
+  SCHEDULED: "bg-purple-100 text-purple-700 border-purple-300",
   UNKNOWN: "bg-slate-100 text-slate-700 border-slate-300",
 };
 

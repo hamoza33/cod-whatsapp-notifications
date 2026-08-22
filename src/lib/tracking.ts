@@ -785,11 +785,14 @@ export async function reclassifyStoredStatuses() {
 //            courier API's POST /track/bulk endpoint, so a single 50-item
 //            HTTP request returns in seconds rather than a single-shot per
 //            waybill (~50× speed-up for iMile's ~2 750 orders).
-//   - jte:   1 worker, chunk-size 1, calling fetchCourierApiTracking().
-//            The courier API solves a Tencent slider captcha per call which
-//            is forced sequential server-side. Running more than 1 worker
-//            here just queues requests on the upstream and causes ours to
-//            hit the 120s client timeout before the upstream finishes.
+//   - jte:   1 worker, chunk-size 20, calling fetchCourierApiBulk() with
+//            jtProvider=auto. The courier API tracks J&T TrackingMore-first
+//            (2Captcha-solved Turnstile) with a Tencent-captcha fallback and
+//            groups J&T internally (20 for TrackingMore, 10 for Tencent) under
+//            bounded concurrency (JT_BULK_CONCURRENCY), so one /track/bulk
+//            request of 20 waybills maps to one TrackingMore group. Keeping our
+//            own concurrency at 1 (one batch in flight) avoids stacking waves
+//            on the upstream and blowing the client timeout.
 //   - naqel: 5 workers, chunk-size 1, calling fetchCourierApiTracking().
 //            Routed through the courier API (which scrapes the public
 //            Naqel tracking page server-side); the local scraper used
@@ -818,6 +821,20 @@ const DEFAULT_WALL_CLOCK_MS = 120_000;
 // Number of waybills sent in a single POST /track/bulk request. 50 keeps the
 // request body small while still giving ~50× speed-up over per-waybill calls.
 const BULK_CHUNK_SIZE = 50;
+// J&T Express: the courier-tracking-api now tracks J&T "TrackingMore-first"
+// (auto = TrackingMore page via a 2Captcha-solved Turnstile, falling back to
+// the legacy Tencent captcha solver). The server groups J&T internally —
+// TrackingMore/auto in groups of 20, Tencent in groups of 10 — and runs the
+// groups with bounded concurrency (JT_BULK_CONCURRENCY). We send JTE in
+// batches of 20 to line up with the TrackingMore group size (one request →
+// one server-side group) and let it re-chunk on Tencent fallback.
+const JTE_BULK_CHUNK_SIZE = 20;
+// A TrackingMore group returns quickly, but a Tencent fallback wave can take
+// 60-90s; keep generous headroom, just under the wall-clock budget so a JTE
+// request can't outlive the refresh call.
+const JTE_BULK_TIMEOUT_MS = 110_000;
+// Let the service pick the provider: TrackingMore first, Tencent on failure.
+const JTE_PROVIDER = "auto" as const;
 
 interface ActiveOrderRow {
   id: string;
@@ -913,12 +930,31 @@ export async function refreshAllTracking(
       ? { reclassified: 0, totalScanned: 0 }
       : await reclassifyOtherOrders(deadline);
 
-  // Read the courier API URL override once so every pool shares it.
+  // Read the courier API URL override + JTE knobs once so every pool shares them.
   const trackingSettings = await getSettings([
     SETTING_KEYS.COURIER_TRACKING_API_URL,
+    SETTING_KEYS.COURIER_JTE_PROVIDER,
+    SETTING_KEYS.COURIER_JTE_BATCH_SIZE,
   ]);
   const courierApiUrl =
     trackingSettings[SETTING_KEYS.COURIER_TRACKING_API_URL] || undefined;
+  // JTE provider hint (auto|trackingmore|tencent); anything else falls back to
+  // the "auto" default. Editable from Settings → Tracking.
+  const jteProviderSetting = trackingSettings[SETTING_KEYS.COURIER_JTE_PROVIDER];
+  const jteProvider: "auto" | "trackingmore" | "tencent" =
+    jteProviderSetting === "trackingmore" || jteProviderSetting === "tencent"
+      ? jteProviderSetting
+      : JTE_PROVIDER;
+  // JTE per-request batch size; clamp to 1..20 (server caps TrackingMore
+  // groups at 20). Editable from Settings → Tracking.
+  const jteBatchRaw = Number.parseInt(
+    trackingSettings[SETTING_KEYS.COURIER_JTE_BATCH_SIZE] ?? "",
+    10
+  );
+  const jteBatchSize =
+    Number.isFinite(jteBatchRaw) && jteBatchRaw >= 1
+      ? Math.min(20, jteBatchRaw)
+      : JTE_BULK_CHUNK_SIZE;
 
   // Build the carrier predicate. carrierFilter (set by the "Refresh Section"
   // button when a carrier is selected) narrows to a single carrier. When not
@@ -932,10 +968,12 @@ export async function refreshAllTracking(
   //     "Refresh Section" button) — always wins.
   //   - includeFinal=true: no status filter (Refresh All across every status
   //     including DELIVERED + RETURNED).
-  //   - default: cron-style active-state allowlist (now includes ALL seven
-  //     non-final + UNKNOWN states; DELIVERED + RETURNED still excluded so
-  //     the 5-min cron doesn't repeatedly bill the courier API for terminal
-  //     orders).
+  //   - default: cron-style active-state allowlist. EXPIRED is included so
+  //     abandoned orders keep getting re-checked and move to their correct
+  //     terminal status (DELIVERED / RETURNED) if the carrier finally resolves
+  //     them — otherwise the inline classifier just re-stamps them EXPIRED.
+  //     DELIVERED + RETURNED stay excluded so the 5-min cron doesn't
+  //     repeatedly bill the courier API for genuinely terminal orders.
   const statusPredicate: Prisma.TrackingOrderWhereInput["status"] | undefined =
     statusFilter
       ? statusFilter
@@ -948,6 +986,7 @@ export async function refreshAllTracking(
               TrackingStatus.OUT_FOR_DELIVERY,
               TrackingStatus.EXCEPTION,
               TrackingStatus.UNKNOWN,
+              TrackingStatus.EXPIRED,
             ],
           };
 
@@ -1091,9 +1130,15 @@ export async function refreshAllTracking(
   const buildBulkPool = (
     orders: ActiveOrderRow[],
     carrier: TrackingCarrier,
-    concurrency: number
+    concurrency: number,
+    chunkSize: number = BULK_CHUNK_SIZE,
+    bulkOpts?: {
+      maxPerRequest?: number;
+      timeoutMs?: number;
+      jtProvider?: "auto" | "trackingmore" | "tencent";
+    }
   ): Promise<void> => {
-    const chunks = chunkBy(orders, BULK_CHUNK_SIZE);
+    const chunks = chunkBy(orders, chunkSize);
     totalChunks += chunks.length;
     return drainQueue(chunks, concurrency, deadline, async (chunk) => {
       const trackingNumbers = chunk.map((o) => o.trackingNumber);
@@ -1102,7 +1147,8 @@ export async function refreshAllTracking(
         resultMap = await fetchCourierApiBulk(
           trackingNumbers,
           carrier,
-          courierApiUrl
+          courierApiUrl,
+          bulkOpts
         );
       } catch (err) {
         const detail = err instanceof Error ? err.message : "fetch_failed";
@@ -1148,39 +1194,24 @@ export async function refreshAllTracking(
     JDW_CONCURRENCY
   );
 
-  // ---------- JTE pool: courier-tracking-api, 1 worker, one at a time ----------
-  // The courier API handles Tencent Captcha solving for JT Express server-side
-  // and forces J&T waybills sequential even inside /track/bulk, so bulking
-  // gives no speed-up here. We also keep concurrency at 1: anything higher
-  // queues server-side and our 2nd/3rd request hits the 120s client timeout
-  // before the upstream gets to it, surfacing as a confusing UNKNOWN demote.
+  // ---------- JTE pool: /track/bulk, TrackingMore-first, batches of 20 ------
+  // The courier-tracking-api now tracks J&T TrackingMore-first (auto), with a
+  // Tencent-captcha fallback, and groups J&T internally (20 for TrackingMore,
+  // 10 for Tencent) under bounded concurrency (JT_BULK_CONCURRENCY). We send
+  // JTE through POST /track/bulk in batches of 20 with jtProvider=auto so each
+  // request maps to one TrackingMore group. Concurrency stays at 1 (one batch
+  // in flight) so we don't stack multiple captcha waves on the upstream and
+  // blow the client timeout.
   const JTE_CONCURRENCY = 1;
-  const jteQueue: ActiveOrderRow[][] = buckets.jte.map((o) => [o]);
-  totalChunks += jteQueue.length;
-
-  const jtePool = drainQueue(
-    jteQueue,
+  const jtePool = buildBulkPool(
+    buckets.jte,
+    TrackingCarrier.JTE,
     JTE_CONCURRENCY,
-    deadline,
-    async (chunk) => {
-      for (const o of chunk) {
-        let result: ProviderResult;
-        try {
-          result = await fetchCourierApiTracking(
-            o.trackingNumber,
-            TrackingCarrier.JTE,
-            courierApiUrl
-          );
-        } catch (err) {
-          const detail = err instanceof Error ? err.message : "fetch_failed";
-          result = {
-            events: [],
-            rawStatus: null,
-            error: `courier_api_error:${detail}`,
-          };
-        }
-        await persistAndRecord(o, result);
-      }
+    jteBatchSize,
+    {
+      maxPerRequest: jteBatchSize,
+      timeoutMs: JTE_BULK_TIMEOUT_MS,
+      jtProvider: jteProvider,
     }
   );
 

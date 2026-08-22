@@ -1,6 +1,7 @@
 import { getSetting, SETTING_KEYS } from "./settings";
 import { prisma } from "./prisma";
 import { WhatsAppClient } from "./whatsapp";
+import { matchCatalogProducts } from "./product-matching";
 
 interface OrderContext {
   customerName: string | null;
@@ -12,6 +13,33 @@ interface OrderContext {
   productPrice: string | null;
   deliveryCompany: string | null;
   latestTrackingEvent: string | null;
+  rawOrderJson?: unknown;
+}
+
+/**
+ * Find the AI-enabled catalog product an order refers to. COD Network joins
+ * every item into one `productName` string, so an exact name lookup misses
+ * multi-product orders — match on SKU / normalized name / substring instead,
+ * and prefer a product that carries its own system prompt.
+ */
+async function resolveAiProduct(
+  order: OrderContext
+): Promise<{ aiSystemPrompt: string | null } | null> {
+  const enabledProducts = await prisma.product.findMany({
+    where: { aiAgentEnabled: true },
+    select: { name: true, nameArabic: true, sku: true, aiSystemPrompt: true },
+  });
+  if (enabledProducts.length === 0) return null;
+
+  const matches = matchCatalogProducts(
+    enabledProducts,
+    order.productName,
+    order.rawOrderJson ?? null
+  );
+  if (matches.length === 0) return null;
+  return (
+    matches.find((p) => p.aiSystemPrompt && p.aiSystemPrompt.trim()) ?? matches[0]
+  );
 }
 
 /**
@@ -37,11 +65,8 @@ export async function handleAiAutoReply(
   if (!order?.productName) {
     return { replied: false, error: "No product context for AI auto-reply" };
   }
-  const product = await prisma.product.findFirst({
-    where: { name: order.productName },
-    select: { aiAgentEnabled: true },
-  });
-  if (!product || !product.aiAgentEnabled) {
+  const product = await resolveAiProduct(order);
+  if (!product) {
     return { replied: false, error: "AI agent not enabled for this product" };
   }
 
@@ -50,7 +75,11 @@ export async function handleAiAutoReply(
     (await getSetting(SETTING_KEYS.AI_AGENT_MAX_TOKENS)) || "300",
     10
   );
+  // Prompt precedence: a product-specific prompt (set in the Products page)
+  // wins for conversations about that product; otherwise fall back to the
+  // global AI system prompt.
   let systemPrompt =
+    (product.aiSystemPrompt && product.aiSystemPrompt.trim()) ||
     (await getSetting(SETTING_KEYS.AI_AGENT_SYSTEM_PROMPT)) ||
     "You are a helpful customer service agent for a delivery company. Keep responses short for WhatsApp.";
 

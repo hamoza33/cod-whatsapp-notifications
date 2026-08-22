@@ -34,7 +34,8 @@ type OrderStatus =
   | "BLACK_LISTED"
   | "ASSIGNED"
   | "OUT_OF_STOCK"
-  | "RETURN_ON_PROCESS";
+  | "RETURN_ON_PROCESS"
+  | "SCHEDULED";
 
 const STATUSES: OrderStatus[] = [
   "NEW",
@@ -57,6 +58,7 @@ const STATUSES: OrderStatus[] = [
   "PENDING",
   "RETURN_ON_PROCESS",
   "OUT_FOR_DELIVERY",
+  "SCHEDULED",
   "UNKNOWN",
 ];
 

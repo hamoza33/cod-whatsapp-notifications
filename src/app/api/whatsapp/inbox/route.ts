@@ -4,6 +4,33 @@ import { getAuthUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 
 /**
+ * Load the order tied to a conversation plus its latest package-tracking
+ * status. `trackingStatus` comes from the TrackingOrder (package tracking)
+ * table — distinct from the order's own pipeline `status` — so the inbox can
+ * show both badges. Returns null when there is no order.
+ */
+async function loadOrderForInbox(orderId: string) {
+  const order = await prisma.order.findUnique({
+    where: { id: orderId },
+    select: {
+      id: true,
+      codNetworkOrderId: true,
+      customerName: true,
+      productName: true,
+      status: true,
+      trackingOrders: {
+        select: { status: true },
+        orderBy: { updatedAt: "desc" },
+        take: 1,
+      },
+    },
+  });
+  if (!order) return null;
+  const { trackingOrders, ...rest } = order;
+  return { ...rest, trackingStatus: trackingOrders[0]?.status ?? null };
+}
+
+/**
  * Returns one row per contact (both inbound and outbound-only), with their
  * most recent activity. Used by the Inbox conversation list.
  *
@@ -206,16 +233,7 @@ export async function GET(request: NextRequest) {
         ? latestOut.order_id ?? row.order_id
         : row.order_id;
       const order = effectiveOrderId
-        ? await prisma.order.findUnique({
-            where: { id: effectiveOrderId },
-            select: {
-              id: true,
-              codNetworkOrderId: true,
-              customerName: true,
-              productName: true,
-              status: true,
-            },
-          })
+        ? await loadOrderForInbox(effectiveOrderId)
         : null;
       return {
         phoneNumber: row.from_phone_number,
@@ -242,16 +260,7 @@ export async function GET(request: NextRequest) {
       .filter((r) => !inboundDigits.has(r.phone_number.replace(/\D/g, "")))
       .map(async (row) => {
         const order = row.order_id
-          ? await prisma.order.findUnique({
-              where: { id: row.order_id },
-              select: {
-                id: true,
-                codNetworkOrderId: true,
-                customerName: true,
-                productName: true,
-                status: true,
-              },
-            })
+          ? await loadOrderForInbox(row.order_id)
           : null;
         return {
           phoneNumber: row.phone_number,

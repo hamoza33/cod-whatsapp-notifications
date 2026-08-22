@@ -3,6 +3,7 @@ import { getAuthUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { OrderStatus } from "@prisma/client";
 import { randomBytes } from "crypto";
+import { collectProductKeys } from "@/lib/product-matching";
 import {
   fireOrderCreatedFlows,
   fireOrderTrackingAssignedFlows,
@@ -82,32 +83,75 @@ export async function GET(request: NextRequest) {
     prisma.order.count({ where }),
   ]);
 
-  // Enrich orders with product image URLs from the products catalog
-  const productNames = [
-    ...new Set(
-      orders
-        .map((o) => o.productName)
-        .filter((n): n is string => !!n)
-    ),
-  ];
-  const productImageMap = new Map<string, string>();
-  if (productNames.length > 0) {
+  // Enrich orders with product image URLs from the products catalog. Orders
+  // synced from /orders carry item images inline (extractProductImages), but
+  // leads (and some multi-product / Arabic-named orders) don't — so we also
+  // resolve against the catalog by SKU and normalized name. Leads carry the
+  // SKU in `products` ("Name/SKU") and `original_payload.sku_1…`, which is the
+  // most reliable key since names often don't match the catalog exactly.
+  const allNames = new Set<string>();
+  const allSkus = new Set<string>();
+  for (const o of orders) {
+    const { names, skus } = collectProductKeys(o.productName, o.rawOrderJson);
+    for (const n of names) allNames.add(n);
+    for (const s of skus) allSkus.add(s);
+  }
+
+  const imageByNameLower = new Map<string, string>();
+  const imageBySkuLower = new Map<string, string>();
+  if (allNames.size > 0 || allSkus.size > 0) {
     const products = await prisma.product.findMany({
-      where: { name: { in: productNames } },
-      select: { name: true, imageUrl: true },
+      where: {
+        OR: [
+          { name: { in: [...allNames] } },
+          { nameArabic: { in: [...allNames] } },
+          { sku: { in: [...allSkus] } },
+        ],
+      },
+      select: { name: true, nameArabic: true, sku: true, imageUrl: true },
     });
     for (const p of products) {
-      if (p.imageUrl) productImageMap.set(p.name, p.imageUrl);
+      if (!p.imageUrl) continue;
+      imageByNameLower.set(p.name.trim().toLowerCase(), p.imageUrl);
+      if (p.nameArabic) {
+        imageByNameLower.set(p.nameArabic.trim().toLowerCase(), p.imageUrl);
+      }
+      if (p.sku) imageBySkuLower.set(p.sku.trim().toLowerCase(), p.imageUrl);
     }
   }
 
-  const enrichedOrders = orders.map((o) => ({
-    ...o,
-    productImages: extractProductImages(o.rawOrderJson),
-    productImageUrl: o.productName
-      ? productImageMap.get(o.productName) ?? null
-      : null,
-  }));
+  // `rawOrderJson` is the full COD Network payload (~8 KB per order) and is
+  // only used server-side, for image/SKU extraction. Dropping it from the
+  // response keeps the Pipeline's 1000-order fetch from shipping ~8 MB of
+  // JSON to the browser on every navigation.
+  const enrichedOrders = orders.map(({ rawOrderJson, ...o }) => {
+    const inlineImages = extractProductImages(rawOrderJson);
+    let catalogImage: string | null = null;
+    if (inlineImages.length === 0) {
+      const { names, skus } = collectProductKeys(o.productName, rawOrderJson);
+      for (const s of skus) {
+        const hit = imageBySkuLower.get(s.trim().toLowerCase());
+        if (hit) {
+          catalogImage = hit;
+          break;
+        }
+      }
+      if (!catalogImage) {
+        for (const n of names) {
+          const hit = imageByNameLower.get(n.trim().toLowerCase());
+          if (hit) {
+            catalogImage = hit;
+            break;
+          }
+        }
+      }
+    }
+    return {
+      ...o,
+      productImages: inlineImages,
+      productImageUrl: catalogImage,
+    };
+  });
 
   return NextResponse.json({
     orders: enrichedOrders,
@@ -129,6 +173,7 @@ const VALID_STATUSES = new Set<OrderStatus>([
   "DELIVERED",
   "RETURNED",
   "CANCELLED",
+  "SCHEDULED",
   "UNKNOWN",
 ]);
 
@@ -256,6 +301,7 @@ function extractProductImages(rawOrderJson: unknown): string[] {
   }
   return images;
 }
+
 
 function optionalString(v: string | undefined | null): string | null {
   if (!v) return null;

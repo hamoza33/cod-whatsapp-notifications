@@ -42,7 +42,75 @@ interface CodWebhookPayloadLike extends Record<string, unknown> {
   items?: unknown;
   created_at?: string;
   updated_at?: string;
+  // --- Seller /leads endpoint shape (differs from /orders) ---
+  // Top-level phone + call count, product summary string, and a nested
+  // `original_payload` (a JSON string) carrying the real customer details.
+  phone?: string | null;
+  calls?: number | string | null;
+  products?: string | null;
+  original_payload?: unknown;
 }
+
+/** Customer details nested inside a lead's `original_payload` JSON string. */
+interface LeadOriginalPayload {
+  first_name?: string | null;
+  last_name?: string | null;
+  phone?: string | null;
+  original_phone?: string | null;
+  line1?: string | null;
+  line2?: string | null;
+  city?: string | null;
+  area?: string | null;
+  state?: string | null;
+  zip?: string | null;
+  country?: string | null;
+  total_price?: string | number | null;
+  total_quantity?: string | number | null;
+  product_name_1?: string | null;
+}
+
+/** Parse a lead's `original_payload`, which arrives as a JSON string. */
+function parseOriginalPayload(value: unknown): LeadOriginalPayload | null {
+  if (!value) return null;
+  if (typeof value === "object") return value as LeadOriginalPayload;
+  if (typeof value === "string") {
+    try {
+      return JSON.parse(value) as LeadOriginalPayload;
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+/** Join non-empty string parts with a separator, or null if all empty. */
+function joinNonEmpty(
+  parts: Array<string | null | undefined>,
+  sep: string
+): string | null {
+  const vals = parts
+    .map((p) => (p ?? "").toString().trim())
+    .filter((p) => p.length > 0);
+  return vals.length ? vals.join(sep) : null;
+}
+
+// Lead-only pipeline statuses. A CONFIRMED lead sitting in one of these (or a
+// brand-new row) is promoted into the order pipeline; one already advanced to
+// a real order stage (ASSIGNED/SHIPPED/…) is never downgraded by a stale
+// re-confirmation.
+const LEAD_ONLY_STATUSES: ReadonlySet<OrderStatus> = new Set<OrderStatus>([
+  OrderStatus.NEW,
+  OrderStatus.CONFIRMED,
+  OrderStatus.NO_REPLY,
+  OrderStatus.WRONG,
+  OrderStatus.EXPIRED,
+  OrderStatus.CALL_LATER,
+  OrderStatus.CALL_LATER_SCHEDULED,
+  OrderStatus.DELAYED,
+  OrderStatus.CANCELLED_PRICE,
+  OrderStatus.BLACK_LISTED,
+  OrderStatus.UNKNOWN,
+]);
 
 /** Pull the actual payload out of common envelope shapes. */
 function unwrapEnvelope(input: unknown): CodWebhookPayloadLike {
@@ -94,7 +162,15 @@ export async function applyWebhookEvent(
   // The "id" field can be the order id or the lead id depending on which
   // webhook delivered the event. We collect both, then look up an existing
   // order via either path.
-  const declaredOrderId = extractStr(payload.order_id) || extractStr(payload.id);
+  // For a lead webhook the ambiguous `id` field is the LEAD id, so it must
+  // not be treated as an order id — otherwise a lead with no explicit
+  // `order_id` would be keyed on `codNetworkOrderId = <leadId>` up front and
+  // could never be matched/upgraded when the real order webhook (carrying a
+  // distinct `order_id` + the same `lead_id`) arrives. Order/any webhooks keep
+  // treating `id` as the order id.
+  const declaredOrderId =
+    extractStr(payload.order_id) ||
+    (kind === "lead" ? null : extractStr(payload.id));
   const declaredLeadId =
     extractStr(payload.lead_id) ||
     (kind === "lead" ? extractStr(payload.id) : null);
@@ -122,10 +198,71 @@ export async function applyWebhookEvent(
         })
       : null);
 
+  // Once a lead has been confirmed into a real order (its order id differs
+  // from its lead id), the /orders sync is the single source of truth for the
+  // row. Ignore later /leads events so the confirmed order's Latin
+  // customer/product details aren't overwritten with the lead's raw (often
+  // Arabic) values — which would also break automation product-name matches
+  // and make the card look like it "reverted".
+  if (
+    kind === "lead" &&
+    existing &&
+    existing.codNetworkLeadId &&
+    existing.codNetworkOrderId !== existing.codNetworkLeadId
+  ) {
+    return {
+      orderId: existing.id,
+      created: false,
+      updated: false,
+      statusChanged: false,
+      newStatus: existing.status,
+    };
+  }
+
   // Normalize fields. Cast through CodNetworkOrder for product extraction —
   // it's a superset of the webhook payload shape.
   const codOrderLike = payload as unknown as CodNetworkOrder;
   const productName = extractProductName(codOrderLike);
+
+  // The /leads endpoint nests the real customer details inside a JSON-string
+  // `original_payload` and puts phone/product/calls at the top level under
+  // different keys than /orders. Resolve every display field from both shapes
+  // so lead cards carry the same info as order cards.
+  const original = parseOriginalPayload(payload.original_payload);
+  const resolvedName =
+    extractStr(payload.customer_name) ??
+    (original ? joinNonEmpty([original.first_name, original.last_name], " ") : null);
+  const resolvedProductName =
+    productName ??
+    (original ? extractStr(original.product_name_1) : null) ??
+    extractStr(payload.products);
+  const resolvedCity =
+    extractStr(payload.customer_city) ??
+    (original
+      ? extractStr(original.city) ??
+        extractStr(original.area) ??
+        extractStr(original.state)
+      : null);
+  const resolvedAddress =
+    extractStr(payload.customer_address) ??
+    (original ? joinNonEmpty([original.line1, original.line2, original.zip], ", ") : null);
+  const resolvedPrice =
+    extractStr(payload.total_price) ??
+    extractStr(payload.total) ??
+    extractStr(payload.amount) ??
+    (original ? extractStr(original.total_price) : null);
+  const resolvedQuantity =
+    extractStr(payload.quantity) ??
+    (original ? extractStr(original.total_quantity) : null);
+  const callsRaw =
+    typeof payload.calls === "number"
+      ? payload.calls
+      : typeof payload.calls === "string" && payload.calls.trim() !== ""
+        ? parseInt(payload.calls, 10)
+        : null;
+  const callAttempts =
+    callsRaw !== null && Number.isFinite(callsRaw) ? callsRaw : undefined;
+
   const trackingNumber = extractStr(payload.tracking_number);
   const trackingStatus = extractStr(payload.tracking_status);
   const rawStatusLabel =
@@ -137,7 +274,8 @@ export async function applyWebhookEvent(
 
   const mappedFromCode = mapCodStatus(
     payload.status as Parameters<typeof mapCodStatus>[0],
-    trackingStatus
+    trackingStatus,
+    kind
   ) as OrderStatus;
 
   const derived = deriveOrderStatus({
@@ -148,10 +286,27 @@ export async function applyWebhookEvent(
     previousStatus: existing?.status ?? null,
   });
 
+  // Auto-promote a confirmed lead into the order pipeline: a confirmed lead is
+  // now a real order, so surface it with an initial PENDING order status
+  // instead of leaving it in the lead-only CONFIRMED column.
+  let effectiveStatus = derived;
+  if (kind === "lead" && derived === OrderStatus.CONFIRMED) {
+    const prev = existing?.status ?? null;
+    effectiveStatus =
+      prev === null || LEAD_ONLY_STATUSES.has(prev)
+        ? OrderStatus.PENDING
+        : prev;
+  }
+
   const defaultCountryCode =
     (await getSetting(SETTING_KEYS.DEFAULT_COUNTRY_CODE)) || "212";
   let normalizedPhone: string | null = null;
-  const phoneRaw = extractStr(payload.customer_phone);
+  const phoneRaw =
+    extractStr(payload.customer_phone) ??
+    extractStr(payload.phone) ??
+    (original
+      ? extractStr(original.phone) ?? extractStr(original.original_phone)
+      : null);
   if (phoneRaw) {
     try {
       normalizedPhone = normalizePhoneNumber(phoneRaw, defaultCountryCode);
@@ -166,21 +321,21 @@ export async function applyWebhookEvent(
   const writeData: Prisma.OrderUncheckedCreateInput = {
     codNetworkOrderId: declaredOrderId ?? declaredLeadId!,
     codNetworkLeadId: declaredLeadId,
-    customerName: extractStr(payload.customer_name),
+    customerName: resolvedName,
     customerPhone: normalizedPhone,
-    customerCity: extractStr(payload.customer_city),
-    customerAddress: extractStr(payload.customer_address),
-    productName,
-    productPrice:
-      extractStr(payload.total_price) ??
-      extractStr(payload.total) ??
-      extractStr(payload.amount) ??
-      null,
-    productQuantity: extractStr(payload.quantity),
+    customerCity: resolvedCity,
+    customerAddress: resolvedAddress,
+    productName: resolvedProductName,
+    productPrice: resolvedPrice,
+    productQuantity: resolvedQuantity,
+    callAttempts,
     trackingNumber,
     deliveryCompany: extractStr(payload.delivery_company),
-    status: derived,
-    statusChangedAt: existing?.status === derived ? existing?.statusChangedAt : new Date(),
+    status: effectiveStatus,
+    statusChangedAt:
+      existing?.status === effectiveStatus
+        ? existing?.statusChangedAt
+        : new Date(),
     codDeliveryStatus: rawStatusLabel,
     rawOrderJson: payload as Prisma.InputJsonValue,
     codCreatedAt,
@@ -191,7 +346,7 @@ export async function applyWebhookEvent(
   let orderRow: { id: string; status: OrderStatus };
   let created = false;
   let updated = false;
-  const statusChanged = !existing || existing.status !== derived;
+  const statusChanged = !existing || existing.status !== effectiveStatus;
   const trackingChanged = existing
     ? (trackingNumber !== null && trackingNumber !== existing.trackingNumber) ||
       (rawStatusLabel !== null && rawStatusLabel !== existing.codDeliveryStatus)
@@ -209,7 +364,7 @@ export async function applyWebhookEvent(
     }
     // Always update the status (including null→PENDING transitions) — the
     // whole point of the webhook is to convey new status.
-    updateData.status = derived;
+    updateData.status = effectiveStatus;
     if (statusChanged) updateData.statusChangedAt = new Date();
     orderRow = await prisma.order.update({
       where: { id: existing.id },

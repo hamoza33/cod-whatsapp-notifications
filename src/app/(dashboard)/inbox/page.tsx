@@ -40,6 +40,8 @@ interface Conversation {
     customerName: string | null;
     productName: string | null;
     status: string;
+    /** Latest package-tracking status (from the tracking section), if any. */
+    trackingStatus?: string | null;
   } | null;
 }
 
@@ -56,6 +58,12 @@ type ThreadEntry =
       mediaId: string | null;
       mediaMimeType: string | null;
       contactName: string | null;
+      latitude: number | null;
+      longitude: number | null;
+      locationName: string | null;
+      locationAddress: string | null;
+      reactionEmoji: string | null;
+      transcription: string | null;
     }
   | {
       kind: "outbound";
@@ -105,6 +113,39 @@ function formatMessageTime(dateStr: string) {
     hour: "2-digit",
     minute: "2-digit",
   });
+}
+
+/**
+ * Display name for a conversation. Prefers the name linked to the order (the
+ * verified/confirmed customer name) over the WhatsApp profile name the
+ * customer set themselves, falling back to the phone number.
+ */
+function conversationDisplayName(c: {
+  contactName: string | null;
+  order?: { customerName: string | null } | null;
+  phoneNumber: string;
+}): string {
+  return c.order?.customerName?.trim() || c.contactName?.trim() || c.phoneNumber;
+}
+
+/** Two-letter initials for an avatar; returns null for phone-number-only names. */
+function nameInitials(name: string): string | null {
+  const trimmed = name.trim();
+  if (!trimmed || /^[+\d\s()-]+$/.test(trimmed)) return null;
+  const parts = trimmed.split(/\s+/).filter(Boolean);
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+}
+
+/** Deterministic pastel background for an avatar based on the phone number. */
+function avatarColor(seed: string): string {
+  const palette = [
+    "#0EA5E9", "#8B5CF6", "#EC4899", "#F59E0B", "#10B981",
+    "#EF4444", "#6366F1", "#14B8A6", "#F97316", "#84CC16",
+  ];
+  let hash = 0;
+  for (let i = 0; i < seed.length; i++) hash = (hash * 31 + seed.charCodeAt(i)) >>> 0;
+  return palette[hash % palette.length];
 }
 
 /**
@@ -593,8 +634,21 @@ export default function InboxPage() {
                 }}
               >
                 {/* Avatar */}
-                <div className="w-12 h-12 rounded-full bg-[#DFE5E7] flex items-center justify-center shrink-0 relative">
-                  <Phone size={20} className="text-[#54656F]" />
+                <div
+                  className="w-12 h-12 rounded-full flex items-center justify-center shrink-0 relative"
+                  style={{
+                    backgroundColor: nameInitials(conversationDisplayName(c))
+                      ? avatarColor(c.phoneNumber)
+                      : "#DFE5E7",
+                  }}
+                >
+                  {nameInitials(conversationDisplayName(c)) ? (
+                    <span className="text-white font-semibold text-[15px]">
+                      {nameInitials(conversationDisplayName(c))}
+                    </span>
+                  ) : (
+                    <Phone size={20} className="text-[#54656F]" />
+                  )}
                   {c.isPinned && (
                     <div className="absolute -top-0.5 -right-0.5 w-4 h-4 bg-[#008069] rounded-full flex items-center justify-center">
                       <Pin size={9} className="text-white" />
@@ -606,9 +660,9 @@ export default function InboxPage() {
                   <div className="flex items-center justify-between gap-2">
                     <div className="flex items-center gap-2 min-w-0">
                       <span className={`text-[15px] truncate ${c.unreadCount > 0 ? "font-bold text-[#111B21]" : "font-medium text-[#111B21]"}`}>
-                        {c.contactName || c.order?.customerName || c.phoneNumber}
+                        {conversationDisplayName(c)}
                       </span>
-                      {(c.contactName || c.order?.customerName) && (
+                      {(c.order?.customerName || c.contactName) && (
                         <span className="text-[12px] text-[#667781] font-mono shrink-0">
                           {c.phoneNumber}
                         </span>
@@ -646,8 +700,18 @@ export default function InboxPage() {
                     )}
                   </div>
                   {c.order && (
-                    <div className="text-[11px] text-[#008069] mt-0.5 truncate font-medium">
-                      Order #{c.order.codNetworkOrderId} · {c.order.status}
+                    <div className="mt-0.5 flex flex-wrap items-center gap-1">
+                      <span className="text-[11px] text-[#008069] truncate font-medium">
+                        Order #{c.order.codNetworkOrderId} · {c.order.status}
+                      </span>
+                      {c.order.trackingStatus && (
+                        <span
+                          className="text-[10px] font-medium text-[#5B21B6] bg-[#EDE9FE] rounded px-1.5 py-0.5"
+                          title="Package tracking status"
+                        >
+                          📦 {c.order.trackingStatus}
+                        </span>
+                      )}
                     </div>
                   )}
                   {c.isOutboundOnly && !c.order && (
@@ -696,16 +760,52 @@ export default function InboxPage() {
           <>
             {/* Chat header */}
             <div className="px-4 py-2.5 bg-[#008069] flex items-center gap-3">
-              <div className="w-10 h-10 rounded-full bg-[#DFE5E7] flex items-center justify-center shrink-0">
-                <Phone size={18} className="text-[#54656F]" />
-              </div>
+              {(() => {
+                const headerName = selectedConvo
+                  ? conversationDisplayName(selectedConvo)
+                  : selectedPhone;
+                const initials = nameInitials(headerName);
+                return (
+                  <div
+                    className="w-10 h-10 rounded-full flex items-center justify-center shrink-0"
+                    style={{
+                      backgroundColor: initials
+                        ? avatarColor(selectedPhone)
+                        : "#DFE5E7",
+                    }}
+                  >
+                    {initials ? (
+                      <span className="text-white font-semibold text-[14px]">
+                        {initials}
+                      </span>
+                    ) : (
+                      <Phone size={18} className="text-[#54656F]" />
+                    )}
+                  </div>
+                );
+              })()}
               <div className="flex-1 min-w-0">
                 <div className="text-white font-medium text-[15px]">
-                  {selectedConvo?.contactName || selectedConvo?.order?.customerName || selectedPhone}
+                  {selectedConvo ? conversationDisplayName(selectedConvo) : selectedPhone}
                 </div>
                 <div className="text-white/70 text-xs font-mono">
                   {selectedPhone}
                 </div>
+                {selectedConvo?.order && (
+                  <div className="flex flex-wrap items-center gap-1 mt-1">
+                    <span className="text-[10px] font-medium text-white bg-white/20 rounded px-1.5 py-0.5">
+                      Order · {selectedConvo.order.status}
+                    </span>
+                    {selectedConvo.order.trackingStatus && (
+                      <span
+                        className="text-[10px] font-medium text-white bg-[#5B21B6] rounded px-1.5 py-0.5"
+                        title="Package tracking status"
+                      >
+                        📦 {selectedConvo.order.trackingStatus}
+                      </span>
+                    )}
+                  </div>
+                )}
               </div>
               {whatsappNumbers.length > 1 && (
                 <select
@@ -1093,7 +1193,23 @@ function InboundBubble({
             Download {mime || msg.type}
           </a>
         )}
-        {msg.type !== "text" && !mediaUrl && (
+        {msg.type === "location" &&
+          msg.latitude != null &&
+          msg.longitude != null && (
+            <a
+              href={`https://www.google.com/maps/search/?api=1&query=${msg.latitude},${msg.longitude}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="mb-1.5 block bg-[#F0F2F5] hover:bg-[#E9EDEF] rounded px-2 py-1.5 text-xs text-[#111B21]"
+            >
+              📍 {msg.locationName || "Shared location"}
+              {msg.locationAddress ? (
+                <span className="block text-[#667781]">{msg.locationAddress}</span>
+              ) : null}
+              <span className="block text-[#1FA855] underline">Open in Maps</span>
+            </a>
+          )}
+        {msg.type !== "text" && msg.type !== "location" && !mediaUrl && (
           <div className="text-[11px] text-[#667781] flex items-center gap-1 mb-1">
             <ImageIcon size={11} />
             {msg.type}
@@ -1105,11 +1221,19 @@ function InboundBubble({
             className="text-sm text-[#111B21] whitespace-pre-wrap break-words leading-[19px]"
             dir={hasArabic(msg.text) ? "rtl" : "ltr"}
           >{msg.text}</p>
-        ) : !mediaUrl ? (
+        ) : !mediaUrl && msg.type !== "location" ? (
           <p className="text-sm text-[#8696A0] italic">
             ({msg.type} attachment)
           </p>
         ) : null}
+        {msg.transcription && (
+          <p
+            className="mt-1 text-[13px] text-[#111B21] italic border-l-2 border-[#1FA855] pl-2 whitespace-pre-wrap break-words"
+            dir={hasArabic(msg.transcription) ? "rtl" : "ltr"}
+          >
+            🎙️ {msg.transcription}
+          </p>
+        )}
         <p className="text-[11px] text-[#667781] mt-1 text-right">
           {formatMessageTime(msg.at)}
         </p>

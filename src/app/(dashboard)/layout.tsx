@@ -1,4 +1,5 @@
 import { Sidebar } from "@/components/sidebar";
+import { CodTokenWarning } from "@/components/cod-token-warning";
 
 export default function DashboardLayout({
   children,
@@ -9,6 +10,7 @@ export default function DashboardLayout({
     <div className="flex min-h-screen">
       <Sidebar />
       <main className="flex-1 bg-gray-50 p-6 overflow-auto">{children}</main>
+      <CodTokenWarning />
     </div>
   );
 }

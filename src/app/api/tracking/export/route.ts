@@ -84,6 +84,7 @@ export async function GET(request: NextRequest) {
     PENDING: "Pending",
     IN_TRANSIT: "In Transit",
     OUT_FOR_DELIVERY: "Out for Delivery",
+    SCHEDULED: "Scheduled",
     DELIVERED: "Delivered",
     RETURNED: "Returned",
     EXCEPTION: "Exception",

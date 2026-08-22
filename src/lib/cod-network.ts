@@ -430,6 +430,85 @@ export class CodNetworkClient {
     return response.data;
   }
 
+  /**
+   * Seller *leads* list (https://developer.cod.network/v2/api-seller-leads).
+   * Mirrors `getOrders` but hits `/seller/leads`, whose records carry the
+   * lead-status enum (code 1-12). Used to keep the Lead pipeline fresh even
+   * if the lead-status webhook misses a delivery.
+   */
+  async getLeads(
+    page = 1,
+    perPage = 50,
+    params: Record<string, string> = {}
+  ): Promise<CodNetworkListResponse> {
+    const searchParams = new URLSearchParams({
+      page: String(page),
+      limit: String(perPage),
+      per_page: String(perPage),
+      ...params,
+    });
+    return this.request<CodNetworkListResponse>(
+      `/seller/leads?${searchParams.toString()}`
+    );
+  }
+
+  async getAllLeads(
+    params: Record<string, string> = {},
+    opts: { sinceDate?: Date; maxPages?: number } = {}
+  ): Promise<CodNetworkOrder[]> {
+    const { sinceDate, maxPages = 100 } = opts;
+    const allLeads: CodNetworkOrder[] = [];
+    let page = 1;
+    let hasMore = true;
+
+    const dateParams: Record<string, string> = {};
+    if (sinceDate) {
+      const iso = sinceDate.toISOString();
+      const isoDate = iso.slice(0, 10);
+      dateParams["created_at[gte]"] = iso;
+      dateParams.from = isoDate;
+      dateParams.since = iso;
+    }
+    const mergedParams = { ...dateParams, ...params };
+
+    while (hasMore) {
+      const response = await this.getLeads(page, 50, mergedParams);
+
+      const pageLeads = sinceDate
+        ? response.data.filter((o) => {
+            if (!o.created_at) return true;
+            const t = Date.parse(o.created_at);
+            return Number.isNaN(t) ? true : t >= sinceDate.getTime();
+          })
+        : response.data;
+      allLeads.push(...pageLeads);
+
+      if (sinceDate && response.data.length > 0 && pageLeads.length === 0) {
+        break;
+      }
+
+      const pagination = response.meta?.pagination;
+      if (
+        pagination?.current_page !== undefined &&
+        pagination?.total_pages !== undefined
+      ) {
+        hasMore = pagination.current_page < pagination.total_pages;
+      } else if (
+        response.meta?.current_page !== undefined &&
+        response.meta?.last_page !== undefined
+      ) {
+        hasMore = response.meta.current_page < response.meta.last_page;
+      } else {
+        hasMore = response.data.length === 50;
+      }
+
+      page++;
+      if (page > maxPages) break;
+    }
+
+    return allLeads;
+  }
+
   async getProducts(
     page = 1,
     perPage = 50
@@ -631,7 +710,15 @@ const STATUS_STRING_MAP: Record<string, string> = {
 
 export function mapCodStatus(
   status: string | CodNetworkOrderStatus | undefined,
-  trackingStatus?: string | null
+  trackingStatus?: string | null,
+  // COD Network's *lead* and *order* status enums share the integer codes
+  // 1-10 but mean different things (e.g. code 2 = "Confirmed" for a lead but
+  // "Assigned" for an order). `kind` selects the right code map so a lead
+  // webhook doesn't get interpreted with the order enum (which previously
+  // sent confirmed leads to the ASSIGNED column and out of the lead
+  // pipeline). Defaults to the combined map (order codes win) for callers
+  // that genuinely don't know — e.g. ambiguous manual entries.
+  kind: "lead" | "order" | "any" = "any"
 ): string {
   // tracking_status promotes a SHIPPED order to OUT_FOR_DELIVERY once a courier
   // picks it up, which is one of the user-configurable trigger statuses.
@@ -644,9 +731,16 @@ export function mapCodStatus(
 
   if (status === undefined || status === null) return "UNKNOWN";
 
+  const codeMap =
+    kind === "lead"
+      ? LEAD_STATUS_CODE_MAP
+      : kind === "order"
+        ? ORDER_STATUS_CODE_MAP
+        : STATUS_CODE_MAP;
+
   if (typeof status === "object") {
-    if (typeof status.code === "number" && STATUS_CODE_MAP[status.code]) {
-      return STATUS_CODE_MAP[status.code];
+    if (typeof status.code === "number" && codeMap[status.code]) {
+      return codeMap[status.code];
     }
     if (status.label) {
       const mapped = STATUS_STRING_MAP[status.label.toLowerCase()];

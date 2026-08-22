@@ -19,6 +19,12 @@ type ThreadEntry =
       mediaId: string | null;
       mediaMimeType: string | null;
       contactName: string | null;
+      latitude: number | null;
+      longitude: number | null;
+      locationName: string | null;
+      locationAddress: string | null;
+      reactionEmoji: string | null;
+      transcription: string | null;
     }
   | {
       kind: "outbound";
@@ -100,6 +106,12 @@ export async function GET(request: NextRequest, context: RouteContext) {
       mediaId: m.mediaId,
       mediaMimeType: m.mediaMimeType,
       contactName: m.contactName,
+      latitude: m.latitude,
+      longitude: m.longitude,
+      locationName: m.locationName,
+      locationAddress: m.locationAddress,
+      reactionEmoji: m.reactionEmoji,
+      transcription: m.transcription,
     });
   }
 

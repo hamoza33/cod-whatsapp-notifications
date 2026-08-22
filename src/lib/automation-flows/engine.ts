@@ -35,6 +35,82 @@ import {
 } from "./types";
 import { evaluateCondition } from "./conditions";
 import { executeAction } from "./actions";
+import { getSetting, SETTING_KEYS } from "../settings";
+import {
+  collectProductKeys,
+  matchCatalogProducts,
+} from "../product-matching";
+
+/**
+ * SKUs for an order: those spelled out in the COD Network payload plus the
+ * SKUs of catalog products the order's product string matches (COD Network
+ * often sends only names, and bundles several products into one string).
+ */
+async function resolveProductSkus(
+  productName: string | null,
+  rawOrderJson: unknown
+): Promise<string | null> {
+  const skus = new Set(collectProductKeys(productName, rawOrderJson).skus);
+  const catalog = await prisma.product.findMany({
+    select: { name: true, nameArabic: true, sku: true },
+  });
+  for (const product of matchCatalogProducts(catalog, productName, rawOrderJson)) {
+    if (product.sku && product.sku.trim()) skus.add(product.sku.trim());
+  }
+  return skus.size > 0 ? Array.from(skus).join(", ") : null;
+}
+
+/**
+ * Current time broken down in the configured automation timezone
+ * (Settings → Automation → Timezone, default UTC). Used so `time.hour` /
+ * `time.minute` conditions match the operator's local wall clock rather than
+ * the server's UTC clock.
+ */
+async function timeSnapshot(): Promise<{
+  now: Date;
+  hour: number;
+  minute: number;
+  dayOfWeek: number;
+}> {
+  const now = new Date();
+  const tz = (await getSetting(SETTING_KEYS.AUTOMATION_TIMEZONE)) || "UTC";
+  try {
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone: tz,
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+      weekday: "short",
+    }).formatToParts(now);
+    const get = (t: string) => parts.find((p) => p.type === t)?.value;
+    let hour = parseInt(get("hour") ?? "", 10);
+    if (hour === 24) hour = 0;
+    const minute = parseInt(get("minute") ?? "", 10);
+    const weekdayMap: Record<string, number> = {
+      Sun: 0,
+      Mon: 1,
+      Tue: 2,
+      Wed: 3,
+      Thu: 4,
+      Fri: 5,
+      Sat: 6,
+    };
+    const wd = get("weekday");
+    return {
+      now,
+      hour: Number.isFinite(hour) ? hour : now.getUTCHours(),
+      minute: Number.isFinite(minute) ? minute : now.getUTCMinutes(),
+      dayOfWeek: wd && wd in weekdayMap ? weekdayMap[wd] : now.getUTCDay(),
+    };
+  } catch {
+    return {
+      now,
+      hour: now.getUTCHours(),
+      minute: now.getUTCMinutes(),
+      dayOfWeek: now.getUTCDay(),
+    };
+  }
+}
 
 function parseGraph(raw: unknown): FlowGraph {
   if (!raw || typeof raw !== "object") return { nodes: [], edges: [] };
@@ -105,7 +181,6 @@ export async function buildContextForOrder(
     };
   }
 
-  const now = new Date();
   return {
     trigger,
     order: {
@@ -118,6 +193,10 @@ export async function buildContextForOrder(
       customerCity: order.customerCity,
       customerAddress: order.customerAddress,
       productName: order.productName,
+      productSku: await resolveProductSkus(
+        order.productName,
+        order.rawOrderJson
+      ),
       productPrice: order.productPrice,
       productQuantity: order.productQuantity,
       trackingNumber: order.trackingNumber,
@@ -127,8 +206,16 @@ export async function buildContextForOrder(
       isManual: order.isManual,
       createdAt: order.createdAt,
       codCreatedAt: order.codCreatedAt,
+      ageDays: (() => {
+        const ref = order.codCreatedAt ?? order.createdAt;
+        return ref
+          ? Math.floor((Date.now() - ref.getTime()) / 86_400_000)
+          : null;
+      })(),
       pipelineNote: order.pipelineNote,
       callAgentQueued: order.callAgentQueued,
+      imileScheduledDate: order.imileScheduledDate,
+      imileScheduledAt: order.imileScheduledAt,
     },
     tracking: trackingRow
       ? {
@@ -141,11 +228,7 @@ export async function buildContextForOrder(
       : null,
     customer,
     message: null,
-    time: {
-      now,
-      hour: now.getHours(),
-      dayOfWeek: now.getDay(),
-    },
+    time: await timeSnapshot(),
     vars: {},
   };
 }
@@ -168,10 +251,10 @@ export async function buildContextForInboundMessage(
     if (ctx) {
       context = ctx;
     } else {
-      context = bareContext(trigger);
+      context = await bareContext(trigger);
     }
   } else {
-    context = bareContext(trigger);
+    context = await bareContext(trigger);
   }
   context.message = {
     text,
@@ -190,19 +273,16 @@ export async function buildContextForInboundMessage(
   return context;
 }
 
-function bareContext(trigger: FlowExecutionContext["trigger"]): FlowExecutionContext {
-  const now = new Date();
+async function bareContext(
+  trigger: FlowExecutionContext["trigger"]
+): Promise<FlowExecutionContext> {
   return {
     trigger,
     order: null,
     tracking: null,
     customer: null,
     message: null,
-    time: {
-      now,
-      hour: now.getHours(),
-      dayOfWeek: now.getDay(),
-    },
+    time: await timeSnapshot(),
     vars: {},
   };
 }
@@ -260,7 +340,7 @@ function triggerFiltersMatch(
  */
 async function walkFromNode(
   graph: FlowGraph,
-  startNodeId: string | null,
+  startNodeIds: string[],
   context: FlowExecutionContext,
   steps: FlowRunStep[]
 ): Promise<
@@ -275,13 +355,21 @@ async function walkFromNode(
       };
     }
 > {
-  let currentNodeId: string | null = startNodeId;
-  const visitCount: Record<string, number> = {};
-  const MAX_VISITS = 200;
+  // Breadth-first over every outgoing edge so a node fanning out into
+  // several branches (e.g. one trigger feeding three alternative product
+  // conditions that all lead to the same action = an OR) runs them all
+  // instead of only the first edge. `visited` makes a fan-in node run
+  // exactly once no matter how many branches reach it.
+  const queue: string[] = [...startNodeIds];
+  const visited = new Set<string>();
+  const MAX_NODES = 500;
+  let processed = 0;
 
-  while (currentNodeId) {
-    visitCount[currentNodeId] = (visitCount[currentNodeId] ?? 0) + 1;
-    if (visitCount[currentNodeId] > MAX_VISITS) {
+  while (queue.length > 0) {
+    const currentNodeId = queue.shift() as string;
+    if (visited.has(currentNodeId)) continue;
+    visited.add(currentNodeId);
+    if (++processed > MAX_NODES) {
       const last = steps[steps.length - 1];
       if (last) last.error = (last.error ?? "") + " | aborted: cycle detected";
       return { status: "FAILED", errorMessage: `Cycle detected at node ${currentNodeId}` };
@@ -317,7 +405,7 @@ async function walkFromNode(
         });
         return { status: "FAILED", errorMessage: msg };
       }
-      currentNodeId = nextNodeAfter(graph, node.id, branch);
+      queue.push(...nextNodesAfter(graph, node.id, branch));
       continue;
     }
 
@@ -364,7 +452,7 @@ async function walkFromNode(
           nodeId: node.id,
           nodeType: "action",
           nodeKind: actionData.action,
-          status: "success",
+          status: result.skipped ? "skipped" : "success",
           output: result.output,
           ranAt: new Date().toISOString(),
         });
@@ -386,7 +474,7 @@ async function walkFromNode(
         });
         return { status: "FAILED", errorMessage: msg };
       }
-      currentNodeId = nextNodeAfter(graph, node.id);
+      queue.push(...nextNodesAfter(graph, node.id));
       continue;
     }
 
@@ -394,6 +482,131 @@ async function walkFromNode(
   }
 
   return { status: "SUCCESS" };
+}
+
+/**
+ * Whether repeat runs for the same order are suppressed by default for a
+ * trigger type. The lifecycle triggers describe a one-shot moment ("the
+ * order was created", "tracking appeared", "it reached this status"), so
+ * acting on the same order twice is virtually always a bug — most often a
+ * status flap: an action sets status X, the next COD Network sync derives
+ * status Y again, which re-fires ORDER_STATUS_CHANGED and re-sends the
+ * template every sync tick. `SCHEDULED` and `MESSAGE_RECEIVED` are
+ * genuinely recurring, so they default to off.
+ */
+function dedupeDefaultForTrigger(triggerType: FlowTriggerType): boolean {
+  return (
+    triggerType === "ORDER_CREATED" ||
+    triggerType === "ORDER_STATUS_CHANGED" ||
+    triggerType === "ORDER_TRACKING_ASSIGNED" ||
+    triggerType === "TRACKING_STATUS_CHANGED"
+  );
+}
+
+/**
+ * Key that identifies "this flow already acted on this order for this
+ * event". `ORDER_STATUS_CHANGED` / `TRACKING_STATUS_CHANGED` include the
+ * resulting status so a flow can still act again when the order genuinely
+ * reaches a *different* status, while a flap back to a status already
+ * handled is suppressed.
+ */
+function dedupeKeyFor(
+  triggerType: FlowTriggerType,
+  context: FlowExecutionContext
+): string {
+  const payload = context.trigger.payload ?? {};
+  if (
+    triggerType === "ORDER_STATUS_CHANGED" ||
+    triggerType === "TRACKING_STATUS_CHANGED"
+  ) {
+    return `${triggerType}:${String(payload.toStatus ?? "")}`;
+  }
+  return triggerType;
+}
+
+/** Did this run actually do something to the customer/order? */
+function runPerformedAction(steps: unknown): boolean {
+  if (!Array.isArray(steps)) return false;
+  return (steps as FlowRunStep[]).some(
+    (s) =>
+      s &&
+      s.nodeType === "action" &&
+      s.status === "success" &&
+      s.nodeKind !== "stop" &&
+      s.nodeKind !== "wait"
+  );
+}
+
+/**
+ * True when this flow already executed at least one action for this order
+ * under the same dedupe key. Runs whose conditions all evaluated false
+ * don't count, so a flow still fires later when the order finally matches.
+ */
+async function alreadyActedOnOrder(
+  flow: AutomationFlow,
+  triggerType: FlowTriggerType,
+  context: FlowExecutionContext
+): Promise<boolean> {
+  const orderId = context.order?.id;
+  if (!orderId) return false;
+  const key = dedupeKeyFor(triggerType, context);
+  const previous = await prisma.automationFlowRun.findMany({
+    where: {
+      flowId: flow.id,
+      orderId,
+      status: { in: ["SUCCESS", "STOPPED", "WAITING", "FAILED"] },
+    },
+    orderBy: { startedAt: "desc" },
+    take: 25,
+    select: { stepsJson: true, contextJson: true },
+  });
+  return previous.some((run) => {
+    if (!runPerformedAction(run.stepsJson)) return false;
+    const ctx = run.contextJson as unknown as FlowExecutionContext | null;
+    if (!ctx) return false;
+    return dedupeKeyFor(triggerType, ctx) === key;
+  });
+}
+
+/**
+ * Move an order into the `SCHEDULED` pipeline stage once a run both re-booked
+ * its iMile delivery and told the customer about the new date. Operators need
+ * a column holding exactly the parcels a new delivery day was promised for, so
+ * this is applied by the engine rather than requiring a manual
+ * `change_order_status` node after every reschedule.
+ */
+async function moveRescheduledOrderToScheduled(
+  context: FlowExecutionContext,
+  steps: FlowRunStep[]
+): Promise<void> {
+  const order = context.order;
+  if (!order || order.status === OrderStatus.SCHEDULED) return;
+  const rescheduled = steps.some(
+    (s) => s.nodeKind === "reschedule_imile" && s.status === "success"
+  );
+  if (!rescheduled) return;
+  const notified = steps.some(
+    (s) =>
+      (s.nodeKind === "send_template" || s.nodeKind === "send_text_message") &&
+      s.status === "success"
+  );
+  if (!notified) return;
+
+  await prisma.order.update({
+    where: { id: order.id },
+    data: { status: OrderStatus.SCHEDULED },
+  });
+  order.status = OrderStatus.SCHEDULED;
+  steps.push({
+    nodeId: "auto-scheduled",
+    nodeType: "action",
+    nodeKind: "change_order_status",
+    status: "success",
+    output: `Moved order to the Scheduled pipeline (delivery re-booked for ${
+      context.imile?.scheduledDate ?? order.imileScheduledDate ?? "a later day"
+    })`,
+    ranAt: new Date().toISOString(),
+  });
 }
 
 /**
@@ -410,14 +623,31 @@ export async function executeFlow(
     toStatus?: OrderStatus | null;
     trackingFromStatus?: string | null;
     trackingToStatus?: string | null;
-  }
+  },
+  options?: { ignoreDedupe?: boolean }
 ): Promise<{
   runId: string;
   status: "SUCCESS" | "FAILED" | "STOPPED" | "WAITING";
   steps: FlowRunStep[];
+  skipped?: boolean;
 }> {
   const graph = parseGraph(flow.graphJson);
   const triggerNode = findTriggerNode(graph);
+
+  if (triggerNode && triggerNode.data.kind === "trigger" && !options?.ignoreDedupe) {
+    const triggerData = triggerNode.data as TriggerNodeData;
+    const oncePerOrder =
+      triggerData.runOncePerOrder ??
+      dedupeDefaultForTrigger(triggerData.triggerType);
+    if (oncePerOrder && (await alreadyActedOnOrder(flow, triggerData.triggerType, context))) {
+      console.log(
+        `[automation-flow] skipping flow "${flow.name}" (${flow.id}) for order ` +
+          `${context.order?.id}: already acted on this order for ` +
+          `${dedupeKeyFor(triggerData.triggerType, context)}`
+      );
+      return { runId: "", status: "SUCCESS", steps: [], skipped: true };
+    }
+  }
 
   // Create the run row up-front so the UI can show "RUNNING" status if the
   // process dies mid-execution. Final state is patched on completion.
@@ -462,10 +692,12 @@ export async function executeFlow(
 
   const result = await walkFromNode(
     graph,
-    nextNodeAfter(graph, triggerNode.id),
+    nextNodesAfter(graph, triggerNode.id),
     context,
     steps
   );
+
+  await moveRescheduledOrderToScheduled(context, steps);
 
   if (result.status === "WAITING") {
     await parkRunForReply(run.id, flow.id, context, steps, result.wait);
@@ -600,7 +832,7 @@ export async function resumeFlow(
 
   const result = await walkFromNode(
     graph,
-    nextNodeAfter(graph, wait.waitingNodeId, matchedHandle),
+    nextNodesAfter(graph, wait.waitingNodeId, matchedHandle),
     context,
     steps
   );
@@ -640,20 +872,27 @@ export async function sweepExpiredWaits(): Promise<number> {
   return resumed;
 }
 
-function nextNodeAfter(
+/**
+ * Every node reachable from `nodeId`. For branching nodes only the edges
+ * whose `sourceHandle` matches `handle` are followed; a branch with no
+ * matching edge terminates silently.
+ */
+function nextNodesAfter(
   graph: FlowGraph,
   nodeId: string,
   handle?: string
-): string | null {
+): string[] {
   const edges = outgoingEdges(graph, nodeId);
-  if (edges.length === 0) return null;
+  if (edges.length === 0) return [];
   if (handle) {
-    const match = edges.find((e) => (e.sourceHandle ?? "") === handle);
-    if (match) return match.target;
-    // Condition with no matching handle → terminate that branch silently.
-    return null;
+    return edges
+      .filter((e) => (e.sourceHandle ?? "") === handle)
+      .map((e) => e.target);
   }
-  return edges[0].target;
+  // Unhandled outputs: an action node's plain output edge(s). Ignore edges
+  // that carry a branch handle so a condition's true/false wiring can't be
+  // walked from a non-branching node.
+  return edges.map((e) => e.target);
 }
 
 async function finishRun(
@@ -719,7 +958,8 @@ export async function runFlowsForTrigger(
 
   for (const flow of flows) {
     try {
-      await executeFlow(flow, context, eventDetail);
+      const result = await executeFlow(flow, context, eventDetail);
+      if (result.skipped) continue;
       await prisma.automationFlow.update({
         where: { id: flow.id },
         data: {
@@ -730,6 +970,129 @@ export async function runFlowsForTrigger(
     } catch (err) {
       console.error(
         `[automation-flow] flow "${flow.name}" (${flow.id}) errored:`,
+        err instanceof Error ? err.message : err
+      );
+    }
+  }
+}
+
+/** Default run-history retention, overridable via Settings → Automation. */
+const DEFAULT_RUN_RETENTION_DAYS = 7;
+/** Upper bound on rows deleted per prune call, to keep the sync tick short. */
+const PRUNE_BATCH = 20_000;
+
+/**
+ * Delete run history older than the retention window. Every trigger fire
+ * writes a row (including runs whose conditions all evaluated false), so on
+ * a busy store this table dwarfs the rest of the database and slows every
+ * query — and therefore every page — down. Called from the sync loop.
+ */
+export async function pruneFlowRunHistory(): Promise<number> {
+  const configured = parseInt(
+    (await getSetting(SETTING_KEYS.AUTOMATION_RUN_RETENTION_DAYS)) ?? "",
+    10
+  );
+  const days = Number.isFinite(configured) && configured > 0
+    ? configured
+    : DEFAULT_RUN_RETENTION_DAYS;
+  const cutoff = new Date(Date.now() - days * 86_400_000);
+  const stale = await prisma.automationFlowRun.findMany({
+    where: { startedAt: { lt: cutoff }, status: { not: "WAITING" } },
+    select: { id: true },
+    take: PRUNE_BATCH,
+  });
+  if (stale.length === 0) return 0;
+  const { count } = await prisma.automationFlowRun.deleteMany({
+    where: { id: { in: stale.map((r) => r.id) } },
+  });
+  return count;
+}
+
+/** Local calendar-day key (YYYY-MM-DD) for `date` in the given timezone. */
+function localDayKey(date: Date, timeZone: string): string {
+  try {
+    return new Intl.DateTimeFormat("en-CA", {
+      timeZone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).format(date);
+  } catch {
+    return date.toISOString().slice(0, 10);
+  }
+}
+
+/**
+ * Scheduled sweep for `SCHEDULED`-trigger flows. Runs on the auto-sync cadence.
+ * For each enabled scheduled flow whose daily time (in the configured
+ * timezone) has arrived and which hasn't already fired today, evaluate the
+ * flow against every order — optionally bounded to a chosen status — so all
+ * matching orders are acted on at the scheduled time.
+ *
+ * Fires at-or-after the target time (not exactly on the minute) so a 5-minute
+ * cron never misses it, and de-dupes to once per local day via `lastFiredAt`.
+ */
+export async function runScheduledFlows(): Promise<void> {
+  const flows = await prisma.automationFlow.findMany({
+    where: { isEnabled: true, triggerType: "SCHEDULED" },
+  });
+  if (flows.length === 0) return;
+
+  const tz = (await getSetting(SETTING_KEYS.AUTOMATION_TIMEZONE)) || "UTC";
+  const snap = await timeSnapshot();
+  const nowMinutes = snap.hour * 60 + snap.minute;
+  const todayKey = localDayKey(snap.now, tz);
+
+  for (const flow of flows) {
+    try {
+      const graph = parseGraph(flow.graphJson);
+      const triggerNode = graph.nodes.find((n) => n.type === "trigger");
+      const data = triggerNode?.data as TriggerNodeData | undefined;
+      if (!data) continue;
+
+      const schedHour = Math.min(23, Math.max(0, data.scheduleHour ?? 0));
+      const schedMinute = Math.min(59, Math.max(0, data.scheduleMinute ?? 0));
+      const schedMinutes = schedHour * 60 + schedMinute;
+
+      // Window not open yet today.
+      if (nowMinutes < schedMinutes) continue;
+      // Already fired today (same local calendar day).
+      if (flow.lastFiredAt && localDayKey(flow.lastFiredAt, tz) === todayKey) {
+        continue;
+      }
+
+      const where: Prisma.OrderWhereInput = data.scheduleStatus
+        ? { status: data.scheduleStatus }
+        : {};
+      const orders = await prisma.order.findMany({
+        where,
+        select: { id: true },
+      });
+
+      for (const order of orders) {
+        const ctx = await buildContextForOrder(order.id, {
+          type: "SCHEDULED",
+          firedAt: snap.now,
+          payload: { scheduled: true },
+        });
+        if (!ctx) continue;
+        try {
+          await executeFlow(flow, ctx);
+        } catch (err) {
+          console.error(
+            `[automation-flow] scheduled flow "${flow.name}" order ${order.id} errored:`,
+            err instanceof Error ? err.message : err
+          );
+        }
+      }
+
+      await prisma.automationFlow.update({
+        where: { id: flow.id },
+        data: { lastFiredAt: new Date(), runCount: { increment: 1 } },
+      });
+    } catch (err) {
+      console.error(
+        `[automation-flow] scheduled flow "${flow.name}" (${flow.id}) errored:`,
         err instanceof Error ? err.message : err
       );
     }

@@ -21,6 +21,7 @@ const STATUS_OPTIONS = [
   "DELIVERED",
   "RETURNED",
   "CANCELLED",
+  "SCHEDULED",
 ] as const;
 
 /**

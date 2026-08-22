@@ -31,6 +31,7 @@ type FlowTriggerType =
   | "ORDER_STATUS_CHANGED"
   | "TRACKING_STATUS_CHANGED"
   | "MESSAGE_RECEIVED"
+  | "SCHEDULED"
   | "MANUAL";
 
 interface FlowRow {
@@ -51,6 +52,7 @@ const TRIGGER_LABELS: Record<FlowTriggerType, string> = {
   ORDER_STATUS_CHANGED: "Order status changed",
   TRACKING_STATUS_CHANGED: "Tracking status changed",
   MESSAGE_RECEIVED: "Customer reply received",
+  SCHEDULED: "Scheduled (daily at time)",
   MANUAL: "Manual trigger",
 };
 
@@ -60,6 +62,7 @@ const TRIGGER_OPTIONS: FlowTriggerType[] = [
   "ORDER_CREATED",
   "ORDER_TRACKING_ASSIGNED",
   "MESSAGE_RECEIVED",
+  "SCHEDULED",
   "MANUAL",
 ];
 

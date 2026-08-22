@@ -46,6 +46,12 @@ export const SETTING_KEYS = {
   AUTOMATION_TRIGGER_STATUS: "automation_trigger_status",
   AUTOMATION_DELAY_SECONDS: "automation_delay_seconds",
   AUTOMATION_SEND_ONCE: "automation_send_once",
+  // IANA timezone (e.g. "Africa/Casablanca", "Asia/Riyadh") used to evaluate
+  // an automation's `scheduledSendHour`. Defaults to UTC when unset.
+  AUTOMATION_TIMEZONE: "automation_timezone",
+  // Days of automation-flow run history to keep. Older runs are pruned on the
+  // sync tick so the run table can't grow unbounded (default 7).
+  AUTOMATION_RUN_RETENTION_DAYS: "automation_run_retention_days",
   DEFAULT_COUNTRY_CODE: "default_country_code",
   AUTO_SYNC_ENABLED: "auto_sync_enabled",
   AUTO_SYNC_INTERVAL_MINUTES: "auto_sync_interval_minutes",
@@ -89,6 +95,10 @@ export const SETTING_KEYS = {
   AI_SUGGESTIONS_ENABLED: "ai_suggestions_enabled",
   AI_SUGGESTIONS_COUNT: "ai_suggestions_count",
   AI_SUGGESTIONS_SYSTEM_PROMPT: "ai_suggestions_system_prompt",
+  AI_SUGGESTIONS_MAX_TOKENS: "ai_suggestions_max_tokens",
+  // Minimum length the operator wants each suggestion to reach. Falls back to
+  // the older max-tokens key so existing configurations keep their number.
+  AI_SUGGESTIONS_MIN_TOKENS: "ai_suggestions_min_tokens",
   // Automation auto-run — when enabled, automations trigger automatically
   // without needing to click "Run now"
   AUTOMATION_AUTO_RUN: "automation_auto_run",
@@ -96,6 +106,18 @@ export const SETTING_KEYS = {
   // 4tracking.net and provides direct carrier API access for iMile, Injaz,
   // JT Express (with captcha solving), and JDW Logistics.
   COURIER_TRACKING_API_URL: "courier_tracking_api_url",
+  // J&T (JTE) tracking knobs the dashboard controls per /track/bulk request:
+  //   - provider hint: auto (TrackingMore→Tencent), trackingmore, or tencent
+  //   - batch size: how many JTE waybills we send per request (server groups
+  //     internally: TrackingMore/auto ≤20, Tencent ≤10)
+  COURIER_JTE_PROVIDER: "courier_jte_provider",
+  COURIER_JTE_BATCH_SIZE: "courier_jte_batch_size",
+  // iMile scheduling service (hamoza33/imile_schedule) — used by the
+  // `reschedule_imile` automation action to push an undelivered iMile parcel
+  // to a later delivery date. The API key is only required when the service
+  // has IMILE_MCP_API_KEY set.
+  IMILE_SCHEDULE_API_URL: "imile_schedule_api_url",
+  IMILE_SCHEDULE_API_KEY: "imile_schedule_api_key",
   // WhatsApp Support — separate credentials for the support inbox
   WA_SUPPORT_BUSINESS_ACCOUNT_ID: "wa_support_business_account_id",
   WA_SUPPORT_PHONE_NUMBER_ID: "wa_support_phone_number_id",
@@ -108,6 +130,9 @@ export const SETTING_KEYS = {
   WA_SUPPORT_AI_SYSTEM_PROMPT: "wa_support_ai_system_prompt",
   WA_SUPPORT_AI_MODEL: "wa_support_ai_model",
   WA_SUPPORT_DISPLAY_PHONE: "wa_support_display_phone",
+  // Minutes a /wa/<source> landing-page visit stays eligible to be matched to
+  // the next inbound support message. Default 3.
+  WA_SUPPORT_SOURCE_MATCH_WINDOW_MINUTES: "wa_support_source_match_window_minutes",
 } as const;
 
 export const SENSITIVE_SETTING_KEYS: readonly string[] = [
@@ -122,6 +147,7 @@ export const SENSITIVE_SETTING_KEYS: readonly string[] = [
   SETTING_KEYS.VOICE_AGENT_LLM_API_KEY,
   SETTING_KEYS.VAPI_API_KEY,
   SETTING_KEYS.CAPTCHA_API_KEY,
+  SETTING_KEYS.IMILE_SCHEDULE_API_KEY,
   SETTING_KEYS.WA_SUPPORT_ACCESS_TOKEN,
   SETTING_KEYS.WA_SUPPORT_API_KEY,
   SETTING_KEYS.WA_SUPPORT_APP_SECRET,

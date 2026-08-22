@@ -51,6 +51,9 @@ enum OrderStatus {
   ASSIGNED
   OUT_OF_STOCK
   RETURN_ON_PROCESS
+  // Set by the `reschedule_imile` automation action once the parcel has been
+  // re-booked and the customer notified.
+  SCHEDULED
 }
 
 model Order {
@@ -98,6 +101,12 @@ model Order {
   // Free-form notes the operator can attach to an order from the Pipeline
   // (e.g. "called customer, no answer"). Not synced from COD Network.
   pipelineNote      String?     @map("pipeline_note")
+  // Last delivery date (YYYY-MM-DD) booked with iMile by the
+  // `reschedule_imile` automation action, and when it was booked. The
+  // timestamp is what makes a daily sweep idempotent: an order already
+  // rescheduled today is skipped instead of being re-booked on every tick.
+  imileScheduledDate String?    @map("imile_scheduled_date")
+  imileScheduledAt   DateTime?  @map("imile_scheduled_at")
   createdAt         DateTime    @default(now()) @map("created_at")
   updatedAt         DateTime    @updatedAt @map("updated_at")
 
@@ -175,6 +184,18 @@ model InboundMessage {
   // Support source tag (e.g. "site1", "site2") detected from the WhatsApp link
   // ?source= parameter. Null for non-support or unknown-source messages.
   source            String?
+  // --- Structured payloads for non-text message types ---
+  // Location messages (type = "location").
+  latitude          Float?   @map("latitude")
+  longitude         Float?   @map("longitude")
+  locationName      String?  @map("location_name")
+  locationAddress   String?  @map("location_address")
+  // Reaction messages (type = "reaction").
+  reactionEmoji     String?  @map("reaction_emoji")
+  reactionToId      String?  @map("reaction_to_id")
+  // Speech-to-text of a voice/audio note (type = "audio"), produced by the
+  // OpenAI transcription API. Fed into the AI auto-reply context.
+  transcription     String?  @map("transcription")
 
   @@index([fromPhoneNumber])
   @@index([receivedAt])
@@ -399,6 +420,10 @@ model AutomationFlowRun {
 
   @@index([flowId, startedAt])
   @@index([orderId])
+  /// Supports the once-per-order guard lookup.
+  @@index([flowId, orderId, startedAt])
+  /// Supports retention pruning by age.
+  @@index([startedAt])
   @@map("automation_flow_runs")
 }
 
@@ -470,6 +495,10 @@ model Product {
   isDropProduct       Boolean  @default(false) @map("is_drop_product")
   // Whether the AI agent is enabled for this product specifically.
   aiAgentEnabled      Boolean  @default(false) @map("ai_agent_enabled")
+  // Optional dedicated AI system prompt for this product. When set, the AI
+  // auto-reply uses this instead of the global system prompt for any
+  // conversation involving this product. Null → fall back to the global prompt.
+  aiSystemPrompt      String?  @map("ai_system_prompt") @db.Text
   // Direct link to the seller's landing page for the product (from COD).
   storeUrl            String?  @map("store_url")
   rawProductJson      Json?    @map("raw_product_json")

@@ -3,6 +3,11 @@ import crypto from "crypto";
 import { prisma } from "@/lib/prisma";
 import { getSetting } from "@/lib/settings";
 import { Prisma, MessageStatus } from "@prisma/client";
+import {
+  parseInboundMessage,
+  type MetaMessage as SharedMetaMessage,
+} from "@/lib/whatsapp-message";
+import { downloadWhatsAppMedia, transcribeAudio } from "@/lib/whatsapp-media";
 
 export const dynamic = "force-dynamic";
 
@@ -25,20 +30,10 @@ export async function GET(request: NextRequest) {
   return new NextResponse("forbidden", { status: 403 });
 }
 
-interface MetaMessage {
-  from?: string;
-  id?: string;
-  timestamp?: string;
-  type?: string;
-  text?: { body?: string };
-  image?: { id?: string; mime_type?: string; caption?: string };
-  video?: { id?: string; mime_type?: string; caption?: string };
-  audio?: { id?: string; mime_type?: string };
-  document?: { id?: string; mime_type?: string; caption?: string };
-  sticker?: { id?: string; mime_type?: string };
+type MetaMessage = SharedMetaMessage & {
   referral?: { source_url?: string; source_id?: string; source_type?: string; body?: string; headline?: string };
   context?: { referred_product?: unknown };
-}
+};
 
 interface MetaStatus {
   id?: string;
@@ -87,17 +82,40 @@ function normalizePhone(raw: string): string {
   return stripped ? `+${stripped}` : raw;
 }
 
-function extractText(msg: MetaMessage): string | null {
-  if (msg.text?.body) return msg.text.body;
-  if (msg.image?.caption) return msg.image.caption;
-  if (msg.video?.caption) return msg.video.caption;
-  if (msg.document?.caption) return msg.document.caption;
-  return null;
-}
+/**
+ * Download a support voice note via the support access token, transcribe it
+ * via OpenAI, persist the transcript, and return it. Best-effort — returns
+ * null on any failure so the webhook keeps working.
+ */
+async function transcribeSupportVoice(
+  providerMessageId: string,
+  mediaId: string
+): Promise<string | null> {
+  try {
+    const accessToken = await getSetting("wa_support_access_token");
+    // Reuse the support AI key for transcription; fall back to the global
+    // OpenAI key so voice notes still transcribe if only that is set.
+    const openaiKey =
+      (await getSetting("wa_support_ai_api_key")) ||
+      (await getSetting("openai_api_key"));
+    if (!accessToken || !openaiKey) return null;
 
-function extractMedia(msg: MetaMessage): { id?: string; mimeType?: string } {
-  const m = msg.image || msg.video || msg.audio || msg.document || msg.sticker || {};
-  return { id: (m as { id?: string }).id, mimeType: (m as { mime_type?: string }).mime_type };
+    const media = await downloadWhatsAppMedia(mediaId, accessToken);
+    const transcript = await transcribeAudio(media, { apiKey: openaiKey });
+    if (!transcript) return null;
+
+    await prisma.inboundMessage.updateMany({
+      where: { providerMessageId },
+      data: { transcription: transcript },
+    });
+    return transcript;
+  } catch (err) {
+    console.error(
+      "[support-webhook] voice transcription failed",
+      err instanceof Error ? err.message : err
+    );
+    return null;
+  }
 }
 
 export async function POST(request: NextRequest) {
@@ -120,6 +138,19 @@ export async function POST(request: NextRequest) {
 
   const supportPni = await getSetting("wa_support_phone_number_id");
 
+  // How long a /wa/<source> visit stays eligible for matching (minutes).
+  // Configurable in Settings → WA Support; defaults to 3, clamped to 1..1440.
+  const windowRaw = Number.parseInt(
+    (await getSetting("wa_support_source_match_window_minutes")) ?? "",
+    10
+  );
+  const sourceMatchWindowMs =
+    (Number.isFinite(windowRaw) && windowRaw >= 1
+      ? Math.min(1440, windowRaw)
+      : 3) *
+    60 *
+    1000;
+
   const entries = payload.entry ?? [];
   for (const entry of entries) {
     for (const change of entry.changes ?? []) {
@@ -139,8 +170,8 @@ export async function POST(request: NextRequest) {
       for (const msg of value.messages ?? []) {
         if (!msg.id || !msg.from) continue;
         const fromPhone = normalizePhone(msg.from);
-        const text = extractText(msg);
-        const { id: mediaId, mimeType } = extractMedia(msg);
+        const parsed = parseInboundMessage(msg as SharedMetaMessage);
+        const text = parsed.text;
 
         // Detect source from referral, raw payload, or message text.
         // The user wants dynamic switching: each message carries its own
@@ -164,33 +195,35 @@ export async function POST(request: NextRequest) {
           const match = text.match(/source[=:]\s*(\S+)/i);
           if (match) source = match[1];
         }
-        // 5. Time-window matching: check if this phone number has never
-        //    messaged before AND a recent /wa/<source> page visit exists
-        //    within the last 3 minutes (landing-page redirect approach).
+        // 5. Time-window matching: if a recent /wa/<source> page visit exists
+        //    within the configured window, claim it (landing-page redirect
+        //    approach). This runs for BOTH new and returning customers so a
+        //    customer can switch source mid-conversation just by clicking a
+        //    new /wa/<source> link and then sending any message — the most
+        //    recent click wins.
         if (!source) {
-          const hasHistory = await prisma.inboundMessage.findFirst({
+          const windowStart = new Date(Date.now() - sourceMatchWindowMs);
+          // Pull the most recent unmatched visits and claim the first one we
+          // can win atomically. The guarded updateMany (id + matched:false)
+          // ensures that under concurrent traffic two messages can never be
+          // assigned the same visit — only one request flips `matched`.
+          const recentVisits = await prisma.sourceVisit.findMany({
             where: {
-              fromPhoneNumber: fromPhone,
-              phoneNumberId: receivedOnPhoneNumberId,
+              matched: false,
+              createdAt: { gte: windowStart },
             },
-            select: { id: true },
+            orderBy: { createdAt: "desc" },
+            take: 10,
+            select: { id: true, source: true },
           });
-          if (!hasHistory) {
-            const threeMinAgo = new Date(Date.now() - 3 * 60 * 1000);
-            const recentVisit = await prisma.sourceVisit.findFirst({
-              where: {
-                matched: false,
-                createdAt: { gte: threeMinAgo },
-              },
-              orderBy: { createdAt: "desc" },
-              select: { id: true, source: true },
+          for (const visit of recentVisits) {
+            const claim = await prisma.sourceVisit.updateMany({
+              where: { id: visit.id, matched: false },
+              data: { matched: true },
             });
-            if (recentVisit) {
-              source = recentVisit.source;
-              await prisma.sourceVisit.update({
-                where: { id: recentVisit.id },
-                data: { matched: true },
-              });
+            if (claim.count === 1) {
+              source = visit.source;
+              break;
             }
           }
         }
@@ -215,10 +248,16 @@ export async function POST(request: NextRequest) {
               providerMessageId: msg.id,
               fromPhoneNumber: fromPhone,
               contactName: contactNameByWaid.get(msg.from) ?? null,
-              type: msg.type ?? "text",
+              type: parsed.type,
               text,
-              mediaId: mediaId ?? null,
-              mediaMimeType: mimeType ?? null,
+              mediaId: parsed.mediaId,
+              mediaMimeType: parsed.mediaMimeType,
+              latitude: parsed.latitude,
+              longitude: parsed.longitude,
+              locationName: parsed.locationName,
+              locationAddress: parsed.locationAddress,
+              reactionEmoji: parsed.reactionEmoji,
+              reactionToId: parsed.reactionToId,
               phoneNumberId: receivedOnPhoneNumberId,
               rawPayload: msg as unknown as Prisma.InputJsonValue,
               source,
@@ -235,9 +274,17 @@ export async function POST(request: NextRequest) {
           }
         }
 
+        // Transcribe voice notes so the AI answers them with a normal text
+        // reply, then hand the (possibly transcribed) text to the auto-reply.
+        let aiText = text;
+        if (parsed.isAudio && parsed.mediaId) {
+          const transcript = await transcribeSupportVoice(msg.id, parsed.mediaId);
+          if (transcript) aiText = transcript;
+        }
+
         // AI auto-reply: use per-source system prompt if available
-        if (text) {
-          handleSupportAutoReply(fromPhone, text, source, receivedOnPhoneNumberId).catch(
+        if (aiText) {
+          handleSupportAutoReply(fromPhone, aiText, source, receivedOnPhoneNumberId).catch(
             (err) => console.error("[support-webhook] auto-reply error:", err)
           );
         }
@@ -310,7 +357,7 @@ async function handleSupportAutoReply(
     },
     orderBy: { receivedAt: "desc" },
     take: 10,
-    select: { text: true, receivedAt: true },
+    select: { text: true, transcription: true, receivedAt: true },
   });
   const recentOutbound = await prisma.whatsappMessage.findMany({
     where: {
@@ -326,7 +373,8 @@ async function handleSupportAutoReply(
   type ChatEntry = { role: "user" | "assistant"; content: string; at: Date };
   const chatHistory: ChatEntry[] = [];
   for (const m of recentInbound) {
-    if (m.text) chatHistory.push({ role: "user", content: m.text, at: m.receivedAt });
+    const content = m.transcription || m.text;
+    if (content) chatHistory.push({ role: "user", content, at: m.receivedAt });
   }
   for (const m of recentOutbound) {
     if (m.templateName === "<text>") {

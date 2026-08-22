@@ -66,6 +66,7 @@ export async function POST(request: NextRequest, context: RouteContext) {
     return NextResponse.json({ error: "Order not found" }, { status: 404 });
   }
 
-  const result = await executeFlow(flow, ctx);
+  // A manual test always runs, even for an order the flow already handled.
+  const result = await executeFlow(flow, ctx, undefined, { ignoreDedupe: true });
   return NextResponse.json(result);
 }

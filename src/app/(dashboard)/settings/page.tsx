@@ -39,6 +39,18 @@ interface WhatsappNumberRecord {
   isDefault: boolean;
 }
 
+interface MaskedField {
+  configured: boolean;
+  source: "override" | "env" | "none";
+  hint: string | null;
+}
+
+interface TrackingCaptchaConfig {
+  capsolverApiKey: MaskedField;
+  twoCaptchaApiKey: MaskedField;
+  jtBulkConcurrency: { value: number; source: "override" | "env" | "default" };
+}
+
 type TabId = (typeof TABS)[number]["id"];
 
 export default function SettingsPage() {
@@ -53,6 +65,78 @@ export default function SettingsPage() {
     type: "success" | "error";
     message: string;
   } | null>(null);
+
+  // Tracking-service CAPTCHA config (Capsolver / 2Captcha / concurrency).
+  // These live on the courier tracking service and are edited via a
+  // server-side proxy so the browser never handles the shared admin token.
+  const [captchaCfg, setCaptchaCfg] = useState<TrackingCaptchaConfig | null>(null);
+  const [captchaAvailable, setCaptchaAvailable] = useState<boolean | null>(null);
+  const [capsolverInput, setCapsolverInput] = useState("");
+  const [twoCaptchaInput, setTwoCaptchaInput] = useState("");
+  const [concurrencyInput, setConcurrencyInput] = useState("");
+  const [captchaSaving, setCaptchaSaving] = useState(false);
+
+  useEffect(() => {
+    if (activeTab !== "tracking") return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const data = await api.get<{
+          available: boolean;
+          config?: TrackingCaptchaConfig;
+        }>("/tracking/config");
+        if (cancelled) return;
+        setCaptchaAvailable(data.available);
+        if (data.config) {
+          setCaptchaCfg(data.config);
+          setConcurrencyInput(String(data.config.jtBulkConcurrency.value));
+        }
+      } catch {
+        if (!cancelled) setCaptchaAvailable(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTab]);
+
+  async function saveCaptchaConfig() {
+    const patch: Record<string, string> = {};
+    if (capsolverInput.trim()) patch.capsolverApiKey = capsolverInput.trim();
+    if (twoCaptchaInput.trim()) patch.twoCaptchaApiKey = twoCaptchaInput.trim();
+    if (
+      concurrencyInput.trim() &&
+      String(captchaCfg?.jtBulkConcurrency.value ?? "") !== concurrencyInput.trim()
+    ) {
+      patch.jtBulkConcurrency = concurrencyInput.trim();
+    }
+    if (Object.keys(patch).length === 0) {
+      setNotification({ type: "error", message: "Nothing to update" });
+      return;
+    }
+    setCaptchaSaving(true);
+    try {
+      const res = await api.patch<{ config: TrackingCaptchaConfig }>(
+        "/tracking/config",
+        patch
+      );
+      setCaptchaCfg(res.config);
+      setConcurrencyInput(String(res.config.jtBulkConcurrency.value));
+      setCapsolverInput("");
+      setTwoCaptchaInput("");
+      setNotification({
+        type: "success",
+        message: "Tracking CAPTCHA settings saved",
+      });
+    } catch (e) {
+      setNotification({
+        type: "error",
+        message: e instanceof Error ? e.message : "Failed to save",
+      });
+    } finally {
+      setCaptchaSaving(false);
+    }
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -408,6 +492,7 @@ export default function SettingsPage() {
               "wa_support_ai_system_prompt",
               "wa_support_ai_model",
               "wa_support_display_phone",
+              "wa_support_source_match_window_minutes",
             ])
           }
           saving={saving}
@@ -482,6 +567,14 @@ export default function SettingsPage() {
             onChange={(v) => updateSetting("wa_support_display_phone", v)}
             placeholder="+447830607451"
             help="The actual phone number customers will message (with country code). Used for /wa/<source> redirect links. E.g. +447830607451"
+          />
+          <SettingsField
+            label="Source Match Window (minutes)"
+            value={settings.wa_support_source_match_window_minutes || "3"}
+            onChange={(v) => updateSetting("wa_support_source_match_window_minutes", v)}
+            type="number"
+            placeholder="3"
+            help="After a customer clicks a /wa/<source> link, their next message within this many minutes is attributed to that source (1–1440). Default 3."
           />
           <div className="border-t border-gray-200 pt-4 mt-4">
             <h4 className="text-sm font-semibold text-gray-800 mb-3">Support AI Agent</h4>
@@ -636,6 +729,8 @@ export default function SettingsPage() {
               "automation_trigger_status",
               "automation_delay_seconds",
               "automation_send_once",
+              "automation_timezone",
+              "automation_run_retention_days",
               "default_country_code",
             ])
           }
@@ -709,6 +804,32 @@ export default function SettingsPage() {
             </button>
           </div>
           <SettingsField
+            label="Automation Timezone (IANA)"
+            value={settings.automation_timezone || "UTC"}
+            onChange={(v) => updateSetting("automation_timezone", v)}
+            placeholder="UTC"
+          />
+          <p className="text-xs text-gray-500 -mt-2 mb-4">
+            Timezone used to evaluate scheduled-hour automations (e.g. &quot;send
+            after 6 AM&quot;). Use an IANA name like{" "}
+            <code>Africa/Casablanca</code>, <code>Europe/London</code>, or{" "}
+            <code>UTC</code>. A rule scheduled for hour H fires for matching
+            orders once the local time reaches H:00.
+          </p>
+          <SettingsField
+            label="Automation Run History Retention (days)"
+            value={settings.automation_run_retention_days || "7"}
+            onChange={(v) => updateSetting("automation_run_retention_days", v)}
+            placeholder="7"
+            type="number"
+          />
+          <p className="text-xs text-gray-500 -mt-2 mb-4">
+            Every automation trigger records a run (including runs whose
+            conditions didn&apos;t match). Runs older than this are deleted on
+            each sync so the history can&apos;t grow large enough to slow the
+            dashboard down.
+          </p>
+          <SettingsField
             label="Default Country Code"
             value={settings.default_country_code || "212"}
             onChange={(v) => updateSetting("default_country_code", v)}
@@ -727,6 +848,10 @@ export default function SettingsPage() {
               "captcha_provider",
               "captcha_api_key",
               "tracking_refresh_interval_minutes",
+              "courier_jte_provider",
+              "courier_jte_batch_size",
+              "imile_schedule_api_url",
+              "imile_schedule_api_key",
             ])
           }
           saving={saving}
@@ -793,6 +918,179 @@ export default function SettingsPage() {
             }
             help="Only used when JD Logistics (JDW) tracking responses challenge with a captcha. Optional — without a key, JDW rows are marked captcha_required when challenged."
           />
+
+          <div className="mt-6 mb-4 border-t border-gray-200 pt-4">
+            <h4 className="text-sm font-semibold text-gray-800 mb-1">
+              J&amp;T Express (JTE)
+            </h4>
+            <p className="text-xs text-gray-500 mb-3">
+              J&amp;T tracking is handled by the courier tracking service. Here
+              you control which provider the dashboard requests, how many
+              waybills it sends per request, and (below) the CAPTCHA solver keys
+              and worker concurrency used by that service.
+            </p>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              J&amp;T Provider
+            </label>
+            <select
+              value={settings.courier_jte_provider || "auto"}
+              onChange={(e) =>
+                updateSetting("courier_jte_provider", e.target.value)
+              }
+              className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+            >
+              <option value="auto">Auto (TrackingMore → Tencent fallback)</option>
+              <option value="trackingmore">TrackingMore only</option>
+              <option value="tencent">Tencent captcha only</option>
+            </select>
+            <p className="mt-1 text-xs text-gray-500">
+              &quot;Auto&quot; tries TrackingMore first (fast) and falls back to
+              the Tencent captcha solver on failure.
+            </p>
+          </div>
+          <SettingsField
+            label="J&T Batch Size"
+            value={settings.courier_jte_batch_size || "20"}
+            onChange={(v) => updateSetting("courier_jte_batch_size", v)}
+            type="number"
+            placeholder="20"
+            help="Waybills sent per tracking request (1–20). The service groups internally: TrackingMore/auto up to 20, Tencent up to 10."
+          />
+
+          <div className="mt-6 mb-4 border-t border-gray-200 pt-4">
+            <h4 className="text-sm font-semibold text-gray-800 mb-1">
+              iMile Delivery Scheduling
+            </h4>
+            <p className="text-xs text-gray-500 mb-3">
+              Used by the{" "}
+              <span className="font-medium">Reschedule iMile delivery</span>{" "}
+              automation action to book a new delivery date for undelivered
+              iMile parcels. Leave the URL blank to use the default service.
+            </p>
+          </div>
+          <SettingsField
+            label="iMile Service URL"
+            value={settings.imile_schedule_api_url || ""}
+            onChange={(v) => updateSetting("imile_schedule_api_url", v)}
+            placeholder="https://imile.shopinzo.bond"
+            help="Base URL of the iMile scheduling service (hamoza33/imile_schedule)."
+          />
+          <SettingsField
+            label="iMile Service API Key"
+            value={settings.imile_schedule_api_key || ""}
+            onChange={(v) => updateSetting("imile_schedule_api_key", v)}
+            type="password"
+            configuredPreview={sensitivePreviews.imile_schedule_api_key}
+            settingKey="imile_schedule_api_key"
+            placeholder={
+              configuredSecrets.has("imile_schedule_api_key")
+                ? "Currently configured — enter a new value to replace"
+                : "Only needed if the service sets IMILE_MCP_API_KEY"
+            }
+            help="Sent as the x-api-key header. Only required when the iMile service is started with IMILE_MCP_API_KEY set."
+          />
+
+          <div className="mt-6 mb-2 border-t border-gray-200 pt-4">
+            <h4 className="text-sm font-semibold text-gray-800 mb-1">
+              CAPTCHA Solver Keys (tracking service)
+            </h4>
+            <p className="text-xs text-gray-500 mb-3">
+              These keys are stored on the courier tracking service.{" "}
+              <strong>Capsolver is primary</strong>, 2Captcha is the fallback.
+              For security the full keys are never shown here — only the last few
+              characters. Leave a field blank to keep the current value; type a
+              new key to replace it.
+            </p>
+
+            {captchaAvailable === false && (
+              <div className="rounded-md bg-amber-50 border border-amber-200 px-3 py-2 text-xs text-amber-800">
+                The tracking service admin API is not reachable or the dashboard
+                admin token is not configured, so CAPTCHA keys can&apos;t be
+                edited here right now.
+              </div>
+            )}
+
+            {captchaAvailable && (
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Capsolver API Key (primary)
+                  </label>
+                  <input
+                    type="password"
+                    value={capsolverInput}
+                    onChange={(e) => setCapsolverInput(e.target.value)}
+                    placeholder={
+                      captchaCfg?.capsolverApiKey.configured
+                        ? `Configured (…${captchaCfg.capsolverApiKey.hint ?? ""}) — leave blank to keep`
+                        : "Not set — paste a key to configure"
+                    }
+                    autoComplete="off"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                  <p className="mt-1 text-xs text-gray-500">
+                    {captchaCfg?.capsolverApiKey.configured
+                      ? `Currently: ${captchaCfg.capsolverApiKey.source === "override" ? "dashboard override" : "service env var"} (…${captchaCfg.capsolverApiKey.hint ?? ""})`
+                      : "Not configured."}
+                  </p>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    2Captcha API Key (fallback)
+                  </label>
+                  <input
+                    type="password"
+                    value={twoCaptchaInput}
+                    onChange={(e) => setTwoCaptchaInput(e.target.value)}
+                    placeholder={
+                      captchaCfg?.twoCaptchaApiKey.configured
+                        ? `Configured (…${captchaCfg.twoCaptchaApiKey.hint ?? ""}) — leave blank to keep`
+                        : "Not set — paste a key to configure"
+                    }
+                    autoComplete="off"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                  <p className="mt-1 text-xs text-gray-500">
+                    {captchaCfg?.twoCaptchaApiKey.configured
+                      ? `Currently: ${captchaCfg.twoCaptchaApiKey.source === "override" ? "dashboard override" : "service env var"} (…${captchaCfg.twoCaptchaApiKey.hint ?? ""})`
+                      : "Not configured."}
+                  </p>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    J&amp;T Bulk Concurrency (1–10)
+                  </label>
+                  <input
+                    type="number"
+                    min={1}
+                    max={10}
+                    value={concurrencyInput}
+                    onChange={(e) => setConcurrencyInput(e.target.value)}
+                    placeholder="5"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                  <p className="mt-1 text-xs text-gray-500">
+                    Number of J&amp;T groups solved concurrently (clamped 1–10).
+                    {captchaCfg
+                      ? ` Currently ${captchaCfg.jtBulkConcurrency.value} (${captchaCfg.jtBulkConcurrency.source}).`
+                      : ""}
+                  </p>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={saveCaptchaConfig}
+                  disabled={captchaSaving}
+                  className="inline-flex items-center gap-2 px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-md hover:bg-blue-700 disabled:opacity-50"
+                >
+                  <Save className="w-4 h-4" />
+                  {captchaSaving ? "Saving…" : "Save CAPTCHA settings"}
+                </button>
+              </div>
+            )}
+          </div>
         </SettingsSection>
       )}
 
@@ -812,6 +1110,7 @@ export default function SettingsPage() {
               "ai_suggestions_enabled",
               "ai_suggestions_count",
               "ai_suggestions_system_prompt",
+              "ai_suggestions_min_tokens",
             ])
           }
           saving={saving}
@@ -954,6 +1253,18 @@ export default function SettingsPage() {
               type="number"
               placeholder="3"
               help="How many reply suggestions to generate (1-5)."
+            />
+            <SettingsField
+              label="Suggestion Minimum Length (tokens)"
+              value={
+                settings.ai_suggestions_min_tokens ||
+                settings.ai_suggestions_max_tokens ||
+                "500"
+              }
+              onChange={(v) => updateSetting("ai_suggestions_min_tokens", v)}
+              type="number"
+              placeholder="500"
+              help="Shortest answer you want back (50–4000). Each suggestion is asked to reach roughly this length, and the hard cap is set well above it so replies are never cut off. Raise it for longer, more detailed suggestions."
             />
             <div className="mb-4">
               <label className="block text-sm font-medium text-gray-700 mb-1">

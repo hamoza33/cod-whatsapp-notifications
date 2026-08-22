@@ -68,6 +68,7 @@ import {
   Plus,
   Trash2,
   Clock,
+  CalendarClock,
   Webhook,
   StopCircle,
   Phone,
@@ -82,6 +83,10 @@ import {
   X,
 } from "lucide-react";
 import { api } from "@/lib/api-client";
+import {
+  countTemplateVariables,
+  inferTemplateVariableDefaults,
+} from "@/lib/template-variables";
 
 // ----------------------------------------------------------------------------
 // Types — kept in sync with src/lib/automation-flows/types.ts on the server
@@ -93,6 +98,7 @@ type FlowTriggerType =
   | "ORDER_STATUS_CHANGED"
   | "TRACKING_STATUS_CHANGED"
   | "MESSAGE_RECEIVED"
+  | "SCHEDULED"
   | "MANUAL";
 
 type ConditionOperator =
@@ -121,6 +127,7 @@ type ActionKind =
   | "add_pipeline_note"
   | "pin_conversation"
   | "queue_call_agent"
+  | "reschedule_imile"
   | "wait"
   | "wait_for_reply"
   | "webhook"
@@ -134,6 +141,10 @@ interface TriggerData {
   toStatus?: string | null;
   trackingFromStatus?: string | null;
   trackingToStatus?: string | null;
+  scheduleHour?: number | null;
+  scheduleMinute?: number | null;
+  scheduleStatus?: string | null;
+  runOncePerOrder?: boolean | null;
 }
 interface ConditionData {
   kind: "condition";
@@ -151,9 +162,11 @@ interface ActionData {
   templateLanguage?: string | null;
   templateVariables?: string[] | null;
   templateHeaderImageUrl?: string | null;
+  allowDuplicateSend?: boolean | null;
   text?: string | null;
   targetStatus?: string | null;
   note?: string | null;
+  rescheduleDaysAhead?: number | null;
   waitSeconds?: number | null;
   waitForReplyYesKeywords?: string[] | null;
   waitForReplyNoKeywords?: string[] | null;
@@ -232,6 +245,7 @@ const ORDER_STATUSES = [
   "DELIVERED",
   "RETURNED",
   "CANCELLED",
+  "SCHEDULED",
   "UNKNOWN",
   "NEW",
   "NO_REPLY",
@@ -255,6 +269,7 @@ const TRIGGER_LABELS: Record<FlowTriggerType, string> = {
   ORDER_CREATED: "Order created",
   ORDER_TRACKING_ASSIGNED: "Tracking number assigned",
   ORDER_STATUS_CHANGED: "Order status changed",
+  SCHEDULED: "Scheduled (daily at time)",
   TRACKING_STATUS_CHANGED: "Tracking status changed",
   MESSAGE_RECEIVED: "Customer reply received",
   MANUAL: "Manual trigger",
@@ -267,11 +282,26 @@ const ACTION_LABELS: Record<ActionKind, string> = {
   add_pipeline_note: "Add pipeline note",
   pin_conversation: "Pin conversation",
   queue_call_agent: "Queue call agent",
+  reschedule_imile: "Reschedule iMile delivery",
   wait: "Wait",
   wait_for_reply: "Wait for customer reply (yes / no)",
   webhook: "Call webhook",
   stop: "Stop flow",
 };
+
+/**
+ * Mirrors `dedupeDefaultForTrigger` in the engine: one-shot lifecycle
+ * triggers suppress repeat runs for the same order unless the operator
+ * explicitly opts back in.
+ */
+function defaultRunOncePerOrder(triggerType: FlowTriggerType): boolean {
+  return (
+    triggerType === "ORDER_CREATED" ||
+    triggerType === "ORDER_STATUS_CHANGED" ||
+    triggerType === "ORDER_TRACKING_ASSIGNED" ||
+    triggerType === "TRACKING_STATUS_CHANGED"
+  );
+}
 
 const ACTION_ICONS: Record<ActionKind, typeof Mail> = {
   send_template: Mail,
@@ -280,6 +310,7 @@ const ACTION_ICONS: Record<ActionKind, typeof Mail> = {
   add_pipeline_note: StickyNote,
   pin_conversation: Pin,
   queue_call_agent: PhoneCall,
+  reschedule_imile: CalendarClock,
   wait: Clock,
   wait_for_reply: MessageCircleQuestion,
   webhook: Webhook,
@@ -499,6 +530,12 @@ function ActionNode({ data, selected }: NodeProps) {
       )}
       {d.action === "wait" && d.waitSeconds !== null && d.waitSeconds !== undefined && (
         <div className="text-[11px] text-gray-500 mt-0.5">{d.waitSeconds}s</div>
+      )}
+      {d.action === "reschedule_imile" && (
+        <div className="text-[11px] text-gray-500 mt-0.5">
+          +{Math.max(1, Math.floor(d.rescheduleDaysAhead ?? 1))} day
+          {Math.max(1, Math.floor(d.rescheduleDaysAhead ?? 1)) === 1 ? "" : "s"} · iMile only
+        </div>
       )}
       <Handle type="source" position={Position.Bottom} className="!bg-blue-500" style={HANDLE_SIZE} />
 
@@ -721,6 +758,7 @@ function FlowEditorInner() {
   const [templates, setTemplates] = useState<TemplateRow[]>([]);
   const [testRunning, setTestRunning] = useState(false);
   const [testResult, setTestResult] = useState<string | null>(null);
+  const [automationTimezone, setAutomationTimezone] = useState<string>("");
   const dirtyRef = useRef(false);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const persistRef = useRef<() => Promise<void>>(() => Promise.resolve());
@@ -739,13 +777,17 @@ function FlowEditorInner() {
     let cancelled = false;
     (async () => {
       try {
-        const [flowRes, dpRes, tplRes] = await Promise.all([
+        const [flowRes, dpRes, tplRes, settingsRes] = await Promise.all([
           api.get<{ flow: FlowDto }>(`/automation-flows/${flowId}`),
           api.get<DataPointsResponse>("/automation-flows/data-points"),
           api.get<{ templates: TemplateRow[] }>("/whatsapp/templates/cached"),
+          api
+            .get<{ settings: Record<string, string | null> }>("/settings")
+            .catch(() => ({ settings: {} as Record<string, string | null> })),
         ]);
         if (cancelled) return;
         setFlow(flowRes.flow);
+        setAutomationTimezone(settingsRes.settings?.automation_timezone ?? "");
         setName(flowRes.flow.name);
         setDescription(flowRes.flow.description ?? "");
         setIsEnabled(flowRes.flow.isEnabled);
@@ -1284,6 +1326,7 @@ function FlowEditorInner() {
               node={selectedNode}
               dataPoints={dataPoints}
               templates={templates}
+              automationTimezone={automationTimezone}
               onChange={(patch) => updateNodeData(selectedNode.id, patch)}
               onDelete={() => deleteNode(selectedNode.id)}
             />
@@ -1343,12 +1386,14 @@ function NodeInspector({
   node,
   dataPoints,
   templates,
+  automationTimezone,
   onChange,
   onDelete,
 }: {
   node: Node;
   dataPoints: DataPoint[];
   templates: TemplateRow[];
+  automationTimezone: string;
   onChange: (patch: Partial<FlowNodeData>) => void;
   onDelete: () => void;
 }) {
@@ -1376,7 +1421,13 @@ function NodeInspector({
         )}
       </div>
 
-      {data.kind === "trigger" && <TriggerInspector data={data} onChange={onChange} />}
+      {data.kind === "trigger" && (
+        <TriggerInspector
+          data={data}
+          automationTimezone={automationTimezone}
+          onChange={onChange}
+        />
+      )}
       {data.kind === "condition" && (
         <ConditionInspector data={data} dataPoints={dataPoints} onChange={onChange} />
       )}
@@ -1399,9 +1450,11 @@ function NodeInspector({
 
 function TriggerInspector({
   data,
+  automationTimezone,
   onChange,
 }: {
   data: TriggerData;
+  automationTimezone: string;
   onChange: (patch: Partial<FlowNodeData>) => void;
 }) {
   return (
@@ -1425,6 +1478,63 @@ function TriggerInspector({
           />
         </>
       )}
+      {data.triggerType === "SCHEDULED" && (
+        <>
+          <div className="grid grid-cols-2 gap-2">
+            <LabeledInput
+              label="Hour (0–23)"
+              type="number"
+              value={String(data.scheduleHour ?? 0)}
+              onChange={(v) => {
+                const n = parseInt(v, 10);
+                onChange({
+                  scheduleHour: Number.isFinite(n)
+                    ? Math.min(23, Math.max(0, n))
+                    : 0,
+                } as Partial<FlowNodeData>);
+              }}
+            />
+            <LabeledInput
+              label="Minute (0–59)"
+              type="number"
+              value={String(data.scheduleMinute ?? 0)}
+              onChange={(v) => {
+                const n = parseInt(v, 10);
+                onChange({
+                  scheduleMinute: Number.isFinite(n)
+                    ? Math.min(59, Math.max(0, n))
+                    : 0,
+                } as Partial<FlowNodeData>);
+              }}
+            />
+          </div>
+          <LabeledSelect
+            label="Only orders currently in status"
+            value={data.scheduleStatus ?? ""}
+            options={["", ...ORDER_STATUSES]}
+            onChange={(v) =>
+              onChange({ scheduleStatus: v || null } as Partial<FlowNodeData>)
+            }
+          />
+          <div className="text-[11px] text-gray-500 leading-relaxed">
+            Runs once per day at or after this time and sweeps every matching
+            order. Leave status empty to consider all orders.
+          </div>
+          {automationTimezone ? (
+            <div className="text-[11px] text-gray-600 bg-gray-50 border border-gray-200 rounded px-2 py-1.5">
+              Timezone: <span className="font-medium">{automationTimezone}</span>{" "}
+              — this time is interpreted in that zone.
+            </div>
+          ) : (
+            <div className="text-[11px] text-amber-800 bg-amber-50 border border-amber-200 rounded px-2 py-1.5">
+              ⚠ No automation timezone set — this time is interpreted as{" "}
+              <span className="font-medium">UTC</span>. Set your timezone in{" "}
+              <span className="font-medium">Settings → Automation</span> so it
+              fires at your local time.
+            </div>
+          )}
+        </>
+      )}
       {data.triggerType === "TRACKING_STATUS_CHANGED" && (
         <>
           <LabeledSelect
@@ -1437,6 +1547,26 @@ function TriggerInspector({
           />
         </>
       )}
+      <div className="pt-2 border-t border-gray-100 space-y-1">
+        <label className="text-[12px] text-gray-700 flex items-center gap-2">
+          <input
+            type="checkbox"
+            checked={data.runOncePerOrder ?? defaultRunOncePerOrder(data.triggerType)}
+            onChange={(e) =>
+              onChange({
+                runOncePerOrder: e.target.checked,
+              } as Partial<FlowNodeData>)
+            }
+          />
+          Run only once per order
+        </label>
+        <div className="text-[11px] text-gray-500 leading-relaxed">
+          {data.triggerType === "ORDER_STATUS_CHANGED" ||
+          data.triggerType === "TRACKING_STATUS_CHANGED"
+            ? "Counted per resulting status: the flow still runs when the order reaches a different status, but a flap back to a status it already handled is ignored. Turn off only if the customer should be messaged again on every change."
+            : "Skips orders this flow already acted on, so a re-synced order is never messaged twice."}
+        </div>
+      </div>
       <div className="text-[11px] text-gray-500 leading-relaxed pt-2 border-t border-gray-100">
         This trigger fires automatically. Wire it to a Condition or Action
         block to make something happen.
@@ -1597,11 +1727,20 @@ function ActionInspector({
               value={data.templateName ?? ""}
               onChange={(e) => {
                 const t = templates.find((tt) => tt.name === e.target.value);
-                const varCount = countTemplateVariables(t?.bodyText ?? "");
+                const bodyText = t?.bodyText ?? "";
+                const varCount = countTemplateVariables(bodyText);
                 const existing = data.templateVariables ?? [];
+                // Pre-fill blank slots with the data point the template body
+                // asks for ({{1}} after "السلام عليكم" → customer name,
+                // {{2}} after "رقم التتبع" → tracking number). Meta rejects a
+                // send whose body parameters are blank.
+                const inferred = inferTemplateVariableDefaults(bodyText, varCount);
                 const vars =
                   varCount > 0
-                    ? Array.from({ length: varCount }, (_, i) => existing[i] ?? "")
+                    ? Array.from(
+                        { length: varCount },
+                        (_, i) => existing[i]?.trim() || inferred[i] || ""
+                      )
                     : existing;
                 onChange({
                   templateName: e.target.value || null,
@@ -1635,6 +1774,23 @@ function ActionInspector({
               onChange({ templateHeaderImageUrl: v || null } as Partial<FlowNodeData>)
             }
           />
+          <label className="text-[12px] text-gray-700 flex items-center gap-2">
+            <input
+              type="checkbox"
+              checked={!!data.allowDuplicateSend}
+              onChange={(e) =>
+                onChange({
+                  allowDuplicateSend: e.target.checked,
+                } as Partial<FlowNodeData>)
+              }
+            />
+            Allow resending the same template
+          </label>
+          <div className="text-[11px] text-gray-500 leading-relaxed">
+            Off by default: if this template already went out for the order in
+            the last 24h the send is skipped instead of messaging the customer
+            twice.
+          </div>
         </>
       )}
 
@@ -1675,6 +1831,36 @@ function ActionInspector({
           dataPoints={dataPoints}
           onChange={(v) => onChange({ note: v } as Partial<FlowNodeData>)}
         />
+      )}
+
+      {data.action === "reschedule_imile" && (
+        <>
+          <div className="text-[11px] text-gray-500 leading-relaxed -mt-1">
+            Books a new delivery date with iMile for the order&apos;s tracking
+            number. Only iMile shipments are touched — other carriers, orders
+            with no tracking number, and parcels already delivered or returned
+            are skipped. An order is rescheduled at most once per day, so a
+            daily sweep is safe to leave running.
+          </div>
+          <LabeledInput
+            label="Days ahead"
+            type="number"
+            value={String(data.rescheduleDaysAhead ?? 1)}
+            onChange={(v) => {
+              const n = parseInt(v, 10);
+              onChange({
+                rescheduleDaysAhead: Number.isFinite(n) ? Math.max(1, n) : 1,
+              } as Partial<FlowNodeData>);
+            }}
+          />
+          <div className="text-[11px] text-gray-500 leading-relaxed -mt-1">
+            1 = tomorrow. The date is resolved in your automation timezone. If
+            iMile rejects it, its own suggested date is used instead. Add a
+            “Send WhatsApp template” action after this one and reference{" "}
+            <span className="font-mono">{"{{imile.scheduledDate}}"}</span> to
+            tell the customer the new date.
+          </div>
+        </>
       )}
 
       {data.action === "wait" && (
@@ -1869,6 +2055,13 @@ function TemplateVariablesEditor({
           Template expects {expectedCount} variable{expectedCount !== 1 ? "s" : ""}, but {variables.length} provided.
         </div>
       )}
+      {variables.some((v) => !v.trim()) && (
+        <div className="text-[10px] text-red-700 bg-red-50 border border-red-200 rounded px-2 py-1 mb-1">
+          Empty slots are rejected by WhatsApp (error #131008) and the send will
+          fail. Fill each slot with a data point, e.g.{" "}
+          <code>{"{{order.customerName}}"}</code>.
+        </div>
+      )}
       {variables.length === 0 && expectedCount === 0 && (
         <div className="text-[10px] text-gray-500">
           No variables — template will be sent with no body params.
@@ -1905,7 +2098,9 @@ function TemplateVariablesEditor({
               onKeyUp={(e) => captureCursor(e.currentTarget)}
               onBlur={(e) => captureCursor(e.currentTarget)}
               placeholder="{{order.customerName}} or literal text"
-              className="flex-1 border border-gray-200 rounded-md px-2 py-1 text-[11px] font-mono"
+              className={`flex-1 border rounded-md px-2 py-1 text-[11px] font-mono ${
+                slot.trim() ? "border-gray-200" : "border-red-300 bg-red-50"
+              }`}
             />
             <button
               type="button"
@@ -2273,14 +2468,6 @@ function HeaderImagePicker({
 // ----------------------------------------------------------------------------
 // Small helpers
 // ----------------------------------------------------------------------------
-
-function countTemplateVariables(bodyText: string): number {
-  if (!bodyText) return 0;
-  const matches = bodyText.match(/{{\s*\d+\s*}}/g);
-  if (!matches) return 0;
-  const nums = matches.map((m) => parseInt(m.replace(/[{}]/g, "").trim(), 10));
-  return Math.max(...nums);
-}
 
 /**
  * Comma-separated keyword editor used by the wait_for_reply inspector.

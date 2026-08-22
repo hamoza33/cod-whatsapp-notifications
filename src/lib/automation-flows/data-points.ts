@@ -78,6 +78,14 @@ export const DATA_POINTS: ReadonlyArray<DataPoint> = [
     type: "string",
   },
   {
+    path: "order.productSku",
+    group: "Order",
+    label: "Product SKU",
+    type: "string",
+    description:
+      "All SKUs on the order (payload SKUs + matched catalog SKUs), comma-separated. Use with \"contains\" to target one product of a multi-product order.",
+  },
+  {
     path: "order.productPrice",
     label: "Product price",
     group: "Order",
@@ -129,6 +137,14 @@ export const DATA_POINTS: ReadonlyArray<DataPoint> = [
     type: "boolean",
   },
   {
+    path: "order.ageDays",
+    label: "Order age (days)",
+    group: "Order",
+    type: "number",
+    description:
+      "Whole days since the order was created. Use with lte/lt, e.g. \"order age ≤ 2\" targets orders made within the last 2 days.",
+  },
+  {
     path: "order.whatsappSentAt",
     label: "WhatsApp message sent",
     group: "Order",
@@ -174,6 +190,14 @@ export const DATA_POINTS: ReadonlyArray<DataPoint> = [
     label: "Tracking number (carrier)",
     group: "Tracking",
     type: "string",
+  },
+  {
+    path: "order.imileScheduledDate",
+    label: "iMile scheduled delivery date",
+    group: "Tracking",
+    type: "string",
+    description:
+      "Last delivery date (YYYY-MM-DD) booked with iMile by the \"Reschedule iMile delivery\" action. Use {{imile.scheduledDate}} in a template that runs right after the reschedule.",
   },
   // -------------------- Customer --------------------
   {
@@ -222,6 +246,12 @@ export const DATA_POINTS: ReadonlyArray<DataPoint> = [
   {
     path: "time.hour",
     label: "Hour of day (0–23)",
+    group: "Time",
+    type: "number",
+  },
+  {
+    path: "time.minute",
+    label: "Minute of hour (0–59)",
     group: "Time",
     type: "number",
   },

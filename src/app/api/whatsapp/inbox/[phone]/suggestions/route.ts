@@ -54,10 +54,20 @@ export async function POST(
 
   const model =
     (await getSetting(SETTING_KEYS.AI_AGENT_MODEL)) || "gpt-4o-mini";
-  const maxTokens = parseInt(
-    (await getSetting(SETTING_KEYS.AI_AGENT_MAX_TOKENS)) || "300",
-    10
-  );
+  // The configured value is the *minimum* length the operator wants back —
+  // short suggestions were the complaint, so the number is a floor the prompt
+  // asks the model to reach, and the hard OpenAI cap is derived from it with
+  // enough headroom that the reply is never truncated mid-sentence.
+  const rawMinTokens =
+    (await getSetting(SETTING_KEYS.AI_SUGGESTIONS_MIN_TOKENS)) ||
+    (await getSetting(SETTING_KEYS.AI_SUGGESTIONS_MAX_TOKENS)) ||
+    (await getSetting(SETTING_KEYS.AI_AGENT_MAX_TOKENS)) ||
+    "500";
+  const parsedMinTokens = parseInt(rawMinTokens, 10);
+  const minTokens = Number.isFinite(parsedMinTokens)
+    ? Math.max(50, Math.min(4000, parsedMinTokens))
+    : 500;
+  const maxTokens = Math.min(8000, Math.max(minTokens * 3, minTokens + 256));
   const suggestionsCount = parseInt(
     (await getSetting(SETTING_KEYS.AI_SUGGESTIONS_COUNT)) || "3",
     10
@@ -173,6 +183,14 @@ export async function POST(
       "\n\nIMPORTANT: even though the operator may have written this context in English, the LANGUAGE RULE above still applies — the suggestions you generate must follow the customer's language.";
   }
 
+  // Length floor, appended last so it outranks any "keep it short" wording in
+  // the operator's own prompt (the default prompt asks for 1-2 sentences).
+  const minWords = Math.round(minTokens * 0.75);
+  systemPrompt +=
+    "\n\nLENGTH RULE (overrides any instruction to be brief or concise):" +
+    `\n- Each suggestion must be detailed and substantial — aim for at least ${minWords} words per suggestion.` +
+    "\n- Explain, reassure and cover the details the customer needs; never answer in a single short sentence.";
+
   const messages: Array<{ role: string; content: string }> = [
     { role: "system", content: systemPrompt },
   ];
@@ -182,7 +200,7 @@ export async function POST(
 
   messages.push({
     role: "user",
-    content: `Based on the conversation above, generate exactly ${suggestionsCount} short reply suggestions I can send to this customer via WhatsApp. Return ONLY a JSON array of strings, no other text. Example: ["suggestion 1", "suggestion 2", "suggestion 3"]`,
+    content: `Based on the conversation above, generate exactly ${suggestionsCount} reply suggestions I can send to this customer via WhatsApp. Each one must be at least ${minWords} words long. Return ONLY a JSON array of strings, no other text. Example: ["suggestion 1", "suggestion 2", "suggestion 3"]`,
   });
 
   try {

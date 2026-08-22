@@ -1,8 +1,13 @@
-import { syncOrders, isSyncInProgress } from "./sync";
+import { syncOrders, syncLeads, isSyncInProgress } from "./sync";
 import { getSetting, setSetting, SETTING_KEYS } from "./settings";
 import { importTemplatesFromMeta } from "./template-import";
 import { syncProductsFromCodNetwork } from "./product-sync";
 import { refreshAllTracking, syncTrackingFromOrders } from "./tracking";
+import { runScheduledAutomations } from "./automations";
+import {
+  pruneFlowRunHistory,
+  runScheduledFlows,
+} from "./automation-flows/engine";
 
 /**
  * Lightweight in-process scheduler that runs `syncOrders()` on a recurring
@@ -65,6 +70,60 @@ async function tick(): Promise<void> {
     lastRunError = err instanceof Error ? err.message : String(err);
   } finally {
     lastRunFinishedAt = new Date();
+  }
+
+  // Poll the leads endpoint on the same cadence so the Lead pipeline stays
+  // fresh even when the lead-status webhook misses a delivery. Best-effort:
+  // a lead-sync failure must never break the order sync above.
+  try {
+    const leadResult = await syncLeads();
+    if (leadResult.errors.length > 0) {
+      const leadErr = `leads: ${leadResult.errors.join("; ")}`;
+      lastRunError = lastRunError ? `${lastRunError}; ${leadErr}` : leadErr;
+    }
+  } catch (err) {
+    console.warn(
+      "[auto-sync] lead sync tick failed",
+      err instanceof Error ? err.message : err
+    );
+  }
+
+  // Fire time-gated automations whose scheduled hour has arrived. This is what
+  // delivers "status changed earlier → act after 06:00": the earlier status
+  // event was correctly skipped, and this sweep picks it up once the window
+  // opens. Best-effort — failures never break the sync loop.
+  try {
+    await runScheduledAutomations();
+  } catch (err) {
+    console.warn(
+      "[auto-sync] scheduled automation sweep failed",
+      err instanceof Error ? err.message : err
+    );
+  }
+
+  // Fire flow-builder SCHEDULED automations whose daily time has arrived
+  // (e.g. "at 05:00, move all orders in status X to PROCESSING + send").
+  // Best-effort — failures never break the sync loop.
+  try {
+    await runScheduledFlows();
+  } catch (err) {
+    console.warn(
+      "[auto-sync] scheduled flow sweep failed",
+      err instanceof Error ? err.message : err
+    );
+  }
+
+  // Trim run history so the biggest table in the database stays bounded.
+  try {
+    const pruned = await pruneFlowRunHistory();
+    if (pruned > 0) {
+      console.log(`[auto-sync] pruned ${pruned} old automation flow runs`);
+    }
+  } catch (err) {
+    console.warn(
+      "[auto-sync] flow run history prune failed",
+      err instanceof Error ? err.message : err
+    );
   }
 }
 

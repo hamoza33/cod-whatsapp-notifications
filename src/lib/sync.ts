@@ -12,6 +12,7 @@ import { normalizePhoneNumber } from "./phone";
 import { OrderStatus } from "@prisma/client";
 import { deriveOrderStatus } from "./order-status";
 import { runAutomationsForOrder } from "./automations";
+import { applyWebhookEvent } from "./cod-webhook-apply";
 import {
   fireOrderCreatedFlows,
   fireOrderTrackingAssignedFlows,
@@ -48,6 +49,92 @@ let syncInProgress = false;
 
 export function isSyncInProgress(): boolean {
   return syncInProgress;
+}
+
+interface LeadSyncResult {
+  leadsFound: number;
+  leadsCreated: number;
+  leadsUpdated: number;
+  errors: string[];
+}
+
+let leadSyncInProgress = false;
+
+/**
+ * Poll the COD Network *seller leads* endpoint and upsert each lead into the
+ * Order table (leads and orders share the table). Keeps the Lead pipeline
+ * fresh the same way `syncOrders` keeps the Order pipeline fresh — even when
+ * the lead-status webhook misses a delivery.
+ *
+ * Each lead is applied through `applyWebhookEvent(..., "lead")` so the lead
+ * status enum (code 1-12) is mapped correctly (a confirmed lead → CONFIRMED,
+ * not the order enum's ASSIGNED), and status-change automations fire exactly
+ * as they do for webhook-delivered leads.
+ */
+export async function syncLeads(): Promise<LeadSyncResult> {
+  const startTime = Date.now();
+  const result: LeadSyncResult = {
+    leadsFound: 0,
+    leadsCreated: 0,
+    leadsUpdated: 0,
+    errors: [],
+  };
+
+  if (leadSyncInProgress) {
+    result.errors.push("Lead sync already in progress");
+    return result;
+  }
+  leadSyncInProgress = true;
+
+  try {
+    const client = await CodNetworkClient.fromSettings();
+
+    const daysBackSetting = await getSetting(SETTING_KEYS.SYNC_DAYS_BACK);
+    const daysBack = daysBackSetting ? parseInt(daysBackSetting, 10) : 30;
+    const sinceDate =
+      Number.isFinite(daysBack) && daysBack > 0
+        ? new Date(Date.now() - daysBack * 24 * 60 * 60 * 1000)
+        : undefined;
+
+    const leads = await client.getAllLeads({}, { sinceDate });
+    result.leadsFound = leads.length;
+
+    for (const lead of leads) {
+      try {
+        const applied = await applyWebhookEvent(lead, "lead");
+        if (applied.created) result.leadsCreated++;
+        else if (applied.updated) result.leadsUpdated++;
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : "Unknown error upserting lead";
+        result.errors.push(`Lead ${lead.id}: ${msg}`);
+      }
+    }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "Unknown lead sync error";
+    result.errors.push(msg);
+  } finally {
+    leadSyncInProgress = false;
+  }
+
+  const duration = Date.now() - startTime;
+  try {
+    await prisma.syncLog.create({
+      data: {
+        syncType: "leads",
+        status: result.errors.length > 0 ? "partial_error" : "success",
+        ordersFound: result.leadsFound,
+        ordersCreated: result.leadsCreated,
+        ordersUpdated: result.leadsUpdated,
+        messagesSent: 0,
+        errorMessage: result.errors.length > 0 ? result.errors.join("; ") : null,
+        duration,
+      },
+    });
+  } catch {
+    // sync-log write failure is non-fatal
+  }
+
+  return result;
 }
 
 export async function syncOrders(
@@ -211,16 +298,27 @@ async function upsertOrder(
     }
   }
 
-  const existing = await prisma.order.findUnique({
-    where: { codNetworkOrderId: codOrderId },
-  });
+  // Look up by the real order id first; if absent, fall back to the lead id
+  // so a row the leads sync created (keyed on the lead id as a placeholder
+  // order id) is UPGRADED into this order instead of a second, duplicate row
+  // being created for the same customer.
+  const existing =
+    (await prisma.order.findUnique({
+      where: { codNetworkOrderId: codOrderId },
+    })) ||
+    (codLeadId
+      ? await prisma.order.findFirst({
+          where: { codNetworkLeadId: codLeadId },
+        })
+      : null);
 
   // Apply the auto-status logic: tracking number → OUT_FOR_DELIVERY,
   // explicit delivered/returned signals → final state, etc. Falls back to
   // the previously-computed `mapCodStatus` result.
   const mappedFromCode = mapCodStatus(
     codOrder.status,
-    trackingStatus
+    trackingStatus,
+    "order"
   ) as OrderStatus;
   const status = deriveOrderStatus({
     rawStatusLabel,
@@ -243,8 +341,11 @@ async function upsertOrder(
       (!existing.trackingNumber || existing.trackingNumber.trim() === "") &&
       !!(trackingNumber && trackingNumber.trim() !== "");
     await prisma.order.update({
-      where: { codNetworkOrderId: codOrderId },
+      where: { id: existing.id },
       data: {
+        // Upgrade a lead placeholder id to the real order id (no-op when the
+        // row was already keyed on the order id).
+        codNetworkOrderId: codOrderId,
         codNetworkLeadId: codLeadId ?? existing.codNetworkLeadId,
         customerName: codOrder.customer_name ?? existing.customerName,
         customerPhone: normalizedPhone ?? existing.customerPhone,

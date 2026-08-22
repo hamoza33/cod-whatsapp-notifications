@@ -30,6 +30,7 @@ interface Product {
   storeUrl: string | null;
   isDropProduct: boolean;
   aiAgentEnabled: boolean;
+  aiSystemPrompt: string | null;
   lastSyncedAt: string;
 }
 
@@ -258,6 +259,12 @@ function ProductCard({
   const [saving, setSaving] = useState(false);
   const descIsArabic = isArabic(plainDesc);
 
+  const [promptExpanded, setPromptExpanded] = useState(false);
+  const [promptEditing, setPromptEditing] = useState(false);
+  const [prompt, setPrompt] = useState(product.aiSystemPrompt || "");
+  const [promptSaving, setPromptSaving] = useState(false);
+  const promptIsArabic = isArabic(prompt);
+
   const saveDescription = async () => {
     setSaving(true);
     try {
@@ -268,6 +275,20 @@ function ProductCard({
       // keep editing open on error
     } finally {
       setSaving(false);
+    }
+  };
+
+  const savePrompt = async () => {
+    setPromptSaving(true);
+    try {
+      const value = prompt.trim() ? prompt : null;
+      await api.patch(`/products/${product.id}`, { aiSystemPrompt: value });
+      onUpdate({ ...product, aiSystemPrompt: value });
+      setPromptEditing(false);
+    } catch {
+      // keep editing open on error
+    } finally {
+      setPromptSaving(false);
     }
   };
 
@@ -352,6 +373,77 @@ function ProductCard({
               }`}
             />
           </button>
+        </div>
+
+        {/* Per-product AI system prompt */}
+        <div className="border-t border-gray-100 pt-2">
+          <button
+            onClick={() => setPromptExpanded(!promptExpanded)}
+            className="flex items-center gap-1 text-xs text-blue-600 hover:text-blue-800"
+          >
+            {promptExpanded ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+            AI Prompt
+            {product.aiSystemPrompt ? (
+              <span className="ml-1 inline-block px-1.5 py-0.5 rounded-full text-[9px] font-medium bg-green-100 text-green-700">
+                custom
+              </span>
+            ) : (
+              <span className="ml-1 inline-block px-1.5 py-0.5 rounded-full text-[9px] font-medium bg-gray-100 text-gray-500">
+                global
+              </span>
+            )}
+          </button>
+          {promptExpanded && (
+            <div className="mt-2">
+              {promptEditing ? (
+                <div className="space-y-2">
+                  <textarea
+                    value={prompt}
+                    onChange={(e) => setPrompt(e.target.value)}
+                    rows={5}
+                    dir={promptIsArabic ? "rtl" : "ltr"}
+                    className="w-full px-2 py-1.5 border border-gray-300 rounded text-xs focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    placeholder="Dedicated system prompt for this product. Leave empty to use the global AI prompt."
+                  />
+                  <div className="flex gap-2">
+                    <button
+                      onClick={savePrompt}
+                      disabled={promptSaving}
+                      className="flex items-center gap-1 px-2 py-1 bg-blue-600 text-white rounded text-xs hover:bg-blue-700 disabled:opacity-50"
+                    >
+                      <Save size={10} />
+                      {promptSaving ? "Saving..." : "Save"}
+                    </button>
+                    <button
+                      onClick={() => {
+                        setPromptEditing(false);
+                        setPrompt(product.aiSystemPrompt || "");
+                      }}
+                      className="px-2 py-1 text-xs text-gray-600 hover:text-gray-800"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div>
+                  <p
+                    className="text-xs text-gray-600 whitespace-pre-wrap"
+                    dir={promptIsArabic ? "rtl" : "ltr"}
+                  >
+                    {product.aiSystemPrompt ||
+                      "No product prompt — using the global AI system prompt."}
+                  </p>
+                  <button
+                    onClick={() => setPromptEditing(true)}
+                    className="mt-1 text-xs text-blue-600 hover:text-blue-800 hover:underline"
+                  >
+                    {product.aiSystemPrompt ? "Edit prompt" : "Set product prompt"}
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Description expand/collapse */}

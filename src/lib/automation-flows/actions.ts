@@ -13,8 +13,18 @@ import { WhatsAppClient } from "../whatsapp";
 import { normalizePhoneNumber } from "../phone";
 import { getSetting, SETTING_KEYS } from "../settings";
 import { renderTemplate } from "./data-points";
+import {
+  countTemplateVariables,
+  resolveTemplateVariableSlots,
+} from "../template-variables";
+import { detectCarrier } from "../tracking";
+import {
+  dateDaysAhead,
+  formatDateInTimezone,
+  scheduleImileDelivery,
+} from "../imile-schedule";
 import type { ActionNodeData, FlowExecutionContext } from "./types";
-import { OrderStatus } from "@prisma/client";
+import { OrderStatus, TrackingCarrier, TrackingStatus } from "@prisma/client";
 
 export interface ActionResult {
   output: string;
@@ -25,6 +35,12 @@ export interface ActionResult {
   delayMs?: number;
   /** Returned by `stop`: the engine should stop walking the graph. */
   stop?: boolean;
+  /**
+   * The action deliberately did nothing (e.g. a duplicate template send, a
+   * non-iMile parcel). Recorded as a `skipped` step so the once-per-order
+   * guard doesn't treat it as having acted on the order.
+   */
+  skipped?: boolean;
 }
 
 export async function executeAction(
@@ -44,6 +60,8 @@ export async function executeAction(
       return executePin(context);
     case "queue_call_agent":
       return executeQueueCall(context);
+    case "reschedule_imile":
+      return executeRescheduleImile(action, context);
     case "wait":
       return executeWait(action);
     case "wait_for_reply":
@@ -75,6 +93,34 @@ async function executeSendTemplate(
     throw new Error("send_template: no recipient phone available in context");
   }
 
+  // Anti-spam net: never send the same template to the same recipient twice
+  // within a day unless the action explicitly opts in. A misconfigured or
+  // flapping flow would otherwise message a customer on every sync tick.
+  if (!action.allowDuplicateSend) {
+    const since = new Date(Date.now() - 24 * 3600 * 1000);
+    const duplicate = await prisma.whatsappMessage.findFirst({
+      where: {
+        templateName: action.templateName,
+        status: { in: ["SENT", "DELIVERED", "READ"] },
+        createdAt: { gte: since },
+        ...(context.order?.id
+          ? { orderId: context.order.id }
+          : { phoneNumber: phone }),
+      },
+      orderBy: { createdAt: "desc" },
+      select: { createdAt: true },
+    });
+    if (duplicate) {
+      return {
+        skipped: true,
+        output:
+          `Skipped: template "${action.templateName}" already sent for this order ` +
+          `at ${duplicate.createdAt.toISOString()} (within 24h). Enable "Allow ` +
+          `resending the same template" on this action to send anyway.`,
+      };
+    }
+  }
+
   const templateLanguage =
     action.templateLanguage ||
     (await getSetting(SETTING_KEYS.WHATSAPP_TEMPLATE_LANGUAGE)) ||
@@ -92,9 +138,34 @@ async function executeSendTemplate(
   }
 
   // Resolve variable slots with `{{token}}` substitution against the context.
-  const variables = (action.templateVariables ?? []).map((slot) =>
-    renderTemplate(slot ?? "", context)
+  // Slots left blank in the builder fall back to the data point the template
+  // body asks for, because Meta rejects the whole send when a body parameter
+  // is present but empty (#131008).
+  const template = await prisma.whatsappTemplate.findFirst({
+    where: { name: action.templateName, language: templateLanguage },
+    select: { bodyText: true },
+  });
+  const bodyText = template?.bodyText ?? "";
+  const slots = resolveTemplateVariableSlots(
+    action.templateVariables ?? [],
+    bodyText
   );
+  const variables = slots.map((slot) => renderTemplate(slot, context));
+  const blankIndex = variables.findIndex((v) => !v.trim());
+  if (blankIndex !== -1) {
+    throw new Error(
+      `send_template: variable {{${blankIndex + 1}}} of template "${action.templateName}" is empty ` +
+        `(configured as "${slots[blankIndex] || "<blank>"}"). WhatsApp rejects empty parameters — ` +
+        `set it in the action, e.g. {{order.customerName}} or {{order.trackingNumber}}.`
+    );
+  }
+  const expectedCount = countTemplateVariables(bodyText);
+  if (expectedCount > 0 && variables.length !== expectedCount) {
+    throw new Error(
+      `send_template: template "${action.templateName}" expects ${expectedCount} ` +
+        `variable(s) but ${variables.length} were provided`
+    );
+  }
 
   const headerImage =
     action.templateHeaderImageUrl ||
@@ -253,6 +324,133 @@ async function executeQueueCall(context: FlowExecutionContext): Promise<ActionRe
   });
   context.order.callAgentQueued = true;
   return { output: `Queued call agent for order ${context.order.codNetworkOrderId}` };
+}
+
+/**
+ * Push an undelivered iMile parcel to a later delivery date.
+ *
+ * Guards, in order — all of them skip (rather than fail) so the action is
+ * safe to drop into a flow that also sees non-iMile orders:
+ *   1. order must have a tracking number
+ *   2. carrier must resolve to iMile
+ *   3. tracking status must not be DELIVERED/RETURNED/EXPIRED (nothing to
+ *      reschedule — an expired parcel has already gone back to the merchant)
+ *   4. the parcel must not already have been rescheduled earlier today
+ *      — this is what keeps a daily sweep from re-booking on every tick
+ */
+async function executeRescheduleImile(
+  action: ActionNodeData,
+  context: FlowExecutionContext
+): Promise<ActionResult> {
+  const order = context.order;
+  if (!order) {
+    throw new Error("reschedule_imile: no order in context");
+  }
+
+  const trackingNumber =
+    context.tracking?.trackingNumber?.trim() || order.trackingNumber?.trim() || null;
+  if (!trackingNumber) {
+    return {
+      skipped: true,
+      output: `Skipped: order ${order.codNetworkOrderId} has no tracking number`,
+    };
+  }
+
+  const carrier =
+    context.tracking?.carrier ??
+    detectCarrier(trackingNumber, order.deliveryCompany) ??
+    null;
+  if (carrier !== TrackingCarrier.IMILE) {
+    return {
+      skipped: true,
+      output: `Skipped: ${trackingNumber} is not an iMile shipment (carrier: ${carrier ?? "unknown"})`,
+    };
+  }
+
+  const trackingStatus = context.tracking?.status ?? null;
+  if (
+    trackingStatus === TrackingStatus.DELIVERED ||
+    trackingStatus === TrackingStatus.RETURNED ||
+    trackingStatus === TrackingStatus.EXPIRED
+  ) {
+    return {
+      skipped: true,
+      output: `Skipped: ${trackingNumber} is already ${trackingStatus}`,
+    };
+  }
+
+  const timeZone = (await getSetting(SETTING_KEYS.AUTOMATION_TIMEZONE))?.trim() || null;
+  const today = formatDateInTimezone(new Date(), timeZone);
+
+  const alreadyToday =
+    order.imileScheduledAt !== null &&
+    order.imileScheduledAt !== undefined &&
+    formatDateInTimezone(new Date(order.imileScheduledAt), timeZone) === today;
+  if (alreadyToday) {
+    return {
+      skipped: true,
+      output: `Skipped: ${trackingNumber} was already rescheduled today (for ${order.imileScheduledDate})`,
+    };
+  }
+
+  const daysAhead = Math.max(1, Math.floor(action.rescheduleDaysAhead ?? 1));
+  const targetDate = dateDaysAhead(daysAhead, timeZone);
+
+  const result = await scheduleImileDelivery(trackingNumber, targetDate);
+  if (!result.success) {
+    const suggestion = result.suggestedDate
+      ? ` (iMile suggested ${result.suggestedDate})`
+      : "";
+    const message = `could not reschedule ${trackingNumber} to ${targetDate}: ${result.error}${suggestion}`;
+    // A parcel iMile won't re-book (finished waybill, or already out with the
+    // courier) is the parcel's own state rather than a fault in the flow, so it
+    // skips instead of failing the run — and no customer message goes out.
+    if (isImileNotSchedulableError(result.error)) {
+      return { skipped: true, output: `Skipped: ${message}` };
+    }
+    throw new Error(`reschedule_imile: ${message}`);
+  }
+
+  const scheduledAt = new Date();
+  await prisma.order.update({
+    where: { id: order.id },
+    data: { imileScheduledDate: result.scheduledDate, imileScheduledAt: scheduledAt },
+  });
+  order.imileScheduledDate = result.scheduledDate;
+  order.imileScheduledAt = scheduledAt;
+
+  // Expose the booked date to downstream nodes so the follow-up template can
+  // interpolate it, e.g. "your parcel will be delivered on {{imile.scheduledDate}}".
+  context.imile = {
+    scheduledDate: result.scheduledDate,
+    requestedDate: result.requestedDate,
+    usedSuggestedDate: result.usedSuggestedDate,
+    trackingNumber,
+  };
+
+  const note = result.usedSuggestedDate
+    ? ` (requested ${result.requestedDate}, iMile gave ${result.scheduledDate})`
+    : "";
+  return {
+    output: `Rescheduled iMile ${trackingNumber} to ${result.scheduledDate}${note}`,
+  };
+}
+
+/**
+ * iMile's "this parcel can't take a new date" rejections, in both languages.
+ * Covers finished waybills (delivered / returned to merchant) and parcels the
+ * courier is already carrying today, which iMile refuses with a booking error.
+ */
+function isImileNotSchedulableError(error: string | null | undefined): boolean {
+  const text = (error ?? "").toLowerCase();
+  return (
+    text.includes("scheduling not allowed") ||
+    text.includes("预约派件失败") ||
+    text.includes("已在派送中") ||
+    text.includes("已完结") ||
+    text.includes("已退返商家") ||
+    text.includes("已签收")
+  );
 }
 
 async function executeWait(action: ActionNodeData): Promise<ActionResult> {

@@ -184,6 +184,26 @@ export async function fetchCourierApiTracking(
  * to a `bulk_missing_response` error.
  */
 const BULK_MAX_PER_REQUEST = 100;
+const BULK_DEFAULT_TIMEOUT_MS = 120_000;
+
+export interface CourierApiBulkOptions {
+  /** Max waybills per HTTP request. Defaults to 100 (server cap is 250). */
+  maxPerRequest?: number;
+  /**
+   * Per-request timeout. Defaults to 120s. J&T chunks need more headroom
+   * because each waybill requires a captcha solve; the server runs them with
+   * bounded concurrency (JT_BULK_CONCURRENCY groups at a time).
+   */
+  timeoutMs?: number;
+  /**
+   * J&T provider hint forwarded to the courier-tracking-api:
+   *   - "auto" (default): TrackingMore first, Tencent captcha fallback.
+   *   - "trackingmore": force the TrackingMore page (Turnstile via 2Captcha).
+   *   - "tencent": force the legacy Tencent-captcha solver.
+   * Ignored for non-J&T carriers.
+   */
+  jtProvider?: "auto" | "trackingmore" | "tencent";
+}
 
 interface CourierApiBulkRequestItem {
   waybill: string;
@@ -207,16 +227,22 @@ interface CourierApiBulkResponse {
 export async function fetchCourierApiBulk(
   trackingNumbers: string[],
   carrier?: TrackingCarrier | null,
-  apiUrl?: string
+  apiUrl?: string,
+  opts: CourierApiBulkOptions = {}
 ): Promise<Map<string, ProviderResult>> {
   const map = new Map<string, ProviderResult>();
   if (trackingNumbers.length === 0) return map;
 
   const base = (apiUrl || DEFAULT_API_URL).replace(/\/$/, "");
   const carrierCode = carrier ? CARRIER_MAP[carrier] : undefined;
+  const maxPerRequest = Math.max(
+    1,
+    Math.min(250, opts.maxPerRequest ?? BULK_MAX_PER_REQUEST)
+  );
+  const timeoutMs = opts.timeoutMs ?? BULK_DEFAULT_TIMEOUT_MS;
 
-  for (let i = 0; i < trackingNumbers.length; i += BULK_MAX_PER_REQUEST) {
-    const slice = trackingNumbers.slice(i, i + BULK_MAX_PER_REQUEST);
+  for (let i = 0; i < trackingNumbers.length; i += maxPerRequest) {
+    const slice = trackingNumbers.slice(i, i + maxPerRequest);
     const items: CourierApiBulkRequestItem[] = slice.map((tn) =>
       carrierCode
         ? { waybill: tn, carrier: carrierCode }
@@ -231,9 +257,14 @@ export async function fetchCourierApiBulk(
           "Content-Type": "application/json",
           Accept: "application/json",
         },
-        body: JSON.stringify({ waybills: items }),
-        // Allow generous time for chunks containing J&T (~30s/item sequential).
-        signal: AbortSignal.timeout(120_000),
+        body: JSON.stringify(
+          opts.jtProvider
+            ? { waybills: items, jtProvider: opts.jtProvider }
+            : { waybills: items }
+        ),
+        // Allow generous time for chunks containing J&T (captcha solved
+        // server-side with bounded concurrency). Configurable per carrier.
+        signal: AbortSignal.timeout(timeoutMs),
       });
     } catch (err) {
       const msg = err instanceof Error ? err.message : "network_error";
